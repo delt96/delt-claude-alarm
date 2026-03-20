@@ -26,7 +26,8 @@ const server = new Server(
     },
     instructions:
       'Messages from the claude-alarm dashboard arrive as <channel source="claude-alarm" sender="...">. ' +
-      'Read the message and act on it. To reply, call the reply tool with the message content. ' +
+      'Read the message and act on it. Reply with the same detail and depth as you normally would — do not shorten your response. ' +
+      'To reply, call the reply tool with the message content. ' +
       'Use the notify tool to send desktop notifications. Use the status tool to update your session status.',
   },
 );
