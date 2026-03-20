@@ -156,6 +156,18 @@ To access the hub from another machine:
 }
 ```
 
+## Platform Support
+
+Desktop notifications work across all major platforms via [node-notifier](https://github.com/mikaelbr/node-notifier):
+
+| Platform | Notification Engine | Click to Open |
+|----------|-------------------|---------------|
+| Windows  | SnoreToast (built-in) | `Start-Process` |
+| macOS    | terminal-notifier | `open` |
+| Linux    | notify-send (libnotify) | `xdg-open` |
+
+No additional setup needed — `node-notifier` automatically detects your OS and uses the appropriate tool.
+
 ## Requirements
 
 - Node.js >= 18

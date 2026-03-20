@@ -99,6 +99,16 @@
   .session-status.idle { background: rgba(139,143,163,0.15); color: var(--text-dim); }
   .session-status.working { background: rgba(96,165,250,0.15); color: var(--blue); }
   .session-status.waiting_input { background: rgba(245,197,66,0.15); color: var(--yellow); }
+  .channel-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 6px;
+    font-weight: 500;
+  }
+  .channel-badge.enabled { background: rgba(61,214,140,0.15); color: var(--green); }
+  .channel-badge.disabled { background: rgba(239,68,68,0.15); color: var(--red); }
 
   .no-sessions {
     color: var(--text-dim);
@@ -216,6 +226,54 @@
   .notif-level.success { background: var(--green); }
   .notif-level.warning { background: var(--yellow); }
   .notif-level.error { background: var(--red); }
+
+  .message-body h2, .message-body h3, .message-body h4 {
+    margin: 8px 0 4px;
+    font-size: 14px;
+  }
+  .message-body h2 { font-size: 16px; }
+  .message-body h3 { font-size: 15px; }
+  .message-body pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .message-body code {
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-family: monospace;
+  }
+  .message-body pre code {
+    background: none;
+    padding: 0;
+  }
+  .message-body table {
+    border-collapse: collapse;
+    margin: 6px 0;
+    font-size: 12px;
+    width: 100%;
+  }
+  .message-body th, .message-body td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+  }
+  .message-body th {
+    background: var(--bg);
+    font-weight: 600;
+  }
+  .message-body ul {
+    margin: 4px 0;
+    padding-left: 20px;
+  }
+  .message-body li { margin: 2px 0; }
+  .message-body strong { font-weight: 600; }
 
   .empty-state {
     color: var(--text-dim);
@@ -482,6 +540,7 @@
     if (!state.messages[id]) state.messages[id] = [];
     $('#msgInput').disabled = false;
     $('#sendBtn').disabled = false;
+    $('#msgInput').placeholder = 'Send a message to session...';
     renderSessions();
     renderMessages();
   }
@@ -510,9 +569,10 @@
     el.innerHTML = msgs.map(m => {
       const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
       const timeStr = new Date(m.time).toLocaleTimeString();
+      const content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content);
       return `<div class="message ${cls}">
         <div class="message-meta">${m.from === 'session' ? 'Claude' : 'You'} &middot; ${timeStr}</div>
-        ${esc(m.content)}
+        <div class="message-body">${content}</div>
       </div>`;
     }).join('');
 
@@ -569,6 +629,40 @@
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  function renderMarkdown(text) {
+    let html = esc(text);
+    // Code blocks (```)
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // Headers
+    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+    // Tables
+    html = html.replace(/^(\|.+\|)\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/gm, (_, header, body) => {
+      const ths = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+      const rows = body.trim().split('\n').map(row => {
+        const tds = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+        return `<tr>${tds}</tr>`;
+      }).join('');
+      return `<table><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table>`;
+    });
+    // List items
+    html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // Line breaks (but not inside pre/table)
+    html = html.replace(/\n/g, '<br>');
+    // Clean up extra <br> around block elements
+    html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
+    html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
+    return html;
   }
 
   // Start - try to get token from URL or storage

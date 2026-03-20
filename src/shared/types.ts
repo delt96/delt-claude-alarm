@@ -9,6 +9,7 @@ export interface SessionInfo {
   connectedAt: number;
   lastActivity: number;
   cwd?: string;
+  channelEnabled?: boolean;
 }
 
 /** Messages sent between channel server and hub */

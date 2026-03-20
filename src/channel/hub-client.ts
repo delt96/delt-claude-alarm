@@ -40,6 +40,7 @@ export class HubClient {
             connectedAt: Date.now(),
             lastActivity: Date.now(),
             cwd: process.cwd(),
+            channelEnabled: true,
           },
         };
         this.ws!.send(JSON.stringify(registration));

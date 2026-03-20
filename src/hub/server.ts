@@ -101,9 +101,11 @@ export class HubServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
-      // Close all WebSocket connections
-      for (const ws of this.channelSockets.values()) ws.close();
-      for (const ws of this.dashboardSockets) ws.close();
+      // Force-close all WebSocket connections
+      for (const ws of this.channelSockets.values()) ws.terminate();
+      for (const ws of this.dashboardSockets) ws.terminate();
+      this.channelSockets.clear();
+      this.dashboardSockets.clear();
 
       this.wssChannel.close();
       this.wssDashboard.close();
@@ -111,6 +113,12 @@ export class HubServer {
         logger.info('Hub server stopped');
         resolve();
       });
+
+      // Force resolve after 3 seconds if server won't close
+      setTimeout(() => {
+        logger.warn('Force shutting down');
+        resolve();
+      }, 3000);
     });
   }
 
@@ -260,10 +268,14 @@ export class HubServer {
     switch (msg.type) {
       case 'register': {
         const session = msg.session;
+        const isReregister = !!this.sessions.get(session.id);
         this.sessions.register(session);
         this.channelSockets.set(session.id, ws);
-        logger.info(`Session registered: ${session.id} (${session.name})`);
-        this.broadcastToDashboards({ type: 'session_connected', session });
+        logger.info(`Session registered: ${session.id} (${session.name}, channel: ${session.channelEnabled ?? false})`);
+        this.broadcastToDashboards({
+          type: isReregister ? 'session_updated' : 'session_connected',
+          session,
+        });
         break;
       }
 
