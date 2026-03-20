@@ -11,7 +11,7 @@ Claude Code  ──reply/notify──>  [Channel Server]  ──>  [Hub Server] 
 ## Features
 
 - **Web Dashboard** — Monitor all Claude Code sessions in one place
-- **Two-way Messaging** — Send messages to Claude and receive replies
+- **Two-way Messaging** — Send messages to Claude and receive replies (with markdown rendering)
 - **Desktop Notifications** — Get Windows/macOS/Linux toast notifications
 - **Session Status** — See which sessions are idle, working, or waiting for input
 - **Token Auth** — Secure hub access with auto-generated tokens
@@ -19,43 +19,46 @@ Claude Code  ──reply/notify──>  [Channel Server]  ──>  [Hub Server] 
 
 ## Quick Start
 
-### 1. Install
-
-```bash
-npm install -g claude-alarm
-```
-
-### 2. Start the Hub
-
-```bash
-claude-alarm hub start -d
-```
-
-This starts the hub server in the background and prints your auth token.
-
-### 3. Setup a Project
+### 1. Install & Initialize
 
 In your project directory:
 
 ```bash
-claude-alarm setup
+npx @delt/claude-alarm init
 ```
 
 This creates `.mcp.json` with the claude-alarm channel server config.
 
-### 4. Run Claude Code
+### 2. Start the Hub
+
+```bash
+npx @delt/claude-alarm hub start
+```
+
+This starts the hub server and prints your auth token.
+
+### 3. Run Claude Code
 
 ```bash
 claude --dangerously-load-development-channels server:claude-alarm
 ```
 
-### 5. Open Dashboard
+To allow remote control without approval prompts:
+
+```bash
+claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions
+```
+
+> **WARNING:** `--dangerously-skip-permissions` allows Claude to execute any action without your approval. Only use in trusted, isolated environments.
+
+### 4. Open Dashboard
 
 Open `http://127.0.0.1:7890` in your browser.
 
 ## CLI Commands
 
 ```
+claude-alarm init             Setup everything and show next steps
 claude-alarm hub start [-d]   Start the hub server (-d for daemon mode)
 claude-alarm hub stop         Stop the hub daemon
 claude-alarm hub status       Show hub status
@@ -101,14 +104,14 @@ Config is stored at `~/.claude-alarm/config.json`:
 
 ### Custom Session Names
 
-The `.mcp.json` created by `claude-alarm setup` automatically uses the project directory name as the session name. You can customize it:
+The `.mcp.json` created by `claude-alarm init` automatically uses the project directory name as the session name. You can customize it:
 
 ```json
 {
   "mcpServers": {
     "claude-alarm": {
       "command": "npx",
-      "args": ["-y", "claude-alarm"],
+      "args": ["-y", "@delt/claude-alarm", "serve"],
       "env": {
         "CLAUDE_ALARM_SESSION_NAME": "my-project"
       }
@@ -138,14 +141,14 @@ To access the hub from another machine:
 
 1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
 2. Open port 7890 in your firewall
-3. On the remote machine, set the hub address in `.mcp.json`:
+3. On the remote machine, run `claude-alarm init` and select remote hub (Y), or manually set `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "claude-alarm": {
       "command": "npx",
-      "args": ["-y", "claude-alarm"],
+      "args": ["-y", "@delt/claude-alarm", "serve"],
       "env": {
         "CLAUDE_ALARM_HUB_HOST": "your-server-ip",
         "CLAUDE_ALARM_HUB_PORT": "7890",
