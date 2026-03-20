@@ -79,7 +79,7 @@ export function setupMcpConfig(targetDir?: string): string {
 
   mcpConfig.mcpServers['claude-alarm'] = {
     command: 'npx',
-    args: ['-y', '@delt/claude-alarm'],
+    args: ['-y', '@delt/claude-alarm', 'serve'],
     env: {
       CLAUDE_ALARM_SESSION_NAME: path.basename(dir),
     },

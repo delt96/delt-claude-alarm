@@ -228,7 +228,7 @@ async function init() {
   if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {};
   mcpConfig.mcpServers['claude-alarm'] = {
     command: 'npx',
-    args: ['-y', '@delt/claude-alarm'],
+    args: ['-y', '@delt/claude-alarm', 'serve'],
     env,
   };
   fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');
@@ -256,7 +256,11 @@ async function init() {
   }
 
   console.log(`\nNext step:`);
-  console.log(`  claude --dangerously-load-development-channels server:claude-alarm\n`);
+  console.log(`  claude --dangerously-load-development-channels server:claude-alarm`);
+  console.log(`\nTo skip permission prompts (allows remote control without approval):`);
+  console.log(`  claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions`);
+  console.log(`\n  WARNING: --dangerously-skip-permissions allows Claude to execute any action`);
+  console.log(`  without your approval. Only use in trusted, isolated environments.\n`);
 }
 
 function showToken() {
@@ -281,6 +285,12 @@ async function main() {
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     printUsage();
+    return;
+  }
+
+  if (cmd === 'serve') {
+    // Start channel server (used by MCP)
+    await import('./channel/server.js');
     return;
   }
 
