@@ -32,12 +32,13 @@ async function hubStart(daemon: boolean) {
   const config = loadConfig();
   const host = config.hub.host ?? DEFAULT_HUB_HOST;
   const port = config.hub.port ?? DEFAULT_HUB_PORT;
+  const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
 
   // Check if already running
   if (fs.existsSync(PID_FILE)) {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
     if (isProcessRunning(pid)) {
-      console.log(`Hub is already running (PID: ${pid}) on http://${host}:${port}`);
+      console.log(`Hub is already running (PID: ${pid}) on http://${displayHost}:${port}`);
       return;
     }
     // Stale PID file
@@ -59,7 +60,7 @@ async function hubStart(daemon: boolean) {
       fs.writeFileSync(PID_FILE, String(child.pid), 'utf-8');
       child.unref();
       console.log(`Hub started as daemon (PID: ${child.pid})`);
-      console.log(`Dashboard: http://${host}:${port}`);
+      console.log(`Dashboard: http://${displayHost}:${port}`);
       console.log(`Token: ${config.hub.token}`);
       console.log(`Logs: ${LOG_FILE}`);
     } else {
@@ -68,7 +69,7 @@ async function hubStart(daemon: boolean) {
     }
   } else {
     // Foreground mode - import and run directly
-    console.log(`Starting hub on http://${host}:${port} (press Ctrl+C to stop)`);
+    console.log(`Starting hub on http://${displayHost}:${port} (press Ctrl+C to stop)`);
     console.log(`Token: ${config.hub.token}`);
     const { HubServer } = await import('./hub/server.js');
     const hub = new HubServer(config);
@@ -109,6 +110,7 @@ async function hubStatus() {
   const config = loadConfig();
   const host = config.hub.host ?? DEFAULT_HUB_HOST;
   const port = config.hub.port ?? DEFAULT_HUB_PORT;
+  const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
 
   // Check PID file
   let pidInfo = 'not running';
@@ -130,7 +132,7 @@ async function hubStatus() {
       console.log(`Port: ${data.port}`);
       console.log(`Sessions: ${data.sessions}`);
       console.log(`Uptime: ${Math.round(data.uptime / 1000)}s`);
-      console.log(`Dashboard: http://${host}:${port}`);
+      console.log(`Dashboard: http://${displayHost}:${port}`);
       const token = config.hub.token;
       if (token) {
         console.log(`Token: ${token.slice(0, 8)}...(masked)`);
@@ -142,7 +144,7 @@ async function hubStatus() {
   }
 
   console.log(`Hub: ${pidInfo}`);
-  console.log(`Configured: http://${host}:${port}`);
+  console.log(`Configured: http://${displayHost}:${port}`);
 }
 
 function setup(targetDir?: string) {
@@ -240,6 +242,7 @@ async function init() {
     const config = loadConfig();
     const host = config.hub.host ?? DEFAULT_HUB_HOST;
     const port = config.hub.port ?? DEFAULT_HUB_PORT;
+    const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     let hubRunning = false;
     try {
       const res = await fetch(`http://${host}:${port}/api/status`);
@@ -252,7 +255,7 @@ async function init() {
       console.log('✗ Hub is not running. Start it with:');
       console.log(`  claude-alarm hub start`);
     }
-    console.log(`  Dashboard: http://${host}:${port}`);
+    console.log(`  Dashboard: http://${displayHost}:${port}`);
   }
 
   console.log(`\nNext step:`);

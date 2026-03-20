@@ -46,7 +46,8 @@ export class HubServer {
     if (config?.webhooks) {
       this.notifier.configure({ webhooks: config.webhooks });
     }
-    this.notifier.configure({ dashboardUrl: `http://${this.host}:${this.port}` });
+    const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+    this.notifier.configure({ dashboardUrl: `http://${displayHost}:${this.port}` });
 
     // HTTP Server
     this.httpServer = http.createServer((req, res) => this.handleHttp(req, res));
@@ -91,7 +92,8 @@ export class HubServer {
     return new Promise((resolve, reject) => {
       this.httpServer.on('error', reject);
       this.httpServer.listen(this.port, this.host, () => {
-        logger.info(`Hub server listening on http://${this.host}:${this.port}`);
+        const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+        logger.info(`Hub server listening on http://${displayHost}:${this.port}`);
         resolve();
       });
     });
