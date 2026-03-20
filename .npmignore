@@ -1,0 +1,8 @@
+src/
+tsup.config.ts
+tsconfig.json
+*.tsbuildinfo
+.env
+.mcp.json
+.DS_Store
+Thumbs.db

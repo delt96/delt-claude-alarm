@@ -1,0 +1,59 @@
+/** Session status */
+export type SessionStatus = 'idle' | 'working' | 'waiting_input';
+
+/** Session info tracked by the hub */
+export interface SessionInfo {
+  id: string;
+  name: string;
+  status: SessionStatus;
+  connectedAt: number;
+  lastActivity: number;
+  cwd?: string;
+}
+
+/** Messages sent between channel server and hub */
+export type ChannelMessage =
+  | { type: 'register'; session: SessionInfo }
+  | { type: 'status'; sessionId: string; status: SessionStatus }
+  | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel }
+  | { type: 'reply'; sessionId: string; content: string }
+  | { type: 'message_to_session'; sessionId: string; content: string }
+  | { type: 'sessions_list'; sessions: SessionInfo[] }
+  | { type: 'session_connected'; session: SessionInfo }
+  | { type: 'session_disconnected'; sessionId: string }
+  | { type: 'session_updated'; session: SessionInfo }
+  | { type: 'notification'; sessionId: string; title: string; message: string; level?: NotifyLevel; timestamp: number }
+  | { type: 'reply_from_session'; sessionId: string; content: string; timestamp: number }
+  | { type: 'error'; message: string };
+
+export type NotifyLevel = 'info' | 'warning' | 'error' | 'success';
+
+/** Webhook configuration */
+export interface WebhookConfig {
+  url: string;
+  events?: string[];
+  headers?: Record<string, string>;
+}
+
+/** App configuration stored in ~/.claude-alarm/config.json */
+export interface AppConfig {
+  hub: {
+    host: string;
+    port: number;
+    token?: string;
+  };
+  notifications: {
+    desktop: boolean;
+    sound: boolean;
+  };
+  webhooks: WebhookConfig[];
+}
+
+/** Hub status response */
+export interface HubStatus {
+  running: boolean;
+  pid?: number;
+  port?: number;
+  sessions?: number;
+  uptime?: number;
+}

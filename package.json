@@ -1,0 +1,54 @@
+{
+  "name": "@delt/claude-alarm",
+  "version": "0.1.0",
+  "description": "Monitor and get notifications from multiple Claude Code sessions via MCP Channels",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "claude-alarm": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./channel": {
+      "import": "./dist/channel/server.js",
+      "types": "./dist/channel/server.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src/dashboard/index.html"
+  ],
+  "scripts": {
+    "build": "tsup && node -e \"const fs=require('fs');const p=require('path');fs.mkdirSync(p.join('dist','dashboard'),{recursive:true});fs.copyFileSync(p.join('src','dashboard','index.html'),p.join('dist','dashboard','index.html'));\"",
+    "dev": "tsup --watch",
+    "start:hub": "node dist/cli.js hub start",
+    "start:channel": "node dist/channel/server.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "channels",
+    "notifications",
+    "monitoring"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "node-notifier": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
