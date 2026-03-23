@@ -4,6 +4,10 @@
 
 Monitor and interact with multiple Claude Code sessions from a web dashboard. Get desktop notifications when tasks complete, send messages to Claude, and track session status.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/dashboard-preview.png" alt="Dashboard Preview" width="800">
+</p>
+
 ## Architecture
 
 <p align="center">
