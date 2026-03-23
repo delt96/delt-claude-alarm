@@ -92,16 +92,55 @@
     overflow-y: auto;
     padding: 12px;
   }
-  .sessions-panel h2 {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-dim);
+  .sessions-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 8px 8px 12px;
     position: sticky;
     top: 0;
     background: var(--bg);
     z-index: 1;
+  }
+  .sessions-header h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+  }
+  .add-session-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 16px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .add-session-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .cmd-popup {
+    position: absolute;
+    top: 44px;
+    left: 12px;
+    right: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    display: none;
+  }
+  .cmd-popup.active { display: block; }
+  .cmd-popup-title {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
   }
   .session-card {
     background: var(--surface);
@@ -582,8 +621,23 @@
   <button data-tab="notifications">Notifications</button>
 </div>
 <div class="container">
-  <div class="sessions-panel">
-    <h2>Sessions</h2>
+  <div class="sessions-panel" style="position:relative">
+    <div class="sessions-header">
+      <h2>Sessions</h2>
+      <button class="add-session-btn" id="addSessionBtn" title="Add session">+</button>
+    </div>
+    <div class="cmd-popup" id="cmdPopup">
+      <div class="cmd-popup-title">Run in terminal to connect:</div>
+      <div class="cmd-copy" id="cmdCopy1" title="Click to copy">
+        <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm</span>
+        <span class="cmd-icon">&#128203;</span>
+      </div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">with auto-approve:</div>
+      <div class="cmd-copy" id="cmdCopy2" title="Click to copy">
+        <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions</span>
+        <span class="cmd-icon">&#128203;</span>
+      </div>
+    </div>
     <div id="sessionsList"></div>
   </div>
 
@@ -745,30 +799,7 @@
     const el = $('#sessionsList');
     const ids = Object.keys(state.sessions);
     if (!ids.length) {
-      el.innerHTML = `<div class="no-sessions">No active sessions.<br>Start Claude Code with the channel:
-        <div class="cmd-copy" id="cmdCopy1" title="Click to copy">
-          <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm</span>
-          <span class="cmd-icon">&#128203;</span>
-        </div>
-        <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">or with auto-approve:</div>
-        <div class="cmd-copy" id="cmdCopy2" title="Click to copy">
-          <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions</span>
-          <span class="cmd-icon">&#128203;</span>
-        </div>
-      </div>`;
-      el.querySelectorAll('.cmd-copy').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const text = btn.querySelector('.cmd-text').textContent;
-          navigator.clipboard.writeText(text).then(() => {
-            btn.classList.add('copied');
-            btn.querySelector('.cmd-icon').innerHTML = '&#10003;';
-            setTimeout(() => {
-              btn.classList.remove('copied');
-              btn.querySelector('.cmd-icon').innerHTML = '&#128203;';
-            }, 2000);
-          });
-        });
-      });
+      el.innerHTML = '<div class="no-sessions">No active sessions.<br>Click + to see connection commands.</div>';
       return;
     }
     el.innerHTML = ids.map(id => {
@@ -1053,6 +1084,30 @@
   });
   scrollBtn.addEventListener('click', () => {
     msgList.scrollTo({ top: msgList.scrollHeight, behavior: 'smooth' });
+  });
+
+  // --- Add session popup ---
+  $('#addSessionBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('#cmdPopup').classList.toggle('active');
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#cmdPopup') && !e.target.closest('#addSessionBtn')) {
+      $('#cmdPopup').classList.remove('active');
+    }
+  });
+  document.querySelectorAll('#cmdPopup .cmd-copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const text = btn.querySelector('.cmd-text').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.classList.add('copied');
+        btn.querySelector('.cmd-icon').innerHTML = '&#10003;';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.querySelector('.cmd-icon').innerHTML = '&#128203;';
+        }, 2000);
+      });
+    });
   });
 
   // --- Webhook settings ---
