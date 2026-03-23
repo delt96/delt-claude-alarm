@@ -6,50 +6,18 @@ Monitor and interact with multiple Claude Code sessions from a web dashboard. Ge
 
 ## Architecture
 
-```mermaid
-graph LR
-    subgraph "Your Machine"
-        CC1["Claude Code<br/>(Session 1)"] --> CS1["Channel Server"]
-        CC2["Claude Code<br/>(Session 2)"] --> CS2["Channel Server"]
-        CC3["Claude Code<br/>(Session 3)"] --> CS3["Channel Server"]
-    end
-
-    CS1 -->|WebSocket| HUB["Hub Server<br/>:7900"]
-    CS2 -->|WebSocket| HUB
-    CS3 -->|WebSocket| HUB
-
-    HUB -->|HTTP| DASH["Web Dashboard"]
-    HUB -->|Toast| NOTIF["Desktop<br/>Notifications"]
-
-    subgraph "Remote Machine (optional)"
-        CC4["Claude Code<br/>(Session 4)"] --> CS4["Channel Server"]
-    end
-    CS4 -->|WebSocket| HUB
-
-    style HUB fill:#7c6aef,stroke:#5a4db8,color:#fff
-    style DASH fill:#3dd68c,stroke:#22a06b,color:#000
-    style NOTIF fill:#f5c542,stroke:#d4a72c,color:#000
-```
+<p align="center">
+  <img src="docs/architecture.svg" alt="Architecture" width="800">
+</p>
 
 ## Features
 
-```mermaid
-graph TD
-    A["Multi-Session<br/>Monitoring"] --> |"real-time"| B["Session Status<br/>idle · working · waiting"]
-    A --> |"two-way"| C["Message Exchange<br/>text + markdown + images"]
-    A --> |"alerts"| D["Desktop Notifications<br/>Windows · macOS · Linux"]
-    A --> |"security"| E["Token Auth<br/>auto-generated"]
-    A --> |"theme"| F["Dark / Light Mode"]
-    A --> |"remote"| G["Multi-Machine<br/>Support"]
-
-    style A fill:#7c6aef,stroke:#5a4db8,color:#fff
-    style B fill:#60a5fa,stroke:#3b82f6,color:#000
-    style C fill:#3dd68c,stroke:#22a06b,color:#000
-    style D fill:#f5c542,stroke:#d4a72c,color:#000
-    style E fill:#ef4444,stroke:#dc2626,color:#fff
-    style F fill:#8b8fa3,stroke:#6b7280,color:#fff
-    style G fill:#a78bfa,stroke:#7c3aed,color:#000
-```
+- **Multi-Session Monitoring** — Real-time session status (idle / working / waiting)
+- **Two-way Messaging** — Text + markdown + image exchange with Claude
+- **Desktop Notifications** — Windows / macOS / Linux toast alerts
+- **Token Auth** — Auto-generated secure access
+- **Dark / Light Mode** — Theme toggle with persistence
+- **Multi-Machine** — Remote hub access support
 
 ## Quick Start
 
@@ -84,22 +52,9 @@ Open `http://127.0.0.1:7900` in your browser.
 
 ## Message Flow
 
-```mermaid
-sequenceDiagram
-    participant D as Dashboard
-    participant H as Hub Server
-    participant C as Channel Server
-    participant CC as Claude Code
-
-    D->>H: Send message
-    H->>C: Forward via WebSocket
-    C->>CC: MCP Channel notification
-    CC->>CC: Process & execute
-    CC->>C: Call reply tool
-    C->>H: Forward reply
-    H->>D: Display in chat
-    H->>H: Desktop notification
-```
+<p align="center">
+  <img src="docs/message-flow.svg" alt="Message Flow" width="700">
+</p>
 
 ## Dashboard Layout
 
@@ -195,25 +150,9 @@ Config stored at `~/.claude-alarm/config.json`:
 
 ## Remote Access
 
-```mermaid
-graph LR
-    subgraph "Hub PC"
-        HUB["Hub Server<br/>0.0.0.0:7900"]
-    end
-
-    subgraph "Remote PC"
-        RC["Claude Code"] --> RCS["Channel Server"]
-    end
-
-    subgraph "Browser (any device)"
-        DASH["Dashboard"]
-    end
-
-    RCS -->|"WS + token"| HUB
-    DASH -->|"HTTP + token"| HUB
-
-    style HUB fill:#7c6aef,stroke:#5a4db8,color:#fff
-```
+<p align="center">
+  <img src="docs/remote-access.svg" alt="Remote Access" width="600">
+</p>
 
 1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
 2. Open port 7900 in your firewall
