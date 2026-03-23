@@ -98,6 +98,10 @@
     letter-spacing: 0.5px;
     color: var(--text-dim);
     padding: 8px 8px 12px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
   }
   .session-card {
     background: var(--surface);
@@ -207,6 +211,28 @@
     margin-top: 4px;
   }
 
+  /* Scroll to bottom button */
+  .scroll-bottom {
+    position: absolute;
+    bottom: 80px;
+    right: 30px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 16px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    transition: border-color 0.15s;
+  }
+  .scroll-bottom:hover { border-color: var(--accent); }
+  .scroll-bottom.visible { display: flex; }
+
   /* Image preview */
   .image-preview {
     border-top: 1px solid var(--border);
@@ -314,6 +340,10 @@
     letter-spacing: 0.5px;
     color: var(--text-dim);
     padding: 8px 8px 12px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
   }
   .notif-item {
     background: var(--surface);
@@ -455,6 +485,7 @@
     <div class="messages-list" id="messagesList">
       <div class="empty-state">Select a session to view messages</div>
     </div>
+    <button class="scroll-bottom" id="scrollBottom" title="Scroll to bottom">&#8595;</button>
     <div class="drag-overlay" id="dragOverlay">Drop image here</div>
     <div class="image-preview" id="imagePreview">
       <img id="previewImg" src="" alt="preview">
@@ -869,6 +900,17 @@
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
     return html;
   }
+
+  // Scroll to bottom button
+  const msgList = $('#messagesList');
+  const scrollBtn = $('#scrollBottom');
+  msgList.addEventListener('scroll', () => {
+    const gap = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight;
+    scrollBtn.classList.toggle('visible', gap > 100);
+  });
+  scrollBtn.addEventListener('click', () => {
+    msgList.scrollTo({ top: msgList.scrollHeight, behavior: 'smooth' });
+  });
 
   state.token = getToken();
   connect();
