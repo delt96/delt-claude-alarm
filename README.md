@@ -7,7 +7,7 @@ Monitor and interact with multiple Claude Code sessions from a web dashboard. Ge
 ## Architecture
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Architecture" width="800">
+  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/architecture.svg" alt="Architecture" width="800">
 </p>
 
 ## Features
@@ -53,7 +53,7 @@ Open `http://127.0.0.1:7900` in your browser.
 ## Message Flow
 
 <p align="center">
-  <img src="docs/message-flow.svg" alt="Message Flow" width="700">
+  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/message-flow.svg" alt="Message Flow" width="700">
 </p>
 
 ## Dashboard Layout
@@ -151,7 +151,7 @@ Config stored at `~/.claude-alarm/config.json`:
 ## Remote Access
 
 <p align="center">
-  <img src="docs/remote-access.svg" alt="Remote Access" width="600">
+  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/remote-access.svg" alt="Remote Access" width="600">
 </p>
 
 1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
