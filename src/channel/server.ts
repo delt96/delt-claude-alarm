@@ -30,7 +30,9 @@ const server = new Server(
       'Read the message and act on it. Reply with the same detail and depth as you normally would — do not shorten your response. ' +
       'IMPORTANT: The dashboard user can ONLY see messages sent via the reply tool. Your terminal output is NOT visible on the dashboard. ' +
       'Therefore, when responding to a dashboard message, you MUST call the reply tool with your response so the dashboard user can see it. ' +
-      'Use the notify tool to send desktop notifications. Use the status tool to update your session status.',
+      'Use the notify tool to send desktop notifications for key events: task completion, errors, or when user input is needed. ' +
+      'Do NOT notify for intermediate steps or simple acknowledgments. ' +
+      'Use the status tool to update your session status.',
   },
 );
 
