@@ -43,7 +43,7 @@ async function checkForUpdates() {
 
     if (latestVersion !== currentVersion) {
       console.log(`\n⚠ New version available: ${currentVersion} → ${latestVersion}`);
-      console.log(`  Run: npm update -g @delt/claude-alarm\n`);
+      console.log(`  Run: npm install -g @delt/claude-alarm\n`);
     }
   } catch {
     // Silent fail - don't block startup
