@@ -140,17 +140,22 @@ Configure via dashboard (⚙ Settings → Webhook tab) or in config:
 
 ### Telegram Bot
 
-Two-way messaging with Claude sessions via Telegram:
+Two-way messaging with Claude sessions via Telegram — text and images.
+
+**Setup (guided wizard in dashboard):**
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) on Telegram
-2. Send any message to your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your Chat ID
-3. Open dashboard → ⚙ Settings → Telegram tab
-4. Enter Bot Token + Chat ID → Test → Save
+2. Open dashboard → ⚙ Settings → Telegram tab
+3. **Step 1:** Paste your Bot Token → Next
+4. **Step 2:** Send any message to your bot, then click **Detect Chat ID** → select your chat → Next
+5. **Step 3:** Send Test → Save
 
 **Features:**
 - Notifications forwarded to Telegram with session labels
-- Reply to a notification message → routed to the correct session
+- Reply to a notification → routed to the correct session
 - Send a new message → auto-delivered if 1 session, or pick from a list
+- Send photos from Telegram → downloaded and forwarded to Claude
+- Photo captions included as text alongside the image
 
 ```json
 {
@@ -188,14 +193,19 @@ Two-way messaging with Claude sessions via Telegram:
 }
 ```
 
-## Image Upload (Local Sessions)
+## Image Support
 
-Send images to Claude via the dashboard:
+**Dashboard (local sessions):**
 - **Ctrl+V** — Paste from clipboard
 - **Drag & Drop** — Drop image onto message area
 - **Attach button** — Click 📎 to browse files
+- Images + text sent together as one message
 
-> Images are only available for local sessions (same machine as Hub). Max 10MB, auto-deleted after 5 minutes.
+**Telegram:**
+- Send photos to the bot → forwarded to Claude session
+- Photo captions included as text
+
+> Dashboard images are only available for local sessions (same machine as Hub). Max 10MB, auto-deleted after 5 minutes.
 
 ## Platform Support
 
