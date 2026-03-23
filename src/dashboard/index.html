@@ -874,7 +874,7 @@
       </div>`;
     }).join('');
 
-    el.scrollTop = el.scrollHeight;
+    setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
   }
 
   function renderNotifications() {
