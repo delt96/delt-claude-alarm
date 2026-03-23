@@ -28,11 +28,36 @@ Quick start:
 `);
 }
 
+async function checkForUpdates() {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const currentVersion = pkg.version;
+
+    const res = await fetch('https://registry.npmjs.org/@delt/claude-alarm/latest', {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return;
+    const data = await res.json() as { version: string };
+    const latestVersion = data.version;
+
+    if (latestVersion !== currentVersion) {
+      console.log(`\n⚠ New version available: ${currentVersion} → ${latestVersion}`);
+      console.log(`  Run: npm update -g @delt/claude-alarm\n`);
+    }
+  } catch {
+    // Silent fail - don't block startup
+  }
+}
+
 async function hubStart(daemon: boolean) {
   const config = loadConfig();
   const host = config.hub.host ?? DEFAULT_HUB_HOST;
   const port = config.hub.port ?? DEFAULT_HUB_PORT;
   const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+
+  // Check for updates (non-blocking)
+  checkForUpdates();
 
   // Check if already running
   if (fs.existsSync(PID_FILE)) {
