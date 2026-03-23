@@ -179,7 +179,9 @@ export class HubServer {
     // Look for dashboard HTML relative to this file (dist) or source
     const candidates = [
       path.join(__dirname, '..', 'dashboard', 'index.html'),       // from dist/hub/
+      path.join(__dirname, 'dashboard', 'index.html'),             // from dist/ (bundled index.js)
       path.join(__dirname, '..', '..', 'src', 'dashboard', 'index.html'), // from dist/hub/ -> src/
+      path.join(__dirname, '..', 'src', 'dashboard', 'index.html'),       // from dist/ -> src/
       path.join(process.cwd(), 'dist', 'dashboard', 'index.html'),  // from cwd
       path.join(process.cwd(), 'src', 'dashboard', 'index.html'),   // from cwd/src
     ];
