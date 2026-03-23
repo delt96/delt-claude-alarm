@@ -481,6 +481,14 @@ export class HubServer {
         logger.info(`Telegram message forwarded to session: ${sessionId}`);
       }
     };
+    this.telegramBot.onImageToSession = (sessionId, imagePath, mimeType, caption) => {
+      const channelWs = this.channelSockets.get(sessionId);
+      if (channelWs?.readyState === WebSocket.OPEN) {
+        const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption };
+        channelWs.send(JSON.stringify(msg));
+        logger.info(`Telegram photo forwarded to session: ${sessionId}`);
+      }
+    };
     this.notifier.configure({ telegramBot: this.telegramBot });
     this.telegramBot.startPolling();
     logger.info('Telegram bot initialized');

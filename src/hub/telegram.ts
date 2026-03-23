@@ -1,12 +1,26 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../shared/logger.js';
+import { UPLOADS_DIR } from '../shared/constants.js';
 import type { TelegramConfig, SessionInfo } from '../shared/types.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
+
+interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
 
 interface TelegramMessage {
   message_id: number;
   chat: { id: number };
   text?: string;
+  caption?: string;
+  photo?: TelegramPhotoSize[];
   reply_to_message?: { message_id: number };
 }
 
@@ -24,12 +38,14 @@ export class TelegramBot {
   // message_id -> sessionId mapping for reply-based routing
   private messageSessionMap = new Map<number, string>();
 
-  // Callback: when a message arrives from Telegram for a session
+  // Callback: when a text message arrives from Telegram for a session
   public onMessageToSession?: (sessionId: string, content: string) => void;
+  // Callback: when an image arrives from Telegram for a session
+  public onImageToSession?: (sessionId: string, imagePath: string, mimeType: string, caption?: string) => void;
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
-  // Callback: when user needs to select a session (sends inline keyboard)
-  private pendingMessages = new Map<number, string>(); // chatId -> pending message text
+  // Pending messages for session selection
+  private pendingMessages = new Map<number, { text?: string; photoFileId?: string; caption?: string }>(); // chatId -> pending
 
   constructor(config: TelegramConfig) {
     this.config = config;
@@ -141,38 +157,49 @@ export class TelegramBot {
     this.pollTimer = setTimeout(() => this.poll(), delay);
   }
 
-  private handleIncomingMessage(msg: TelegramMessage): void {
-    if (!msg.text) return;
-
+  private async handleIncomingMessage(msg: TelegramMessage): Promise<void> {
     // Only process messages from the configured chat
     if (String(msg.chat.id) !== String(this.config.chatId)) return;
 
-    const text = msg.text.trim();
+    const hasPhoto = msg.photo && msg.photo.length > 0;
+    const text = (msg.text || msg.caption || '').trim();
+
+    if (!text && !hasPhoto) return;
 
     // Check if it's a reply to a known message
     if (msg.reply_to_message) {
       const sessionId = this.messageSessionMap.get(msg.reply_to_message.message_id);
       if (sessionId) {
-        this.deliverToSession(sessionId, text);
+        if (hasPhoto) {
+          await this.deliverPhotoToSession(sessionId, msg.photo!, text);
+        } else {
+          this.deliverToSession(sessionId, text);
+        }
         return;
       }
     }
 
     // Check if it's a session selection command: /s_<index>
-    const selectMatch = text.match(/^\/s_(\d+)$/);
-    if (selectMatch) {
-      const pendingText = this.pendingMessages.get(msg.chat.id);
-      if (pendingText) {
-        this.pendingMessages.delete(msg.chat.id);
-        const sessions = this.getSessions?.() ?? [];
-        const idx = parseInt(selectMatch[1], 10) - 1;
-        if (idx >= 0 && idx < sessions.length) {
-          this.deliverToSession(sessions[idx].id, pendingText);
-          this.sendMessage(`Sent to [${this.getLabel(sessions[idx])}]`);
-        } else {
-          this.sendMessage('Invalid session number.');
+    if (text) {
+      const selectMatch = text.match(/^\/s_(\d+)$/);
+      if (selectMatch) {
+        const pending = this.pendingMessages.get(msg.chat.id);
+        if (pending) {
+          this.pendingMessages.delete(msg.chat.id);
+          const sessions = this.getSessions?.() ?? [];
+          const idx = parseInt(selectMatch[1], 10) - 1;
+          if (idx >= 0 && idx < sessions.length) {
+            if (pending.photoFileId) {
+              await this.deliverPhotoToSessionByFileId(sessions[idx].id, pending.photoFileId, pending.caption);
+            } else if (pending.text) {
+              this.deliverToSession(sessions[idx].id, pending.text);
+            }
+            this.sendMessage(`Sent to [${this.getLabel(sessions[idx])}]`);
+          } else {
+            this.sendMessage('Invalid session number.');
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -185,12 +212,21 @@ export class TelegramBot {
     }
 
     if (sessions.length === 1) {
-      this.deliverToSession(sessions[0].id, text);
+      if (hasPhoto) {
+        await this.deliverPhotoToSession(sessions[0].id, msg.photo!, text);
+      } else {
+        this.deliverToSession(sessions[0].id, text);
+      }
       return;
     }
 
     // Multiple sessions — ask user to pick
-    this.pendingMessages.set(msg.chat.id, text);
+    if (hasPhoto) {
+      const largest = msg.photo![msg.photo!.length - 1];
+      this.pendingMessages.set(msg.chat.id, { photoFileId: largest.file_id, caption: text });
+    } else {
+      this.pendingMessages.set(msg.chat.id, { text });
+    }
     const sessionList = sessions
       .map((s, i) => `/s_${i + 1} - ${this.getLabel(s)}`)
       .join('\n');
@@ -200,6 +236,49 @@ export class TelegramBot {
   private deliverToSession(sessionId: string, content: string): void {
     if (this.onMessageToSession) {
       this.onMessageToSession(sessionId, content);
+    }
+  }
+
+  private async deliverPhotoToSession(sessionId: string, photos: TelegramPhotoSize[], caption?: string): Promise<void> {
+    // Get the largest photo (last in array)
+    const largest = photos[photos.length - 1];
+    await this.deliverPhotoToSessionByFileId(sessionId, largest.file_id, caption);
+  }
+
+  private async deliverPhotoToSessionByFileId(sessionId: string, fileId: string, caption?: string): Promise<void> {
+    try {
+      // Get file path from Telegram
+      const fileRes = await fetch(`${this.apiUrl}/getFile?file_id=${fileId}`);
+      if (!fileRes.ok) { logger.warn('Failed to get Telegram file info'); return; }
+      const fileData = await fileRes.json() as { ok: boolean; result: { file_path: string } };
+      if (!fileData.ok) return;
+
+      // Download the file
+      const downloadUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${fileData.result.file_path}`;
+      const imgRes = await fetch(downloadUrl);
+      if (!imgRes.ok) { logger.warn('Failed to download Telegram photo'); return; }
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+
+      // Determine extension
+      const ext = fileData.result.file_path.split('.').pop() || 'jpg';
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+
+      // Save to uploads dir
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+      const filename = `${randomUUID()}.${ext}`;
+      const filePath = path.join(UPLOADS_DIR, filename);
+      fs.writeFileSync(filePath, buffer);
+      logger.info(`Telegram photo saved: ${filename} (${buffer.length} bytes)`);
+
+      // Deliver to session
+      if (this.onImageToSession) {
+        this.onImageToSession(sessionId, filePath, mimeType, caption);
+      }
+
+      // Cleanup after 5 minutes
+      setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, 5 * 60 * 1000);
+    } catch (err) {
+      logger.warn(`Telegram photo download failed: ${(err as Error).message}`);
     }
   }
 
