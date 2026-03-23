@@ -4,10 +4,6 @@
 
 Monitor and interact with multiple Claude Code sessions from a web dashboard. Get desktop notifications when tasks complete, send messages to Claude, and track session status.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/dashboard-preview.png" alt="Dashboard Preview" width="800">
-</p>
-
 ## Architecture
 
 <p align="center">
@@ -60,30 +56,11 @@ Open `http://127.0.0.1:7900` in your browser.
   <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/message-flow.svg" alt="Message Flow" width="700">
 </p>
 
-## Dashboard Layout
+## Dashboard
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Claude Alarm                              ☽  ● Connected  │
-├──────────────┬──────────────────────┬───────────────────────┤
-│  SESSIONS    │  Messages            │  NOTIFICATIONS        │
-│              │                      │                       │
-│ ┌──────────┐ │  ┌─────────────────┐ │  ┌─────────────────┐ │
-│ │ my-app   │ │  │ Claude · 14:30  │ │  │ ● Task complete │ │
-│ │ idle     │ │  │ Build succeeded │ │  │   my-app · 14:30│ │
-│ └──────────┘ │  └─────────────────┘ │  └─────────────────┘ │
-│ ┌──────────┐ │                      │  ┌─────────────────┐ │
-│ │ api-svc  │ │       ┌────────────┐ │  │ ● Error found   │ │
-│ │ working  │ │       │ You · 14:31│ │  │   api-svc · 14:2│ │
-│ └──────────┘ │       │ Fix the bug│ │  └─────────────────┘ │
-│ ┌──────────┐ │       └────────────┘ │                       │
-│ │ frontend │ │                      │                       │
-│ │ waiting  │ │                      │                       │
-│ └──────────┘ │                      │                       │
-├──────────────┴──────────────────────┴───────────────────────┤
-│  📎 [Message input...  Shift+Enter ↵]           [ Send ]   │
-└─────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/dashboard-preview.png" alt="Dashboard" width="800">
+</p>
 
 ## CLI Commands
 
