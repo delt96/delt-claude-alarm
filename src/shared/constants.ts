@@ -2,7 +2,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 export const DEFAULT_HUB_HOST = '127.0.0.1';
-export const DEFAULT_HUB_PORT = 7890;
+export const DEFAULT_HUB_PORT = 7900;
 
 export const CONFIG_DIR = path.join(os.homedir(), '.claude-alarm');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');

@@ -209,7 +209,7 @@ async function init() {
 
   if (remote.toLowerCase() === 'y') {
     const host = await ask('Hub host (e.g. 192.168.1.100): ');
-    const port = await ask('Hub port (default: 7890): ');
+    const port = await ask('Hub port (default: 7900): ');
     const token = await ask('Hub token: ');
 
     if (!host) {
