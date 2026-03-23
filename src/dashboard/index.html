@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Alarm - Dashboard</title>
 <style>
-  :root {
+  :root, [data-theme="dark"] {
     --bg: #0f1117;
     --surface: #1a1d27;
     --border: #2a2d3a;
@@ -18,6 +18,19 @@
     --red: #ef4444;
     --blue: #60a5fa;
   }
+  [data-theme="light"] {
+    --bg: #f5f5f7;
+    --surface: #ffffff;
+    --border: #d1d5db;
+    --text: #1f2937;
+    --text-dim: #6b7280;
+    --accent: #7c6aef;
+    --accent-dim: #5a4db8;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --blue: #3b82f6;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -25,6 +38,10 @@
     color: var(--text);
     min-height: 100vh;
   }
+  /* Hide scrollbars */
+  ::-webkit-scrollbar { display: none; }
+  * { -ms-overflow-style: none; scrollbar-width: none; }
+
   header {
     border-bottom: 1px solid var(--border);
     padding: 16px 24px;
@@ -33,6 +50,22 @@
     justify-content: space-between;
   }
   header h1 { font-size: 18px; font-weight: 600; }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .theme-toggle {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .theme-toggle:hover { border-color: var(--accent); }
   .status-badge {
     display: inline-flex;
     align-items: center;
@@ -83,11 +116,6 @@
     font-weight: 500;
     margin-bottom: 4px;
   }
-  .session-id {
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: monospace;
-  }
   .session-status {
     display: inline-block;
     font-size: 11px;
@@ -108,17 +136,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .channel-badge {
-    display: inline-block;
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 8px;
-    margin-left: 6px;
-    font-weight: 500;
-  }
-  .channel-badge.enabled { background: rgba(61,214,140,0.15); color: var(--green); }
-  .channel-badge.disabled { background: rgba(239,68,68,0.15); color: var(--red); }
-
   .no-sessions {
     color: var(--text-dim);
     font-size: 13px;
@@ -164,11 +181,67 @@
     color: var(--text-dim);
     margin-bottom: 4px;
   }
+  .message-body img {
+    max-width: 100%;
+    border-radius: 6px;
+    margin-top: 4px;
+  }
+
+  /* Image preview */
+  .image-preview {
+    border-top: 1px solid var(--border);
+    padding: 8px 20px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+  }
+  .image-preview.active { display: flex; }
+  .image-preview img {
+    max-height: 60px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+  .image-preview .preview-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .image-preview .preview-cancel {
+    background: none;
+    border: none;
+    color: var(--red);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 2px 6px;
+  }
+
+  /* Drag overlay */
+  .drag-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(124,106,239,0.15);
+    border: 2px dashed var(--accent);
+    border-radius: 8px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    color: var(--accent);
+    z-index: 10;
+    pointer-events: none;
+  }
+  .drag-overlay.active { display: flex; }
+
   .message-input-area {
     border-top: 1px solid var(--border);
     padding: 12px 20px;
     display: flex;
     gap: 8px;
+    align-items: flex-end;
   }
   .message-input-area textarea {
     flex: 1;
@@ -191,13 +264,23 @@
     color: white;
     border: none;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px 12px;
     cursor: pointer;
     font-size: 13px;
     font-weight: 500;
+    min-height: 36px;
   }
   .message-input-area button:hover { background: var(--accent-dim); }
   .message-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .attach-btn {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    font-size: 18px !important;
+    padding: 6px 10px !important;
+  }
+  .attach-btn:hover { border-color: var(--accent) !important; }
+  .attach-btn:disabled { display: none !important; }
 
   /* Notifications panel */
   .notifications-panel {
@@ -219,17 +302,12 @@
     padding: 10px 12px;
     margin-bottom: 8px;
     font-size: 13px;
+    cursor: pointer;
   }
-  .notif-item .notif-title {
-    font-weight: 500;
-    margin-bottom: 2px;
-  }
+  .notif-item:hover { border-color: var(--accent); }
+  .notif-item .notif-title { font-weight: 500; margin-bottom: 2px; }
   .notif-item .notif-message { color: var(--text-dim); }
-  .notif-item .notif-time {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 4px;
-  }
+  .notif-item .notif-time { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
   .notif-level {
     display: inline-block;
     width: 6px; height: 6px;
@@ -241,10 +319,7 @@
   .notif-level.warning { background: var(--yellow); }
   .notif-level.error { background: var(--red); }
 
-  .message-body h2, .message-body h3, .message-body h4 {
-    margin: 8px 0 4px;
-    font-size: 14px;
-  }
+  .message-body h2, .message-body h3, .message-body h4 { margin: 8px 0 4px; font-size: 14px; }
   .message-body h2 { font-size: 16px; }
   .message-body h3 { font-size: 15px; }
   .message-body pre {
@@ -263,29 +338,11 @@
     font-size: 12px;
     font-family: monospace;
   }
-  .message-body pre code {
-    background: none;
-    padding: 0;
-  }
-  .message-body table {
-    border-collapse: collapse;
-    margin: 6px 0;
-    font-size: 12px;
-    width: 100%;
-  }
-  .message-body th, .message-body td {
-    border: 1px solid var(--border);
-    padding: 4px 8px;
-    text-align: left;
-  }
-  .message-body th {
-    background: var(--bg);
-    font-weight: 600;
-  }
-  .message-body ul {
-    margin: 4px 0;
-    padding-left: 20px;
-  }
+  .message-body pre code { background: none; padding: 0; }
+  .message-body table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
+  .message-body th, .message-body td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .message-body th { background: var(--bg); font-weight: 600; }
+  .message-body ul { margin: 4px 0; padding-left: 20px; }
   .message-body li { margin: 2px 0; }
   .message-body strong { font-weight: 600; }
 
@@ -348,9 +405,12 @@
 <body>
 <header>
   <h1>Claude Alarm</h1>
-  <div class="status-badge">
-    <span class="status-dot" id="connDot"></span>
-    <span id="connLabel">Connecting...</span>
+  <div class="header-right">
+    <button class="theme-toggle" id="themeToggle" title="Toggle theme">&#9790;</button>
+    <div class="status-badge">
+      <span class="status-dot" id="connDot"></span>
+      <span id="connLabel">Connecting...</span>
+    </div>
   </div>
 </header>
 
@@ -365,25 +425,30 @@
 </div>
 
 <div class="container">
-  <!-- Sessions -->
   <div class="sessions-panel">
     <h2>Sessions</h2>
     <div id="sessionsList"></div>
   </div>
 
-  <!-- Messages -->
-  <div class="messages-panel">
+  <div class="messages-panel" style="position:relative">
     <div class="messages-header" id="messagesHeader">Select a session</div>
     <div class="messages-list" id="messagesList">
       <div class="empty-state">Select a session to view messages</div>
     </div>
+    <div class="drag-overlay" id="dragOverlay">Drop image here</div>
+    <div class="image-preview" id="imagePreview">
+      <img id="previewImg" src="" alt="preview">
+      <span class="preview-name" id="previewName"></span>
+      <button class="preview-cancel" id="previewCancel">&times;</button>
+    </div>
     <div class="message-input-area">
+      <button class="attach-btn" id="attachBtn" disabled title="Attach image">&#128206;</button>
+      <input type="file" id="fileInput" accept="image/*" style="display:none">
       <textarea id="msgInput" placeholder="Send a message to session... (Shift+Enter for new line)" disabled rows="1"></textarea>
       <button id="sendBtn" disabled>Send</button>
     </div>
   </div>
 
-  <!-- Notifications -->
   <div class="notifications-panel">
     <h2>Notifications</h2>
     <div id="notifList">
@@ -398,33 +463,46 @@
     ws: null,
     sessions: {},
     selectedSession: null,
-    messages: {},    // sessionId -> [{from, content, time}]
+    messages: {},
     notifications: [],
     token: null,
+    pendingImage: null,
   };
 
   const $ = (sel) => document.querySelector(sel);
 
+  // --- Theme ---
+  function initTheme() {
+    const saved = localStorage.getItem('claude-alarm-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    updateThemeIcon(saved);
+  }
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('claude-alarm-theme', next);
+    updateThemeIcon(next);
+  }
+  function updateThemeIcon(theme) {
+    $('#themeToggle').innerHTML = theme === 'dark' ? '&#9790;' : '&#9728;';
+  }
+  $('#themeToggle').addEventListener('click', toggleTheme);
+  initTheme();
+
   // --- Token handling ---
   function getToken() {
-    // Check URL query parameter first
     const params = new URLSearchParams(location.search);
     const urlToken = params.get('token');
     if (urlToken) {
       sessionStorage.setItem('claude-alarm-token', urlToken);
       return urlToken;
     }
-    // Check sessionStorage
     return sessionStorage.getItem('claude-alarm-token');
   }
 
-  function showTokenForm() {
-    $('#tokenOverlay').classList.remove('hidden');
-  }
-
-  function hideTokenForm() {
-    $('#tokenOverlay').classList.add('hidden');
-  }
+  function showTokenForm() { $('#tokenOverlay').classList.remove('hidden'); }
+  function hideTokenForm() { $('#tokenOverlay').classList.add('hidden'); }
 
   $('#tokenSubmit').addEventListener('click', () => {
     const token = $('#tokenInput').value.trim();
@@ -435,7 +513,6 @@
     hideTokenForm();
     connect();
   });
-
   $('#tokenInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') $('#tokenSubmit').click();
   });
@@ -452,28 +529,17 @@
       $('#connDot').classList.add('connected');
       $('#connLabel').textContent = 'Connected';
     };
-
     ws.onclose = () => {
       state.ws = null;
       $('#connDot').classList.remove('connected');
       $('#connLabel').textContent = 'Disconnected';
       setTimeout(connect, 3000);
     };
-
     ws.onerror = () => {
-      // If connection fails, it might be a token issue
-      if (!state.token) {
-        showTokenForm();
-      } else {
-        $('#tokenError').style.display = 'block';
-        showTokenForm();
-      }
+      if (!state.token) { showTokenForm(); } else { $('#tokenError').style.display = 'block'; showTokenForm(); }
       ws.close();
     };
-
-    ws.onmessage = (e) => {
-      try { handleMessage(JSON.parse(e.data)); } catch {}
-    };
+    ws.onmessage = (e) => { try { handleMessage(JSON.parse(e.data)); } catch {} };
   }
 
   function handleMessage(msg) {
@@ -483,45 +549,27 @@
         msg.sessions.forEach(s => { state.sessions[s.id] = s; });
         renderSessions();
         break;
-
       case 'session_connected':
         state.sessions[msg.session.id] = msg.session;
         if (!state.messages[msg.session.id]) state.messages[msg.session.id] = [];
         renderSessions();
         break;
-
       case 'session_disconnected':
         delete state.sessions[msg.sessionId];
-        if (state.selectedSession === msg.sessionId) {
-          state.selectedSession = null;
-          renderMessages();
-        }
+        if (state.selectedSession === msg.sessionId) { state.selectedSession = null; renderMessages(); }
         renderSessions();
         break;
-
       case 'session_updated':
         state.sessions[msg.session.id] = msg.session;
         renderSessions();
         break;
-
       case 'reply_from_session':
         if (!state.messages[msg.sessionId]) state.messages[msg.sessionId] = [];
-        state.messages[msg.sessionId].push({
-          from: 'session',
-          content: msg.content,
-          time: msg.timestamp,
-        });
+        state.messages[msg.sessionId].push({ from: 'session', content: msg.content, time: msg.timestamp });
         if (state.selectedSession === msg.sessionId) renderMessages();
         break;
-
       case 'notification':
-        state.notifications.unshift({
-          sessionId: msg.sessionId,
-          title: msg.title,
-          message: msg.message,
-          level: msg.level || 'info',
-          time: msg.timestamp,
-        });
+        state.notifications.unshift({ sessionId: msg.sessionId, title: msg.title, message: msg.message, level: msg.level || 'info', time: msg.timestamp });
         renderNotifications();
         break;
     }
@@ -545,10 +593,10 @@
         <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
       </div>`;
     }).join('');
-
     el.querySelectorAll('.session-card').forEach(card => {
       card.addEventListener('click', () => selectSession(card.dataset.id));
     });
+    updateImageUI();
   }
 
   function selectSession(id) {
@@ -559,6 +607,13 @@
     $('#msgInput').placeholder = 'Send a message to session... (Shift+Enter for new line)';
     renderSessions();
     renderMessages();
+    updateImageUI();
+  }
+
+  function updateImageUI() {
+    const s = state.selectedSession ? state.sessions[state.selectedSession] : null;
+    const canImage = s && s.isLocal;
+    $('#attachBtn').disabled = !canImage;
   }
 
   function renderMessages() {
@@ -585,7 +640,13 @@
     el.innerHTML = msgs.map(m => {
       const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
       const timeStr = new Date(m.time).toLocaleTimeString();
-      const content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content).replace(/\n/g, '<br>');
+      let content;
+      if (m.imageData) {
+        content = `<img src="${m.imageData}" alt="${esc(m.imageName || 'image')}">`;
+        if (m.content) content = esc(m.content).replace(/\n/g, '<br>') + '<br>' + content;
+      } else {
+        content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content).replace(/\n/g, '<br>');
+      }
       return `<div class="message ${cls}">
         <div class="message-meta">${m.from === 'session' ? 'Claude' : 'You'} &middot; ${timeStr}</div>
         <div class="message-body">${content}</div>
@@ -605,13 +666,12 @@
       const timeStr = new Date(n.time).toLocaleTimeString();
       const session = state.sessions[n.sessionId];
       const sName = session ? session.name : n.sessionId.slice(0, 8);
-      return `<div class="notif-item" data-session="${n.sessionId}" style="cursor:pointer">
+      return `<div class="notif-item" data-session="${n.sessionId}">
         <div class="notif-title"><span class="notif-level ${n.level}"></span>${esc(n.title)}</div>
         <div class="notif-message">${esc(n.message)}</div>
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
-
     el.querySelectorAll('.notif-item').forEach(item => {
       item.addEventListener('click', () => {
         const sid = item.dataset.session;
@@ -620,36 +680,116 @@
     });
   }
 
+  // --- Image handling ---
+  function handleImageFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    if (file.size > 10 * 1024 * 1024) { alert('Image must be under 10MB'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.pendingImage = { data: reader.result, mimeType: file.type, name: file.name };
+      $('#imagePreview').classList.add('active');
+      $('#previewImg').src = reader.result;
+      $('#previewName').textContent = file.name;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function clearPendingImage() {
+    state.pendingImage = null;
+    $('#imagePreview').classList.remove('active');
+    $('#previewImg').src = '';
+    $('#previewName').textContent = '';
+  }
+
+  $('#previewCancel').addEventListener('click', clearPendingImage);
+  $('#attachBtn').addEventListener('click', () => $('#fileInput').click());
+  $('#fileInput').addEventListener('change', (e) => {
+    if (e.target.files[0]) handleImageFile(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  // Ctrl+V paste
+  document.addEventListener('paste', (e) => {
+    if (!state.selectedSession) return;
+    const s = state.sessions[state.selectedSession];
+    if (!s || !s.isLocal) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        handleImageFile(item.getAsFile());
+        return;
+      }
+    }
+  });
+
+  // Drag and drop
+  const msgPanel = document.querySelector('.messages-panel');
+  let dragCounter = 0;
+  msgPanel.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    const s = state.selectedSession ? state.sessions[state.selectedSession] : null;
+    if (s && s.isLocal) $('#dragOverlay').classList.add('active');
+  });
+  msgPanel.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) { dragCounter = 0; $('#dragOverlay').classList.remove('active'); }
+  });
+  msgPanel.addEventListener('dragover', (e) => e.preventDefault());
+  msgPanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    $('#dragOverlay').classList.remove('active');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleImageFile(file);
+  });
+
   // --- Send ---
   function sendMessage() {
     const input = $('#msgInput');
     const content = input.value.trim();
-    if (!content || !state.selectedSession || !state.ws) return;
+    const hasImage = !!state.pendingImage;
+    if (!content && !hasImage) return;
+    if (!state.selectedSession || !state.ws) return;
 
-    state.ws.send(JSON.stringify({
-      type: 'message_to_session',
-      sessionId: state.selectedSession,
-      content,
-    }));
+    // Send text
+    if (content) {
+      state.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: state.selectedSession, content }));
+    }
 
+    // Send image
+    if (hasImage) {
+      state.ws.send(JSON.stringify({
+        type: 'image_upload',
+        sessionId: state.selectedSession,
+        imageData: state.pendingImage.data,
+        mimeType: state.pendingImage.mimeType,
+        originalName: state.pendingImage.name,
+      }));
+    }
+
+    // Add to local messages
     if (!state.messages[state.selectedSession]) state.messages[state.selectedSession] = [];
     state.messages[state.selectedSession].push({
       from: 'dashboard',
-      content,
+      content: content || '',
+      imageData: hasImage ? state.pendingImage.data : null,
+      imageName: hasImage ? state.pendingImage.name : null,
       time: Date.now(),
     });
 
     input.value = '';
     input.style.height = 'auto';
+    clearPendingImage();
     renderMessages();
   }
 
   $('#sendBtn').addEventListener('click', sendMessage);
   $('#msgInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   $('#msgInput').addEventListener('input', function() {
     this.style.height = 'auto';
@@ -664,19 +804,13 @@
 
   function renderMarkdown(text) {
     let html = esc(text);
-    // Code blocks (```)
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    // Inline code
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Bold
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    // Headers
     html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
     html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
     html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-    // Tables
     html = html.replace(/^(\|.+\|)\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/gm, (_, header, body) => {
       const ths = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
       const rows = body.trim().split('\n').map(row => {
@@ -685,18 +819,14 @@
       }).join('');
       return `<table><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table>`;
     });
-    // List items
     html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-    // Line breaks (but not inside pre/table)
     html = html.replace(/\n/g, '<br>');
-    // Clean up extra <br> around block elements
     html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
     return html;
   }
 
-  // Start - try to get token from URL or storage
   state.token = getToken();
   connect();
 })();

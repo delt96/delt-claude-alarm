@@ -178,6 +178,15 @@ async function main() {
           meta: { sender: 'dashboard', timestamp: String(Date.now()) },
         },
       });
+    } else if (msg.type === 'image_to_session' && msg.sessionId === sessionId) {
+      logger.info(`Image from dashboard: ${msg.imagePath}`);
+      await server.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: `[Image: ${msg.originalName || 'image'}] The user sent an image. Read the file to view it: ${msg.imagePath}`,
+          meta: { sender: 'dashboard', timestamp: String(Date.now()), imagePath: msg.imagePath, mimeType: msg.mimeType },
+        },
+      });
     }
   });
 

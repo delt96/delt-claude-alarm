@@ -8,6 +8,7 @@ export const CONFIG_DIR = path.join(os.homedir(), '.claude-alarm');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 export const PID_FILE = path.join(CONFIG_DIR, 'hub.pid');
 export const LOG_FILE = path.join(CONFIG_DIR, 'hub.log');
+export const UPLOADS_DIR = path.join(CONFIG_DIR, 'uploads');
 
 export const WS_PATH_CHANNEL = '/ws/channel';
 export const WS_PATH_DASHBOARD = '/ws/dashboard';

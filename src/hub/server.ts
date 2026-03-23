@@ -4,11 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { logger } from '../shared/logger.js';
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_HUB_HOST,
   DEFAULT_HUB_PORT,
   WS_PATH_CHANNEL,
   WS_PATH_DASHBOARD,
+  UPLOADS_DIR,
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
@@ -26,6 +28,8 @@ export class HubServer {
 
   // Map sessionId -> channel WebSocket
   private channelSockets = new Map<string, WebSocket>();
+  // Track which channel connections are local
+  private localChannels = new Set<string>();
   // All connected dashboard WebSockets
   private dashboardSockets = new Set<WebSocket>();
 
@@ -54,7 +58,7 @@ export class HubServer {
 
     // WebSocket for channel servers
     this.wssChannel = new WebSocketServer({ noServer: true });
-    this.wssChannel.on('connection', (ws) => this.handleChannelConnection(ws));
+    this.wssChannel.on('connection', (ws: WebSocket, req: http.IncomingMessage) => this.handleChannelConnection(ws, req));
 
     // WebSocket for dashboard
     this.wssDashboard = new WebSocketServer({ noServer: true });
@@ -237,13 +241,14 @@ export class HubServer {
 
   // --- Channel WebSocket ---
 
-  private handleChannelConnection(ws: WebSocket): void {
-    logger.info('Channel server connected');
+  private handleChannelConnection(ws: WebSocket, req: http.IncomingMessage): void {
+    const isLocal = this.isLocalRequest(req);
+    logger.info(`Channel server connected (local: ${isLocal})`);
 
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString()) as ChannelMessage;
-        this.handleChannelMessage(ws, msg);
+        this.handleChannelMessage(ws, isLocal, msg);
       } catch {
         logger.warn('Invalid message from channel');
       }
@@ -255,6 +260,7 @@ export class HubServer {
         if (sock === ws) {
           const session = this.sessions.unregister(sessionId);
           this.channelSockets.delete(sessionId);
+          this.localChannels.delete(sessionId);
           logger.info(`Channel disconnected: ${sessionId}`);
           this.broadcastToDashboards({
             type: 'session_disconnected',
@@ -266,13 +272,15 @@ export class HubServer {
     });
   }
 
-  private handleChannelMessage(ws: WebSocket, msg: ChannelMessage): void {
+  private handleChannelMessage(ws: WebSocket, isLocal: boolean, msg: ChannelMessage): void {
     switch (msg.type) {
       case 'register': {
         const session = msg.session;
+        session.isLocal = isLocal;
         const isReregister = !!this.sessions.get(session.id);
         this.sessions.register(session);
         this.channelSockets.set(session.id, ws);
+        if (isLocal) this.localChannels.add(session.id);
         logger.info(`Session registered: ${session.id} (${session.name}, channel: ${session.channelEnabled ?? false})`);
         this.broadcastToDashboards({
           type: isReregister ? 'session_updated' : 'session_connected',
@@ -342,6 +350,8 @@ export class HubServer {
           if (channelWs?.readyState === WebSocket.OPEN) {
             channelWs.send(JSON.stringify(msg));
           }
+        } else if (msg.type === 'image_upload') {
+          this.handleImageUpload(msg);
         }
       } catch {
         logger.warn('Invalid message from dashboard');
@@ -363,6 +373,56 @@ export class HubServer {
         ws.send(payload);
       }
     }
+  }
+
+  private handleImageUpload(msg: ChannelMessage & { type: 'image_upload' }): void {
+    const { sessionId, imageData, mimeType, originalName } = msg;
+
+    // Only allow for local sessions
+    if (!this.localChannels.has(sessionId)) {
+      logger.warn(`Image upload rejected: session ${sessionId} is not local`);
+      return;
+    }
+
+    const channelWs = this.channelSockets.get(sessionId);
+    if (!channelWs || channelWs.readyState !== WebSocket.OPEN) return;
+
+    // Validate mime type
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(mimeType)) return;
+
+    // Extract base64 data (remove data URL prefix if present)
+    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    // Validate size (10MB max)
+    if (buffer.length > 10 * 1024 * 1024) {
+      logger.warn('Image upload rejected: exceeds 10MB');
+      return;
+    }
+
+    // Save to uploads dir
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const ext = mimeType.split('/')[1] === 'jpeg' ? 'jpg' : mimeType.split('/')[1];
+    const filename = `${randomUUID()}.${ext}`;
+    const filePath = path.join(UPLOADS_DIR, filename);
+    fs.writeFileSync(filePath, buffer);
+
+    // Forward file path to channel
+    const forwardMsg: ChannelMessage = {
+      type: 'image_to_session',
+      sessionId,
+      imagePath: filePath,
+      mimeType,
+      originalName,
+    };
+    channelWs.send(JSON.stringify(forwardMsg));
+    logger.info(`Image saved and forwarded: ${filename} (${buffer.length} bytes)`);
+
+    // Cleanup after 5 minutes
+    setTimeout(() => {
+      try { fs.unlinkSync(filePath); } catch {}
+    }, 5 * 60 * 1000);
   }
 
   private getSessionLabel(session?: SessionInfo): string {
