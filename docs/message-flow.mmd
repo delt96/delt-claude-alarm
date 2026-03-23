@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant D as Dashboard
+    participant H as Hub Server
+    participant C as Channel Server
+    participant CC as Claude Code
+
+    D->>H: Send message
+    H->>C: Forward via WebSocket
+    C->>CC: MCP Channel notification
+    CC->>CC: Process & execute
+    CC->>C: Call reply tool
+    C->>H: Forward reply
+    H->>D: Display in chat
+    H->>H: Desktop notification

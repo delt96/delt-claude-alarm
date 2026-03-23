@@ -1,0 +1,24 @@
+graph LR
+    subgraph Local["Your Machine"]
+        CC1["Claude Code\n(Session 1)"] --> CS1["Channel\nServer"]
+        CC2["Claude Code\n(Session 2)"] --> CS2["Channel\nServer"]
+        CC3["Claude Code\n(Session 3)"] --> CS3["Channel\nServer"]
+    end
+
+    CS1 -->|WebSocket| HUB["Hub Server\n:7900"]
+    CS2 -->|WebSocket| HUB
+    CS3 -->|WebSocket| HUB
+
+    HUB -->|HTTP| DASH["Web Dashboard"]
+    HUB -->|Toast| NOTIF["Desktop\nNotifications"]
+
+    subgraph Remote["Remote Machine"]
+        CC4["Claude Code\n(Session 4)"] --> CS4["Channel\nServer"]
+    end
+    CS4 -->|WebSocket| HUB
+
+    style HUB fill:#e0a86d,stroke:#c48d52,color:#fff
+    style DASH fill:#3dd68c,stroke:#22a06b,color:#000
+    style NOTIF fill:#f5c542,stroke:#d4a72c,color:#000
+    style Local fill:#1a1d27,stroke:#2a2d3a,color:#e1e4ed
+    style Remote fill:#1a1d27,stroke:#2a2d3a,color:#e1e4ed

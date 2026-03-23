@@ -1,0 +1,20 @@
+graph LR
+    subgraph Hub_PC["Hub PC"]
+        HUB["Hub Server\n0.0.0.0:7900"]
+    end
+
+    subgraph Remote_PC["Remote PC"]
+        RC["Claude Code"] --> RCS["Channel Server"]
+    end
+
+    subgraph Browser["Browser (any device)"]
+        DASH["Dashboard"]
+    end
+
+    RCS -->|"WS + token"| HUB
+    DASH -->|"HTTP + token"| HUB
+
+    style HUB fill:#e0a86d,stroke:#c48d52,color:#fff
+    style Hub_PC fill:#1a1d27,stroke:#2a2d3a,color:#e1e4ed
+    style Remote_PC fill:#1a1d27,stroke:#2a2d3a,color:#e1e4ed
+    style Browser fill:#1a1d27,stroke:#2a2d3a,color:#e1e4ed

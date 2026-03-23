@@ -1,0 +1,15 @@
+{
+  "theme": "dark",
+  "themeVariables": {
+    "primaryColor": "#e0a86d",
+    "primaryTextColor": "#e1e4ed",
+    "primaryBorderColor": "#c48d52",
+    "lineColor": "#8b8fa3",
+    "secondaryColor": "#1a1d27",
+    "tertiaryColor": "#2a2d3a",
+    "background": "#0f1117",
+    "mainBkg": "#1a1d27",
+    "textColor": "#e1e4ed",
+    "fontSize": "14px"
+  }
+}
