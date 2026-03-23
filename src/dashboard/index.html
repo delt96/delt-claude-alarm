@@ -227,6 +227,8 @@
   .messages-panel {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
   }
   .messages-header {
     padding: 12px 20px;
@@ -237,6 +239,7 @@
   .messages-list {
     flex: 1;
     overflow-y: auto;
+    min-height: 0;
     padding: 16px 20px;
   }
   .message {
