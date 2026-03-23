@@ -266,6 +266,33 @@
     margin-top: 4px;
   }
 
+  /* Typing indicator */
+  .typing-indicator {
+    display: none;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    max-width: 80px;
+  }
+  .typing-indicator.active { display: block; }
+  .typing-dots {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .typing-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    animation: typing 1.4s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typing {
+    0%, 60%, 100% { opacity: 0.3; transform: scale(1); }
+    30% { opacity: 1; transform: scale(1.2); }
+  }
+
   /* Scroll to bottom button */
   .scroll-bottom {
     position: absolute;
@@ -683,6 +710,7 @@
     token: null,
     pendingImage: null,
     unread: {},
+    waitingReply: {},
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -782,6 +810,7 @@
       case 'reply_from_session':
         if (!state.messages[msg.sessionId]) state.messages[msg.sessionId] = [];
         state.messages[msg.sessionId].push({ from: 'session', content: msg.content, time: msg.timestamp });
+        state.waitingReply[msg.sessionId] = false;
         if (state.selectedSession === msg.sessionId) { renderMessages(); }
         else { state.unread[msg.sessionId] = (state.unread[msg.sessionId] || 0) + 1; renderSessions(); }
         state.notifications.unshift({ sessionId: msg.sessionId, title: 'Reply', message: msg.content.slice(0, 100), level: 'info', time: msg.timestamp });
@@ -874,6 +903,9 @@
       </div>`;
     }).join('');
 
+    if (state.waitingReply[state.selectedSession]) {
+      el.innerHTML += '<div class="typing-indicator active"><div class="typing-dots"><span></span><span></span><span></span></div></div>';
+    }
     setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
   }
 
@@ -1017,6 +1049,7 @@
     input.value = '';
     input.style.height = 'auto';
     clearPendingImage();
+    state.waitingReply[state.selectedSession] = true;
     renderMessages();
   }
 
