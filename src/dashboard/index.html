@@ -585,7 +585,7 @@
     el.innerHTML = msgs.map(m => {
       const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
       const timeStr = new Date(m.time).toLocaleTimeString();
-      const content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content);
+      const content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content).replace(/\n/g, '<br>');
       return `<div class="message ${cls}">
         <div class="message-meta">${m.from === 'session' ? 'Claude' : 'You'} &middot; ${timeStr}</div>
         <div class="message-body">${content}</div>
