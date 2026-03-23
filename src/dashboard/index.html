@@ -142,6 +142,26 @@
     text-align: center;
     padding: 40px 20px;
   }
+  .cmd-copy {
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-top: 12px;
+    font-size: 11px;
+    font-family: monospace;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    text-align: left;
+    gap: 6px;
+  }
+  .cmd-copy:hover { border-color: var(--accent); }
+  .cmd-copy .cmd-text { flex: 1; color: var(--text); word-break: break-all; }
+  .cmd-copy .cmd-icon { color: var(--text-dim); font-size: 14px; flex-shrink: 0; }
+  .cmd-copy.copied { border-color: var(--green); }
+  .cmd-copy.copied .cmd-icon { color: var(--green); }
 
   /* Messages panel */
   .messages-panel {
@@ -580,7 +600,30 @@
     const el = $('#sessionsList');
     const ids = Object.keys(state.sessions);
     if (!ids.length) {
-      el.innerHTML = '<div class="no-sessions">No active sessions.<br>Start Claude Code with the channel to see sessions here.</div>';
+      el.innerHTML = `<div class="no-sessions">No active sessions.<br>Start Claude Code with the channel:
+        <div class="cmd-copy" id="cmdCopy1" title="Click to copy">
+          <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm</span>
+          <span class="cmd-icon">&#128203;</span>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">or with auto-approve:</div>
+        <div class="cmd-copy" id="cmdCopy2" title="Click to copy">
+          <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions</span>
+          <span class="cmd-icon">&#128203;</span>
+        </div>
+      </div>`;
+      el.querySelectorAll('.cmd-copy').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const text = btn.querySelector('.cmd-text').textContent;
+          navigator.clipboard.writeText(text).then(() => {
+            btn.classList.add('copied');
+            btn.querySelector('.cmd-icon').innerHTML = '&#10003;';
+            setTimeout(() => {
+              btn.classList.remove('copied');
+              btn.querySelector('.cmd-icon').innerHTML = '&#128203;';
+            }, 2000);
+          });
+        });
+      });
       return;
     }
     el.innerHTML = ids.map(id => {
