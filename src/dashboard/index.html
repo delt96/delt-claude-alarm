@@ -334,17 +334,7 @@
     overflow-y: auto;
     padding: 12px;
   }
-  .notifications-panel h2 {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-dim);
-    padding: 8px 8px 12px;
-    position: sticky;
-    top: 0;
-    background: var(--bg);
-    z-index: 1;
-  }
+  .notifications-panel > .notif-header + #notifList { /* spacer */ }
   .notif-item {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -355,9 +345,43 @@
     cursor: pointer;
   }
   .notif-item:hover { border-color: var(--accent); }
-  .notif-item .notif-title { font-weight: 500; margin-bottom: 2px; }
+  .notif-item:hover .notif-dismiss { opacity: 1; }
+  .notif-item .notif-title { font-weight: 500; margin-bottom: 2px; display: flex; align-items: center; }
+  .notif-item .notif-title-text { flex: 1; }
+  .notif-dismiss {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+    transition: opacity 0.15s;
+  }
+  .notif-dismiss:hover { color: var(--red); }
   .notif-item .notif-message { color: var(--text-dim); }
   .notif-item .notif-time { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .notif-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 8px 12px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
+  }
+  .notif-header h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); padding: 0; }
+  .notif-clear-all {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 8px;
+  }
+  .notif-clear-all:hover { border-color: var(--red); color: var(--red); }
   .notif-level {
     display: inline-block;
     width: 6px; height: 6px;
@@ -501,7 +525,10 @@
   </div>
 
   <div class="notifications-panel">
-    <h2>Notifications</h2>
+    <div class="notif-header">
+      <h2>Notifications</h2>
+      <button class="notif-clear-all" id="notifClearAll">Clear all</button>
+    </div>
     <div id="notifList">
       <div class="empty-state">No notifications yet</div>
     </div>
@@ -618,6 +645,8 @@
         if (!state.messages[msg.sessionId]) state.messages[msg.sessionId] = [];
         state.messages[msg.sessionId].push({ from: 'session', content: msg.content, time: msg.timestamp });
         if (state.selectedSession === msg.sessionId) renderMessages();
+        state.notifications.unshift({ sessionId: msg.sessionId, title: 'Reply', message: msg.content.slice(0, 100), level: 'info', time: msg.timestamp });
+        renderNotifications();
         break;
       case 'notification':
         state.notifications.unshift({ sessionId: msg.sessionId, title: msg.title, message: msg.message, level: msg.level || 'info', time: msg.timestamp });
@@ -732,24 +761,36 @@
 
   function renderNotifications() {
     const el = $('#notifList');
+    const clearBtn = $('#notifClearAll');
     if (!state.notifications.length) {
       el.innerHTML = '<div class="empty-state">No notifications yet</div>';
+      clearBtn.style.display = 'none';
       return;
     }
-    el.innerHTML = state.notifications.slice(0, 50).map(n => {
+    clearBtn.style.display = 'block';
+    el.innerHTML = state.notifications.slice(0, 50).map((n, i) => {
       const timeStr = new Date(n.time).toLocaleTimeString();
       const session = state.sessions[n.sessionId];
       const sName = session ? session.name : n.sessionId.slice(0, 8);
-      return `<div class="notif-item" data-session="${n.sessionId}">
-        <div class="notif-title"><span class="notif-level ${n.level}"></span>${esc(n.title)}</div>
+      return `<div class="notif-item" data-session="${n.sessionId}" data-index="${i}">
+        <div class="notif-title"><span class="notif-level ${n.level}"></span><span class="notif-title-text">${esc(n.title)}</span><button class="notif-dismiss" data-index="${i}">&times;</button></div>
         <div class="notif-message">${esc(n.message)}</div>
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
     el.querySelectorAll('.notif-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        if (e.target.classList.contains('notif-dismiss')) return;
         const sid = item.dataset.session;
         if (sid && state.sessions[sid]) selectSession(sid);
+      });
+    });
+    el.querySelectorAll('.notif-dismiss').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index);
+        state.notifications.splice(idx, 1);
+        renderNotifications();
       });
     });
   }
@@ -900,6 +941,12 @@
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
     return html;
   }
+
+  // Clear all notifications
+  $('#notifClearAll').addEventListener('click', () => {
+    state.notifications = [];
+    renderNotifications();
+  });
 
   // Scroll to bottom button
   const msgList = $('#messagesList');
