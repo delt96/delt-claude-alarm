@@ -40,8 +40,8 @@ export class TelegramBot {
   }
 
   /** Send a notification message to Telegram */
-  async sendNotification(sessionId: string, sessionLabel: string, title: string, message: string): Promise<void> {
-    const text = `[${sessionLabel}] ${title}\n${message}`;
+  async sendNotification(sessionId: string, _sessionLabel: string, title: string, message: string): Promise<void> {
+    const text = `${title}\n${message}`;
     const result = await this.sendMessage(text);
     if (result?.message_id) {
       this.messageSessionMap.set(result.message_id, sessionId);
