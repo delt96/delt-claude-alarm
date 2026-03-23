@@ -1,6 +1,6 @@
 {
   "name": "@delt/claude-alarm",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Monitor and get notifications from multiple Claude Code sessions via MCP Channels",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,7 +20,8 @@
   },
   "files": [
     "dist",
-    "src/dashboard/index.html"
+    "src/dashboard/index.html",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup && node -e \"const fs=require('fs');const p=require('path');fs.mkdirSync(p.join('dist','dashboard'),{recursive:true});fs.copyFileSync(p.join('src','dashboard','index.html'),p.join('dist','dashboard','index.html'));\"",
