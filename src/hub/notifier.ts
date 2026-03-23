@@ -2,20 +2,27 @@ import notifier from 'node-notifier';
 import { execFile } from 'node:child_process';
 import { logger } from '../shared/logger.js';
 import type { NotifyLevel, WebhookConfig } from '../shared/types.js';
+import type { TelegramBot } from './telegram.js';
 
 export class Notifier {
   private webhooks: WebhookConfig[] = [];
   private desktopEnabled = true;
   private notificationSettingsOpened = false;
   private dashboardUrl?: string;
+  private telegramBot?: TelegramBot;
 
-  configure(options: { desktop?: boolean; webhooks?: WebhookConfig[]; dashboardUrl?: string }): void {
+  configure(options: { desktop?: boolean; webhooks?: WebhookConfig[]; dashboardUrl?: string; telegramBot?: TelegramBot }): void {
     if (options.dashboardUrl) this.dashboardUrl = options.dashboardUrl;
     if (options.desktop !== undefined) this.desktopEnabled = options.desktop;
     if (options.webhooks) this.webhooks = options.webhooks;
+    if (options.telegramBot) this.telegramBot = options.telegramBot;
   }
 
   async notify(title: string, message: string, level: NotifyLevel = 'info'): Promise<void> {
+    await this.notifyWithSession(undefined, undefined, title, message, level);
+  }
+
+  async notifyWithSession(sessionId: string | undefined, sessionLabel: string | undefined, title: string, message: string, level: NotifyLevel = 'info'): Promise<void> {
     const promises: Promise<void>[] = [];
 
     if (this.desktopEnabled) {
@@ -24,6 +31,10 @@ export class Notifier {
 
     for (const webhook of this.webhooks) {
       promises.push(this.sendWebhook(webhook, title, message, level));
+    }
+
+    if (this.telegramBot && sessionId && sessionLabel) {
+      promises.push(this.telegramBot.sendNotification(sessionId, sessionLabel, title, message));
     }
 
     await Promise.allSettled(promises);

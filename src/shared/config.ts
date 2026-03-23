@@ -31,7 +31,7 @@ export function loadConfig(): AppConfig {
     try {
       const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      config = { ...DEFAULT_CONFIG, ...parsed, hub: { ...DEFAULT_CONFIG.hub, ...parsed.hub } };
+      config = { ...DEFAULT_CONFIG, ...parsed, hub: { ...DEFAULT_CONFIG.hub, ...parsed.hub }, ...(parsed.telegram ? { telegram: parsed.telegram } : {}) };
     } catch {
       config = { ...DEFAULT_CONFIG, hub: { ...DEFAULT_CONFIG.hub } };
     }

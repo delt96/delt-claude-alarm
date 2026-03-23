@@ -14,8 +14,9 @@ import {
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
+import { TelegramBot } from './telegram.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +34,8 @@ export class HubServer {
   private localChannels = new Set<string>();
   // All connected dashboard WebSockets
   private dashboardSockets = new Set<WebSocket>();
+
+  private telegramBot?: TelegramBot;
 
   private host: string;
   private port: number;
@@ -53,6 +56,12 @@ export class HubServer {
     }
     const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
     this.notifier.configure({ dashboardUrl: `http://${displayHost}:${this.port}` });
+
+    // Initialize Telegram bot if configured
+    const fullConfig = loadConfig();
+    if (fullConfig.telegram?.enabled && fullConfig.telegram.botToken && fullConfig.telegram.chatId) {
+      this.initTelegram(fullConfig.telegram);
+    }
 
     // HTTP Server
     this.httpServer = http.createServer((req, res) => this.handleHttp(req, res));
@@ -107,6 +116,9 @@ export class HubServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      // Stop telegram bot
+      if (this.telegramBot) this.telegramBot.stopPolling();
+
       // Force-close all WebSocket connections
       for (const ws of this.channelSockets.values()) ws.terminate();
       for (const ws of this.dashboardSockets) ws.terminate();
@@ -181,6 +193,17 @@ export class HubServer {
       this.jsonResponse(res, 200, { webhooks: config.webhooks || [] });
     } else if (url.pathname === '/api/webhooks' && req.method === 'POST') {
       this.handleWebhookSave(req, res);
+    } else if (url.pathname === '/api/telegram' && req.method === 'GET') {
+      const cfg = loadConfig();
+      const tg = cfg.telegram ?? { botToken: '', chatId: '', enabled: false };
+      // Mask bot token for security
+      this.jsonResponse(res, 200, {
+        telegram: { ...tg, botToken: tg.botToken ? `${tg.botToken.slice(0, 8)}...` : '' },
+      });
+    } else if (url.pathname === '/api/telegram' && req.method === 'POST') {
+      this.handleTelegramSave(req, res);
+    } else if (url.pathname === '/api/telegram/test' && req.method === 'POST') {
+      this.handleTelegramTest(req, res);
     } else {
       this.jsonResponse(res, 404, { error: 'Not found' });
     }
@@ -308,7 +331,7 @@ export class HubServer {
         this.sessions.updateActivity(msg.sessionId);
         const notifySession = this.sessions.get(msg.sessionId);
         const notifyLabel = this.getSessionLabel(notifySession);
-        this.notifier.notify(`[${notifyLabel}] ${msg.title}`, msg.message, msg.level ?? 'info');
+        this.notifier.notifyWithSession(msg.sessionId, notifyLabel, `[${notifyLabel}] ${msg.title}`, msg.message, msg.level ?? 'info');
         this.broadcastToDashboards({
           type: 'notification',
           sessionId: msg.sessionId,
@@ -324,7 +347,7 @@ export class HubServer {
         this.sessions.updateActivity(msg.sessionId);
         const replySession = this.sessions.get(msg.sessionId);
         const replyLabel = this.getSessionLabel(replySession);
-        this.notifier.notify(`[${replyLabel}] Reply`, msg.content.slice(0, 200), 'info');
+        this.notifier.notifyWithSession(msg.sessionId, replyLabel, `[${replyLabel}] Reply`, msg.content.slice(0, 200), 'info');
         this.broadcastToDashboards({
           type: 'reply_from_session',
           sessionId: msg.sessionId,
@@ -442,6 +465,77 @@ export class HubServer {
     saveConfig(config);
     this.notifier.configure({ webhooks });
     this.jsonResponse(res, 200, { ok: true });
+  }
+
+  private initTelegram(config: TelegramConfig): void {
+    this.telegramBot = new TelegramBot(config);
+    this.telegramBot.getSessions = () => this.sessions.getAll();
+    this.telegramBot.onMessageToSession = (sessionId, content) => {
+      const channelWs = this.channelSockets.get(sessionId);
+      if (channelWs?.readyState === WebSocket.OPEN) {
+        const msg: ChannelMessage = { type: 'message_to_session', sessionId, content };
+        channelWs.send(JSON.stringify(msg));
+        logger.info(`Telegram message forwarded to session: ${sessionId}`);
+      }
+    };
+    this.notifier.configure({ telegramBot: this.telegramBot });
+    this.telegramBot.startPolling();
+    logger.info('Telegram bot initialized');
+  }
+
+  private async handleTelegramSave(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    if (!body) { this.jsonResponse(res, 400, { error: 'Invalid JSON' }); return; }
+    const { telegram } = body as { telegram?: TelegramConfig };
+    if (!telegram) { this.jsonResponse(res, 400, { error: 'telegram config required' }); return; }
+
+    const config = loadConfig();
+    config.telegram = telegram;
+    saveConfig(config);
+
+    // Stop existing bot if running
+    if (this.telegramBot) {
+      this.telegramBot.stopPolling();
+      this.telegramBot = undefined;
+      this.notifier.configure({ telegramBot: undefined as any });
+    }
+
+    // Start new bot if enabled
+    if (telegram.enabled && telegram.botToken && telegram.chatId) {
+      this.initTelegram(telegram);
+    }
+
+    this.jsonResponse(res, 200, { ok: true });
+  }
+
+  private async handleTelegramTest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    if (!body) { this.jsonResponse(res, 400, { error: 'Invalid JSON' }); return; }
+    const { botToken, chatId } = body as { botToken?: string; chatId?: string };
+    if (!botToken || !chatId) {
+      this.jsonResponse(res, 400, { error: 'botToken and chatId required' });
+      return;
+    }
+
+    try {
+      const testRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: 'Claude Alarm test message! Connection successful.',
+        }),
+      });
+
+      if (testRes.ok) {
+        this.jsonResponse(res, 200, { ok: true });
+      } else {
+        const err = await testRes.json() as { description?: string };
+        this.jsonResponse(res, 400, { error: (err as any).description || 'Telegram API error' });
+      }
+    } catch (err) {
+      this.jsonResponse(res, 500, { error: (err as Error).message });
+    }
   }
 
   private cleanupUploads(): void {

@@ -614,7 +614,7 @@
 <header>
   <h1>Claude Alarm</h1>
   <div class="header-right">
-    <button class="theme-toggle" id="webhookToggle" title="Webhook settings">&#9881;</button>
+    <button class="theme-toggle" id="settingsToggle" title="Notification settings">&#9881;</button>
     <button class="theme-toggle" id="themeToggle" title="Toggle theme">&#9790;</button>
     <div class="status-badge">
       <span class="status-dot" id="connDot"></span>
@@ -633,15 +633,42 @@
   </div>
 </div>
 
-<div class="token-overlay hidden" id="webhookOverlay">
-  <div class="token-form" style="max-width:500px;text-align:left">
-    <h2 style="text-align:center;margin-bottom:4px">Webhook Settings</h2>
-    <p style="text-align:center;margin-bottom:16px">Send notifications to Slack, Discord, or any webhook endpoint.</p>
-    <div id="webhookList" style="max-height:240px;overflow-y:auto"></div>
-    <button id="webhookAdd" style="width:100%;margin-top:10px;background:none;color:var(--text-dim);border:1px dashed var(--border);border-radius:6px;padding:10px;cursor:pointer;font-size:13px;transition:border-color 0.15s">+ Add Webhook</button>
-    <div style="display:flex;gap:8px;margin-top:20px">
-      <button id="webhookSave" style="flex:1;padding:10px">Save</button>
-      <button id="webhookCancel" style="flex:1;padding:10px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500">Cancel</button>
+<div class="token-overlay hidden" id="settingsOverlay">
+  <div class="token-form" style="max-width:520px;text-align:left">
+    <h2 style="text-align:center;margin-bottom:12px">Notification Settings</h2>
+    <div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:16px">
+      <button class="settings-tab active" data-settings-tab="webhook" style="flex:1;padding:10px;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);cursor:pointer;font-size:13px;font-weight:600;transition:all 0.15s">Webhook</button>
+      <button class="settings-tab" data-settings-tab="telegram" style="flex:1;padding:10px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s">Telegram</button>
+    </div>
+    <div id="settingsWebhook">
+      <p style="margin-bottom:12px;font-size:12px;color:var(--text-dim)">Send notifications to Slack, Discord, or any webhook endpoint.</p>
+      <div id="webhookList" style="max-height:200px;overflow-y:auto"></div>
+      <button id="webhookAdd" style="width:100%;margin-top:10px;background:none;color:var(--text-dim);border:1px dashed var(--border);border-radius:6px;padding:10px;cursor:pointer;font-size:13px;transition:border-color 0.15s">+ Add Webhook</button>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button id="webhookSave" style="flex:1;padding:10px">Save</button>
+        <button id="settingsCancel1" style="flex:1;padding:10px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500">Cancel</button>
+      </div>
+    </div>
+    <div id="settingsTelegram" style="display:none">
+      <p style="margin-bottom:12px;font-size:12px;color:var(--text-dim)">Connect a Telegram bot to receive notifications and send messages.</p>
+      <div style="margin-bottom:12px">
+        <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px">Bot Token</label>
+        <input type="text" id="tgBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px">Chat ID</label>
+        <input type="text" id="tgChatId" placeholder="-1001234567890" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+      </div>
+      <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="tgEnabled" style="width:16px;height:16px;accent-color:var(--accent)">
+        <label for="tgEnabled" style="font-size:13px;color:var(--text)">Enable Telegram notifications</label>
+      </div>
+      <div id="tgStatus" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:6px;font-size:12px"></div>
+      <div style="display:flex;gap:8px">
+        <button id="tgTest" style="flex:1;padding:10px;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">Test</button>
+        <button id="tgSave" style="flex:1;padding:10px">Save</button>
+        <button id="settingsCancel2" style="flex:1;padding:10px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1147,9 +1174,32 @@
     });
   });
 
-  // --- Webhook settings ---
+  // --- Settings modal (Webhook + Telegram) ---
   let webhookData = [];
-  $('#webhookToggle').addEventListener('click', async () => {
+  const closeSettings = () => $('#settingsOverlay').classList.add('hidden');
+
+  // Tab switching
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.settings-tab').forEach(t => {
+        t.classList.remove('active');
+        t.style.borderBottomColor = 'transparent';
+        t.style.color = 'var(--text-dim)';
+        t.style.fontWeight = '500';
+      });
+      tab.classList.add('active');
+      tab.style.borderBottomColor = 'var(--accent)';
+      tab.style.color = 'var(--text)';
+      tab.style.fontWeight = '600';
+      const target = tab.dataset.settingsTab;
+      $('#settingsWebhook').style.display = target === 'webhook' ? 'block' : 'none';
+      $('#settingsTelegram').style.display = target === 'telegram' ? 'block' : 'none';
+    });
+  });
+
+  // Open settings
+  $('#settingsToggle').addEventListener('click', async () => {
+    // Load webhook data
     try {
       const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
       const res = await fetch(`/api/webhooks${tokenQuery}`);
@@ -1157,9 +1207,27 @@
       webhookData = data.webhooks || [];
     } catch { webhookData = []; }
     renderWebhooks();
-    $('#webhookOverlay').classList.remove('hidden');
+    // Load telegram data
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      const res = await fetch(`/api/telegram${tokenQuery}`);
+      const data = await res.json();
+      const tg = data.telegram || {};
+      if (!$('#tgBotToken').value || $('#tgBotToken').value.includes('...')) {
+        $('#tgBotToken').value = tg.botToken || '';
+      }
+      $('#tgChatId').value = tg.chatId || '';
+      $('#tgEnabled').checked = !!tg.enabled;
+    } catch {}
+    $('#tgStatus').style.display = 'none';
+    $('#settingsOverlay').classList.remove('hidden');
   });
-  $('#webhookCancel').addEventListener('click', () => $('#webhookOverlay').classList.add('hidden'));
+
+  // Cancel buttons
+  $('#settingsCancel1').addEventListener('click', closeSettings);
+  $('#settingsCancel2').addEventListener('click', closeSettings);
+
+  // Webhook
   $('#webhookAdd').addEventListener('click', () => {
     webhookData.push({ url: '' });
     renderWebhooks();
@@ -1174,7 +1242,7 @@
         body: JSON.stringify({ webhooks: valid }),
       });
     } catch {}
-    $('#webhookOverlay').classList.add('hidden');
+    closeSettings();
   });
   function renderWebhooks() {
     const el = $('#webhookList');
@@ -1200,6 +1268,50 @@
       btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-dim)'; });
     });
   }
+
+  // Telegram
+  function showTgStatus(msg, ok) {
+    const el = $('#tgStatus');
+    el.textContent = msg;
+    el.style.display = 'block';
+    el.style.background = ok ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)';
+    el.style.color = ok ? 'var(--green)' : 'var(--red)';
+  }
+
+  $('#tgTest').addEventListener('click', async () => {
+    const botToken = $('#tgBotToken').value.trim();
+    const chatId = $('#tgChatId').value.trim();
+    if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
+    if (botToken.includes('...')) { showTgStatus('Please enter full Bot Token (not masked).', false); return; }
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      const res = await fetch(`/api/telegram/test${tokenQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botToken, chatId }),
+      });
+      const data = await res.json();
+      if (data.ok) { showTgStatus('Test message sent! Check your Telegram.', true); }
+      else { showTgStatus(data.error || 'Test failed.', false); }
+    } catch (e) { showTgStatus('Connection error.', false); }
+  });
+
+  $('#tgSave').addEventListener('click', async () => {
+    const botToken = $('#tgBotToken').value.trim();
+    const chatId = $('#tgChatId').value.trim();
+    const enabled = $('#tgEnabled').checked;
+    if (enabled && botToken.includes('...')) { showTgStatus('Please enter full Bot Token to enable.', false); return; }
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      await fetch(`/api/telegram${tokenQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram: { botToken, chatId, enabled } }),
+      });
+      showTgStatus('Saved!', true);
+      setTimeout(closeSettings, 800);
+    } catch { showTgStatus('Save failed.', false); }
+  });
 
   // Refresh relative times every 30s
   setInterval(() => { renderMessages(); renderNotifications(); }, 30000);

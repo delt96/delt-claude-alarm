@@ -15,6 +15,8 @@ Monitor and interact with multiple Claude Code sessions from a web dashboard. Ge
 - **Multi-Session Monitoring** — Real-time session status (idle / working / waiting)
 - **Two-way Messaging** — Text + markdown + image exchange with Claude
 - **Desktop Notifications** — Windows / macOS / Linux toast alerts
+- **Telegram Integration** — Two-way messaging via Telegram bot
+- **Webhook Support** — Slack, Discord, or custom webhook endpoints
 - **Token Auth** — Auto-generated secure access
 - **Dark / Light Mode** — Theme toggle with persistence
 - **Multi-Machine** — Remote hub access support
@@ -96,7 +98,12 @@ Config stored at `~/.claude-alarm/config.json`:
     "desktop": true,
     "sound": true
   },
-  "webhooks": []
+  "webhooks": [],
+  "telegram": {
+    "botToken": "",
+    "chatId": "",
+    "enabled": false
+  }
 }
 ```
 
@@ -118,6 +125,8 @@ Config stored at `~/.claude-alarm/config.json`:
 
 ### Webhooks
 
+Configure via dashboard (⚙ Settings → Webhook tab) or in config:
+
 ```json
 {
   "webhooks": [
@@ -126,6 +135,30 @@ Config stored at `~/.claude-alarm/config.json`:
       "headers": { "Content-Type": "application/json" }
     }
   ]
+}
+```
+
+### Telegram Bot
+
+Two-way messaging with Claude sessions via Telegram:
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) on Telegram
+2. Send any message to your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your Chat ID
+3. Open dashboard → ⚙ Settings → Telegram tab
+4. Enter Bot Token + Chat ID → Test → Save
+
+**Features:**
+- Notifications forwarded to Telegram with session labels
+- Reply to a notification message → routed to the correct session
+- Send a new message → auto-delivered if 1 session, or pick from a list
+
+```json
+{
+  "telegram": {
+    "botToken": "123456:ABC-DEF...",
+    "chatId": "your-chat-id",
+    "enabled": true
+  }
 }
 ```
 

@@ -39,6 +39,13 @@ export interface WebhookConfig {
   headers?: Record<string, string>;
 }
 
+/** Telegram bot configuration */
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+  enabled: boolean;
+}
+
 /** App configuration stored in ~/.claude-alarm/config.json */
 export interface AppConfig {
   hub: {
@@ -51,6 +58,7 @@ export interface AppConfig {
     sound: boolean;
   };
   webhooks: WebhookConfig[];
+  telegram?: TelegramConfig;
 }
 
 /** Hub status response */
