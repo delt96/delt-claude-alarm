@@ -600,12 +600,19 @@
       const timeStr = new Date(n.time).toLocaleTimeString();
       const session = state.sessions[n.sessionId];
       const sName = session ? session.name : n.sessionId.slice(0, 8);
-      return `<div class="notif-item">
+      return `<div class="notif-item" data-session="${n.sessionId}" style="cursor:pointer">
         <div class="notif-title"><span class="notif-level ${n.level}"></span>${esc(n.title)}</div>
         <div class="notif-message">${esc(n.message)}</div>
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
+
+    el.querySelectorAll('.notif-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const sid = item.dataset.session;
+        if (sid && state.sessions[sid]) selectSession(sid);
+      });
+    });
   }
 
   // --- Send ---

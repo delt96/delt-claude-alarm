@@ -55,18 +55,8 @@ export class Notifier {
         },
       );
 
-      if (this.dashboardUrl && notification) {
-        const url = this.dashboardUrl;
-        notification.on('click', () => {
-          if (process.platform === 'win32') {
-            execFile('powershell', ['-Command', `Start-Process "${url}"`]);
-          } else if (process.platform === 'darwin') {
-            execFile('open', [url]);
-          } else {
-            execFile('xdg-open', [url]);
-          }
-        });
-      }
+      // No click handler - dashboard is already open and notifications
+      // can be clicked there to focus the relevant session
     });
   }
 
