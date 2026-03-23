@@ -12,7 +12,7 @@ import {
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
-import type { ChannelMessage, AppConfig } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -291,7 +291,9 @@ export class HubServer {
 
       case 'notify': {
         this.sessions.updateActivity(msg.sessionId);
-        this.notifier.notify(msg.title, msg.message, msg.level ?? 'info');
+        const notifySession = this.sessions.get(msg.sessionId);
+        const notifyLabel = this.getSessionLabel(notifySession);
+        this.notifier.notify(`[${notifyLabel}] ${msg.title}`, msg.message, msg.level ?? 'info');
         this.broadcastToDashboards({
           type: 'notification',
           sessionId: msg.sessionId,
@@ -305,6 +307,9 @@ export class HubServer {
 
       case 'reply': {
         this.sessions.updateActivity(msg.sessionId);
+        const replySession = this.sessions.get(msg.sessionId);
+        const replyLabel = this.getSessionLabel(replySession);
+        this.notifier.notify(`[${replyLabel}] Reply`, msg.content.slice(0, 200), 'info');
         this.broadcastToDashboards({
           type: 'reply_from_session',
           sessionId: msg.sessionId,
@@ -358,6 +363,15 @@ export class HubServer {
         ws.send(payload);
       }
     }
+  }
+
+  private getSessionLabel(session?: SessionInfo): string {
+    if (!session) return 'unknown';
+    const cwdFolder = session.cwd?.replace(/^.*[/\\]/, '') ?? '';
+    if (cwdFolder && cwdFolder !== session.name) {
+      return `${session.name}/${cwdFolder}`;
+    }
+    return session.name;
   }
 
   private jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {
