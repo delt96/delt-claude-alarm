@@ -367,11 +367,7 @@ export class HubServer {
 
   private getSessionLabel(session?: SessionInfo): string {
     if (!session) return 'unknown';
-    const cwdFolder = session.cwd?.replace(/^.*[/\\]/, '') ?? '';
-    if (cwdFolder && cwdFolder !== session.name) {
-      return `${session.name}/${cwdFolder}`;
-    }
-    return session.name;
+    return session.cwd?.replace(/^.*[/\\]/, '') || session.name;
   }
 
   private jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {
