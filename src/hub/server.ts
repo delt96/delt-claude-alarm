@@ -93,6 +93,7 @@ export class HubServer {
   }
 
   async start(): Promise<void> {
+    this.cleanupUploads();
     return new Promise((resolve, reject) => {
       this.httpServer.on('error', reject);
       this.httpServer.listen(this.port, this.host, () => {
@@ -423,6 +424,17 @@ export class HubServer {
     setTimeout(() => {
       try { fs.unlinkSync(filePath); } catch {}
     }, 5 * 60 * 1000);
+  }
+
+  private cleanupUploads(): void {
+    try {
+      if (!fs.existsSync(UPLOADS_DIR)) return;
+      const files = fs.readdirSync(UPLOADS_DIR);
+      for (const file of files) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, file)); } catch {}
+      }
+      if (files.length > 0) logger.info(`Cleaned up ${files.length} leftover upload(s)`);
+    } catch {}
   }
 
   private getSessionLabel(session?: SessionInfo): string {
