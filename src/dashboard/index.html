@@ -650,24 +650,64 @@
       </div>
     </div>
     <div id="settingsTelegram" style="display:none">
-      <p style="margin-bottom:12px;font-size:12px;color:var(--text-dim)">Connect a Telegram bot to receive notifications and send messages.</p>
-      <div style="margin-bottom:12px">
-        <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px">Bot Token</label>
-        <input type="text" id="tgBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+      <!-- Step 1: Bot Token -->
+      <div id="tgStep1">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="background:var(--accent);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">1</span>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">Create a bot &amp; paste the token</span>
+        </div>
+        <p style="margin:0 0 10px 30px;font-size:12px;color:var(--text-dim)">Open <strong>@BotFather</strong> on Telegram → <code>/newbot</code> → copy the token</p>
+        <div style="margin-left:30px;margin-bottom:12px">
+          <input type="text" id="tgBotToken" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v..." autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+        </div>
+        <div style="margin-left:30px">
+          <button id="tgNextStep2" style="padding:8px 20px;font-size:13px">Next →</button>
+        </div>
       </div>
-      <div style="margin-bottom:12px">
-        <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px">Chat ID</label>
-        <input type="text" id="tgChatId" placeholder="-1001234567890" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+
+      <!-- Step 2: Detect Chat ID -->
+      <div id="tgStep2" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="background:var(--accent);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">2</span>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">Find your Chat ID</span>
+        </div>
+        <p style="margin:0 0 10px 30px;font-size:12px;color:var(--text-dim)">Send any message to your bot on Telegram, then click Detect.</p>
+        <div style="margin-left:30px;margin-bottom:10px;display:flex;gap:8px">
+          <button id="tgDetect" style="padding:8px 20px;font-size:13px;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;cursor:pointer;font-weight:500">Detect Chat ID</button>
+          <span id="tgDetectStatus" style="font-size:12px;color:var(--text-dim);display:flex;align-items:center"></span>
+        </div>
+        <div id="tgChatList" style="margin-left:30px;margin-bottom:10px"></div>
+        <div style="margin-left:30px;margin-bottom:12px">
+          <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:4px">Or enter manually:</label>
+          <input type="text" id="tgChatId" placeholder="-1001234567890" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace">
+        </div>
+        <div style="margin-left:30px;display:flex;gap:8px">
+          <button id="tgBackStep1" style="padding:8px 20px;font-size:13px;background:none;color:var(--text-dim);border:1px solid var(--border);border-radius:6px;cursor:pointer">← Back</button>
+          <button id="tgNextStep3" style="padding:8px 20px;font-size:13px">Next →</button>
+        </div>
       </div>
-      <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="tgEnabled" style="width:16px;height:16px;accent-color:var(--accent)">
-        <label for="tgEnabled" style="font-size:13px;color:var(--text)">Enable Telegram notifications</label>
-      </div>
-      <div id="tgStatus" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:6px;font-size:12px"></div>
-      <div style="display:flex;gap:8px">
-        <button id="tgTest" style="flex:1;padding:10px;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">Test</button>
-        <button id="tgSave" style="flex:1;padding:10px">Save</button>
-        <button id="settingsCancel2" style="flex:1;padding:10px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500">Cancel</button>
+
+      <!-- Step 3: Test & Save -->
+      <div id="tgStep3" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="background:var(--accent);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">3</span>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">Test &amp; Enable</span>
+        </div>
+        <div style="margin-left:30px;margin-bottom:12px;padding:10px;background:var(--input-bg);border-radius:6px;font-size:12px;color:var(--text-dim)">
+          <div>Bot Token: <span id="tgSummaryToken" style="color:var(--text);font-family:monospace"></span></div>
+          <div style="margin-top:4px">Chat ID: <span id="tgSummaryChatId" style="color:var(--text);font-family:monospace"></span></div>
+        </div>
+        <div style="margin-left:30px;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="tgEnabled" checked style="width:16px;height:16px;accent-color:var(--accent)">
+          <label for="tgEnabled" style="font-size:13px;color:var(--text)">Enable Telegram notifications</label>
+        </div>
+        <div id="tgStatus" style="display:none;margin:0 0 12px 30px;padding:8px 12px;border-radius:6px;font-size:12px"></div>
+        <div style="margin-left:30px;display:flex;gap:8px">
+          <button id="tgBackStep2" style="padding:8px 20px;font-size:13px;background:none;color:var(--text-dim);border:1px solid var(--border);border-radius:6px;cursor:pointer">← Back</button>
+          <button id="tgTest" style="flex:1;padding:10px;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">Send Test</button>
+          <button id="tgSave" style="flex:1;padding:10px">Save</button>
+          <button id="settingsCancel2" style="padding:10px 16px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">Cancel</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1217,7 +1257,17 @@
       }
       $('#tgChatId').value = tg.chatId || '';
       $('#tgEnabled').checked = !!tg.enabled;
-    } catch {}
+      // Jump to appropriate step
+      if (tg.chatId && tg.botToken) {
+        $('#tgSummaryToken').textContent = (tg.botToken || '').slice(0, 8) + '...';
+        $('#tgSummaryChatId').textContent = tg.chatId;
+        showTgStep(3);
+      } else if (tg.botToken) {
+        showTgStep(2);
+      } else {
+        showTgStep(1);
+      }
+    } catch { showTgStep(1); }
     $('#tgStatus').style.display = 'none';
     $('#settingsOverlay').classList.remove('hidden');
   });
@@ -1268,7 +1318,13 @@
     });
   }
 
-  // Telegram
+  // Telegram wizard
+  function showTgStep(step) {
+    $('#tgStep1').style.display = step === 1 ? 'block' : 'none';
+    $('#tgStep2').style.display = step === 2 ? 'block' : 'none';
+    $('#tgStep3').style.display = step === 3 ? 'block' : 'none';
+  }
+
   function showTgStatus(msg, ok) {
     const el = $('#tgStatus');
     el.textContent = msg;
@@ -1277,11 +1333,70 @@
     el.style.color = ok ? 'var(--green)' : 'var(--red)';
   }
 
+  // Step navigation
+  $('#tgNextStep2').addEventListener('click', () => {
+    const token = $('#tgBotToken').value.trim();
+    if (!token) { $('#tgBotToken').style.borderColor = 'var(--red)'; return; }
+    $('#tgBotToken').style.borderColor = 'var(--border)';
+    showTgStep(2);
+  });
+  $('#tgBackStep1').addEventListener('click', () => showTgStep(1));
+  $('#tgNextStep3').addEventListener('click', () => {
+    const chatId = $('#tgChatId').value.trim();
+    if (!chatId) { $('#tgChatId').style.borderColor = 'var(--red)'; return; }
+    $('#tgChatId').style.borderColor = 'var(--border)';
+    const token = $('#tgBotToken').value.trim();
+    $('#tgSummaryToken').textContent = token.slice(0, 8) + '...';
+    $('#tgSummaryChatId').textContent = chatId;
+    $('#tgStatus').style.display = 'none';
+    showTgStep(3);
+  });
+  $('#tgBackStep2').addEventListener('click', () => showTgStep(2));
+
+  // Detect Chat ID
+  $('#tgDetect').addEventListener('click', async () => {
+    const botToken = $('#tgBotToken').value.trim();
+    if (!botToken || botToken.includes('...')) { $('#tgDetectStatus').textContent = 'Enter a valid Bot Token first.'; return; }
+    $('#tgDetectStatus').textContent = 'Detecting...';
+    $('#tgChatList').innerHTML = '';
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      const res = await fetch(`/api/telegram/detect${tokenQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botToken }),
+      });
+      const data = await res.json();
+      if (data.error) { $('#tgDetectStatus').textContent = data.error; return; }
+      if (!data.ok || !data.chats.length) {
+        $('#tgDetectStatus').textContent = 'No messages found. Send a message to your bot first!';
+        return;
+      }
+      $('#tgDetectStatus').textContent = 'Found ' + data.chats.length + ' chat(s):';
+      $('#tgChatList').innerHTML = data.chats.map(c =>
+        `<button class="tg-chat-pick" data-id="${esc(c.id)}" style="display:block;width:100%;text-align:left;padding:8px 12px;margin-bottom:4px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:12px;transition:border-color 0.15s">
+          <strong>${esc(c.name)}</strong> <span style="color:var(--text-dim)">(${esc(c.type)}, ID: ${esc(c.id)})</span>
+        </button>`
+      ).join('');
+      $('#tgChatList').querySelectorAll('.tg-chat-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          $('#tgChatId').value = btn.dataset.id;
+          $('#tgChatList').querySelectorAll('.tg-chat-pick').forEach(b => b.style.borderColor = 'var(--border)');
+          btn.style.borderColor = 'var(--accent)';
+        });
+        btn.addEventListener('mouseenter', () => { btn.style.borderColor = 'var(--accent)'; });
+        btn.addEventListener('mouseleave', () => {
+          if ($('#tgChatId').value !== btn.dataset.id) btn.style.borderColor = 'var(--border)';
+        });
+      });
+    } catch { $('#tgDetectStatus').textContent = 'Connection error.'; }
+  });
+
+  // Test
   $('#tgTest').addEventListener('click', async () => {
     const botToken = $('#tgBotToken').value.trim();
     const chatId = $('#tgChatId').value.trim();
     if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
-    if (botToken.includes('...')) { showTgStatus('Please enter full Bot Token (not masked).', false); return; }
     try {
       const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
       const res = await fetch(`/api/telegram/test${tokenQuery}`, {
@@ -1295,11 +1410,12 @@
     } catch (e) { showTgStatus('Connection error.', false); }
   });
 
+  // Save
   $('#tgSave').addEventListener('click', async () => {
     const botToken = $('#tgBotToken').value.trim();
     const chatId = $('#tgChatId').value.trim();
     const enabled = $('#tgEnabled').checked;
-    if (enabled && botToken.includes('...')) { showTgStatus('Please enter full Bot Token to enable.', false); return; }
+    if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
     try {
       const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
       await fetch(`/api/telegram${tokenQuery}`, {

@@ -204,6 +204,8 @@ export class HubServer {
       this.handleTelegramSave(req, res);
     } else if (url.pathname === '/api/telegram/test' && req.method === 'POST') {
       this.handleTelegramTest(req, res);
+    } else if (url.pathname === '/api/telegram/detect' && req.method === 'POST') {
+      this.handleTelegramDetect(req, res);
     } else {
       this.jsonResponse(res, 404, { error: 'Not found' });
     }
@@ -534,6 +536,54 @@ export class HubServer {
         const err = await testRes.json() as { description?: string };
         this.jsonResponse(res, 400, { error: (err as any).description || 'Telegram API error' });
       }
+    } catch (err) {
+      this.jsonResponse(res, 500, { error: (err as Error).message });
+    }
+  }
+
+  private async handleTelegramDetect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    if (!body) { this.jsonResponse(res, 400, { error: 'Invalid JSON' }); return; }
+    const { botToken } = body as { botToken?: string };
+    if (!botToken) {
+      this.jsonResponse(res, 400, { error: 'botToken required' });
+      return;
+    }
+
+    try {
+      const detectRes = await fetch(`https://api.telegram.org/bot${botToken}/getUpdates?timeout=0&limit=10`, {
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!detectRes.ok) {
+        const err = await detectRes.json() as { description?: string };
+        this.jsonResponse(res, 400, { error: (err as any).description || 'Invalid bot token' });
+        return;
+      }
+
+      const data = await detectRes.json() as { ok: boolean; result: Array<{ message?: { chat: { id: number; first_name?: string; title?: string; type: string } } }> };
+      if (!data.ok || !data.result.length) {
+        this.jsonResponse(res, 200, { ok: false, chats: [] });
+        return;
+      }
+
+      // Extract unique chats
+      const chatMap = new Map<string, { id: string; name: string; type: string }>();
+      for (const update of data.result) {
+        if (update.message?.chat) {
+          const chat = update.message.chat;
+          const id = String(chat.id);
+          if (!chatMap.has(id)) {
+            chatMap.set(id, {
+              id,
+              name: chat.title || chat.first_name || id,
+              type: chat.type,
+            });
+          }
+        }
+      }
+
+      this.jsonResponse(res, 200, { ok: true, chats: [...chatMap.values()] });
     } catch (err) {
       this.jsonResponse(res, 500, { error: (err as Error).message });
     }
