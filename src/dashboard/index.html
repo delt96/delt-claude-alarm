@@ -170,7 +170,7 @@
     display: flex;
     gap: 8px;
   }
-  .message-input-area input {
+  .message-input-area textarea {
     flex: 1;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -179,8 +179,13 @@
     color: var(--text);
     font-size: 13px;
     outline: none;
+    resize: none;
+    min-height: 36px;
+    max-height: 120px;
+    font-family: inherit;
+    line-height: 1.4;
   }
-  .message-input-area input:focus { border-color: var(--accent); }
+  .message-input-area textarea:focus { border-color: var(--accent); }
   .message-input-area button {
     background: var(--accent);
     color: white;
@@ -373,7 +378,7 @@
       <div class="empty-state">Select a session to view messages</div>
     </div>
     <div class="message-input-area">
-      <input type="text" id="msgInput" placeholder="Send a message to session..." disabled>
+      <textarea id="msgInput" placeholder="Send a message to session... (Shift+Enter for new line)" disabled rows="1"></textarea>
       <button id="sendBtn" disabled>Send</button>
     </div>
   </div>
@@ -551,7 +556,7 @@
     if (!state.messages[id]) state.messages[id] = [];
     $('#msgInput').disabled = false;
     $('#sendBtn').disabled = false;
-    $('#msgInput').placeholder = 'Send a message to session...';
+    $('#msgInput').placeholder = 'Send a message to session... (Shift+Enter for new line)';
     renderSessions();
     renderMessages();
   }
@@ -635,12 +640,20 @@
     });
 
     input.value = '';
+    input.style.height = 'auto';
     renderMessages();
   }
 
   $('#sendBtn').addEventListener('click', sendMessage);
   $('#msgInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendMessage();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+  $('#msgInput').addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
 
   function esc(s) {
