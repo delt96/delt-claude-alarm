@@ -305,9 +305,6 @@ export class HubServer {
 
       case 'reply': {
         this.sessions.updateActivity(msg.sessionId);
-        const session = this.sessions.get(msg.sessionId);
-        const senderName = session?.name ?? msg.sessionId.slice(0, 8);
-        this.notifier.notify(senderName, msg.content, 'info');
         this.broadcastToDashboards({
           type: 'reply_from_session',
           sessionId: msg.sessionId,
