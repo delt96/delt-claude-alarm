@@ -14,7 +14,8 @@ import {
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
-import type { ChannelMessage, AppConfig, SessionInfo } from '../shared/types.js';
+import { loadConfig, saveConfig } from '../shared/config.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -175,6 +176,11 @@ export class HubServer {
       this.handleApiSend(req, res);
     } else if (url.pathname === '/api/notify' && req.method === 'POST') {
       this.handleApiNotify(req, res);
+    } else if (url.pathname === '/api/webhooks' && req.method === 'GET') {
+      const config = loadConfig();
+      this.jsonResponse(res, 200, { webhooks: config.webhooks || [] });
+    } else if (url.pathname === '/api/webhooks' && req.method === 'POST') {
+      this.handleWebhookSave(req, res);
     } else {
       this.jsonResponse(res, 404, { error: 'Not found' });
     }
@@ -424,6 +430,18 @@ export class HubServer {
     setTimeout(() => {
       try { fs.unlinkSync(filePath); } catch {}
     }, 5 * 60 * 1000);
+  }
+
+  private async handleWebhookSave(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    if (!body) { this.jsonResponse(res, 400, { error: 'Invalid JSON' }); return; }
+    const { webhooks } = body as { webhooks?: WebhookConfig[] };
+    if (!Array.isArray(webhooks)) { this.jsonResponse(res, 400, { error: 'webhooks must be an array' }); return; }
+    const config = loadConfig();
+    config.webhooks = webhooks;
+    saveConfig(config);
+    this.notifier.configure({ webhooks });
+    this.jsonResponse(res, 200, { ok: true });
   }
 
   private cleanupUploads(): void {

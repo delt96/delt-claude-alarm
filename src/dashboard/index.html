@@ -119,6 +119,22 @@
     font-size: 14px;
     font-weight: 500;
     margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .unread-badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
   }
   .session-status {
     display: inline-block;
@@ -474,12 +490,61 @@
   }
   .token-form button:hover { background: var(--accent-dim); }
   .token-error { color: var(--red); font-size: 12px; margin-top: 8px; display: none; }
+
+  /* Mobile tabs */
+  .mobile-tabs {
+    display: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .mobile-tabs button {
+    flex: 1;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim);
+    padding: 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mobile-tabs button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* Mobile responsive */
+  @media (max-width: 768px) {
+    .container {
+      grid-template-columns: 1fr;
+      height: calc(100vh - 97px);
+    }
+    .sessions-panel, .messages-panel, .notifications-panel {
+      border: none;
+      display: none;
+    }
+    .sessions-panel.mobile-active,
+    .messages-panel.mobile-active,
+    .notifications-panel.mobile-active {
+      display: flex;
+      flex-direction: column;
+    }
+    .sessions-panel.mobile-active {
+      display: block;
+      overflow-y: auto;
+    }
+    .notifications-panel.mobile-active {
+      display: block;
+      overflow-y: auto;
+    }
+    .mobile-tabs { display: flex; }
+    .message { max-width: 95%; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>Claude Alarm</h1>
   <div class="header-right">
+    <button class="theme-toggle" id="webhookToggle" title="Webhook settings">&#9881;</button>
     <button class="theme-toggle" id="themeToggle" title="Toggle theme">&#9790;</button>
     <div class="status-badge">
       <span class="status-dot" id="connDot"></span>
@@ -498,6 +563,24 @@
   </div>
 </div>
 
+<div class="token-overlay hidden" id="webhookOverlay">
+  <div class="token-form" style="max-width:500px;text-align:left">
+    <h2 style="text-align:center">Webhook Settings</h2>
+    <p style="text-align:center">Add webhook URLs to receive notifications externally.</p>
+    <div id="webhookList"></div>
+    <button id="webhookAdd" style="width:100%;margin-top:8px;background:var(--surface);color:var(--text);border:1px dashed var(--border);border-radius:6px;padding:8px;cursor:pointer;font-size:13px">+ Add Webhook</button>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button id="webhookSave" style="flex:1">Save</button>
+      <button id="webhookCancel" style="flex:1;background:var(--surface);color:var(--text);border:1px solid var(--border)">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="mobile-tabs" id="mobileTabs">
+  <button class="active" data-tab="sessions">Sessions</button>
+  <button data-tab="messages">Messages</button>
+  <button data-tab="notifications">Notifications</button>
+</div>
 <div class="container">
   <div class="sessions-panel">
     <h2>Sessions</h2>
@@ -545,6 +628,7 @@
     notifications: [],
     token: null,
     pendingImage: null,
+    unread: {},
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -644,7 +728,8 @@
       case 'reply_from_session':
         if (!state.messages[msg.sessionId]) state.messages[msg.sessionId] = [];
         state.messages[msg.sessionId].push({ from: 'session', content: msg.content, time: msg.timestamp });
-        if (state.selectedSession === msg.sessionId) renderMessages();
+        if (state.selectedSession === msg.sessionId) { renderMessages(); }
+        else { state.unread[msg.sessionId] = (state.unread[msg.sessionId] || 0) + 1; renderSessions(); }
         state.notifications.unshift({ sessionId: msg.sessionId, title: 'Reply', message: msg.content.slice(0, 100), level: 'info', time: msg.timestamp });
         renderNotifications();
         break;
@@ -690,8 +775,9 @@
       const s = state.sessions[id];
       const active = state.selectedSession === id ? ' active' : '';
       const cwdDisplay = s.cwd ? s.cwd.replace(/^.*[/\\]/, '') : '';
+      const unread = state.unread[id] || 0;
       return `<div class="session-card${active}" data-id="${id}">
-        <div class="session-name">${esc(s.name)}</div>
+        <div class="session-name">${esc(s.name)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
         ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)}</div>` : ''}
         <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
       </div>`;
@@ -704,6 +790,7 @@
 
   function selectSession(id) {
     state.selectedSession = id;
+    state.unread[id] = 0;
     if (!state.messages[id]) state.messages[id] = [];
     $('#msgInput').disabled = false;
     $('#sendBtn').disabled = false;
@@ -742,7 +829,7 @@
 
     el.innerHTML = msgs.map(m => {
       const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
-      const timeStr = new Date(m.time).toLocaleTimeString();
+      const timeStr = relativeTime(m.time);
       let content;
       if (m.imageData) {
         content = `<img src="${m.imageData}" alt="${esc(m.imageName || 'image')}">`;
@@ -769,7 +856,7 @@
     }
     clearBtn.style.display = 'block';
     el.innerHTML = state.notifications.slice(0, 50).map((n, i) => {
-      const timeStr = new Date(n.time).toLocaleTimeString();
+      const timeStr = relativeTime(n.time);
       const session = state.sessions[n.sessionId];
       const sName = session ? session.name : n.sessionId.slice(0, 8);
       return `<div class="notif-item" data-session="${n.sessionId}" data-index="${i}">
@@ -911,6 +998,15 @@
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
 
+  function relativeTime(ts) {
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 5) return 'just now';
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return new Date(ts).toLocaleDateString();
+  }
+
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
@@ -958,6 +1054,64 @@
   scrollBtn.addEventListener('click', () => {
     msgList.scrollTo({ top: msgList.scrollHeight, behavior: 'smooth' });
   });
+
+  // --- Webhook settings ---
+  let webhookData = [];
+  $('#webhookToggle').addEventListener('click', async () => {
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      const res = await fetch(`/api/webhooks${tokenQuery}`);
+      const data = await res.json();
+      webhookData = data.webhooks || [];
+    } catch { webhookData = []; }
+    renderWebhooks();
+    $('#webhookOverlay').classList.remove('hidden');
+  });
+  $('#webhookCancel').addEventListener('click', () => $('#webhookOverlay').classList.add('hidden'));
+  $('#webhookAdd').addEventListener('click', () => {
+    webhookData.push({ url: '' });
+    renderWebhooks();
+  });
+  $('#webhookSave').addEventListener('click', async () => {
+    const valid = webhookData.filter(w => w.url.trim());
+    try {
+      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+      await fetch(`/api/webhooks${tokenQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhooks: valid }),
+      });
+    } catch {}
+    $('#webhookOverlay').classList.add('hidden');
+  });
+  function renderWebhooks() {
+    const el = $('#webhookList');
+    el.innerHTML = webhookData.map((w, i) => `<div style="display:flex;gap:6px;margin-bottom:6px">
+      <input type="text" value="${esc(w.url)}" placeholder="https://hooks.slack.com/..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px;outline:none" data-idx="${i}">
+      <button onclick="this.parentElement.remove()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;padding:4px 8px">&times;</button>
+    </div>`).join('');
+    el.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('input', () => { webhookData[parseInt(inp.dataset.idx)].url = inp.value; });
+    });
+  }
+
+  // Refresh relative times every 30s
+  setInterval(() => { renderMessages(); renderNotifications(); }, 30000);
+
+  // Mobile tabs
+  document.querySelectorAll('#mobileTabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#mobileTabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.sessions-panel, .messages-panel, .notifications-panel').forEach(p => p.classList.remove('mobile-active'));
+      document.querySelector(`.${tab === 'sessions' ? 'sessions' : tab === 'messages' ? 'messages' : 'notifications'}-panel`).classList.add('mobile-active');
+    });
+  });
+  // Default mobile tab
+  if (window.innerWidth <= 768) {
+    document.querySelector('.sessions-panel').classList.add('mobile-active');
+  }
 
   state.token = getToken();
   connect();
