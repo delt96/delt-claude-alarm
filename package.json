@@ -1,6 +1,6 @@
 {
   "name": "@delt/claude-alarm",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Monitor and get notifications from multiple Claude Code sessions via MCP Channels",
   "type": "module",
   "main": "./dist/index.js",

@@ -1051,20 +1051,19 @@
     if (!content && !hasImage) return;
     if (!state.selectedSession || !state.ws) return;
 
-    // Send text
-    if (content) {
-      state.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: state.selectedSession, content }));
-    }
-
-    // Send image
     if (hasImage) {
+      // Send image + text together
       state.ws.send(JSON.stringify({
         type: 'image_upload',
         sessionId: state.selectedSession,
         imageData: state.pendingImage.data,
         mimeType: state.pendingImage.mimeType,
         originalName: state.pendingImage.name,
+        content: content || '',
       }));
+    } else if (content) {
+      // Text only
+      state.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: state.selectedSession, content }));
     }
 
     // Add to local messages

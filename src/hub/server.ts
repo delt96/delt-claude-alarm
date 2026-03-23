@@ -406,7 +406,7 @@ export class HubServer {
   }
 
   private handleImageUpload(msg: ChannelMessage & { type: 'image_upload' }): void {
-    const { sessionId, imageData, mimeType, originalName } = msg;
+    const { sessionId, imageData, mimeType, originalName, content } = msg;
 
     // Only allow for local sessions
     if (!this.localChannels.has(sessionId)) {
@@ -445,6 +445,7 @@ export class HubServer {
       imagePath: filePath,
       mimeType,
       originalName,
+      content,
     };
     channelWs.send(JSON.stringify(forwardMsg));
     logger.info(`Image saved and forwarded: ${filename} (${buffer.length} bytes)`);

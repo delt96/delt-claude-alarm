@@ -20,8 +20,8 @@ export type ChannelMessage =
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel }
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string }
-  | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string }
-  | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string }
+  | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string; content?: string }
+  | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string; content?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_connected'; session: SessionInfo }
   | { type: 'session_disconnected'; sessionId: string }
