@@ -53,7 +53,7 @@ claude --dangerously-load-development-channels server:claude-alarm --dangerously
 
 ### 4. Open Dashboard
 
-Open `http://127.0.0.1:7890` in your browser.
+Open `http://127.0.0.1:7900` in your browser.
 
 ## CLI Commands
 
@@ -91,7 +91,7 @@ Config is stored at `~/.claude-alarm/config.json`:
 {
   "hub": {
     "host": "127.0.0.1",
-    "port": 7890,
+    "port": 7900,
     "token": "auto-generated-uuid"
   },
   "notifications": {
@@ -140,7 +140,7 @@ Send notifications to external services:
 To access the hub from another machine:
 
 1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
-2. Open port 7890 in your firewall
+2. Open port 7900 in your firewall
 3. On the remote machine, run `claude-alarm init` and select remote hub (Y), or manually set `.mcp.json`:
 
 ```json
@@ -151,7 +151,7 @@ To access the hub from another machine:
       "args": ["-y", "@delt/claude-alarm", "serve"],
       "env": {
         "CLAUDE_ALARM_HUB_HOST": "your-server-ip",
-        "CLAUDE_ALARM_HUB_PORT": "7890",
+        "CLAUDE_ALARM_HUB_PORT": "7900",
         "CLAUDE_ALARM_HUB_TOKEN": "your-token"
       }
     }
