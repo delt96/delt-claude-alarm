@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { logger } from '../shared/logger.js';
 import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { loadConfig } from '../shared/config.js';
@@ -12,7 +13,7 @@ import { HubClient } from './hub-client.js';
 import type { SessionStatus, NotifyLevel } from '../shared/types.js';
 
 const sessionId = randomUUID();
-const sessionName = process.env.CLAUDE_ALARM_SESSION_NAME ?? `session-${sessionId.slice(0, 8)}`;
+const sessionName = process.env.CLAUDE_ALARM_SESSION_NAME ?? path.basename(process.cwd());
 
 const server = new Server(
   {
