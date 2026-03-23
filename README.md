@@ -1,81 +1,143 @@
 # claude-alarm
 
-Monitor and interact with multiple Claude Code sessions from a web dashboard. Get desktop notifications when tasks complete, send messages to Claude, and track session status — all through MCP Channels.
+> Multi-session monitoring dashboard for Claude Code via MCP Channels
 
-```
-[Dashboard]  ──message──>  [Hub Server]  ──WebSocket──>  [Channel Server]  ──>  Claude Code
-                                                              <──
-Claude Code  ──reply/notify──>  [Channel Server]  ──>  [Hub Server]  ──>  [Dashboard]
+Monitor and interact with multiple Claude Code sessions from a web dashboard. Get desktop notifications when tasks complete, send messages to Claude, and track session status.
+
+## Architecture
+
+```mermaid
+graph LR
+    subgraph "Your Machine"
+        CC1["Claude Code<br/>(Session 1)"] --> CS1["Channel Server"]
+        CC2["Claude Code<br/>(Session 2)"] --> CS2["Channel Server"]
+        CC3["Claude Code<br/>(Session 3)"] --> CS3["Channel Server"]
+    end
+
+    CS1 -->|WebSocket| HUB["Hub Server<br/>:7900"]
+    CS2 -->|WebSocket| HUB
+    CS3 -->|WebSocket| HUB
+
+    HUB -->|HTTP| DASH["Web Dashboard"]
+    HUB -->|Toast| NOTIF["Desktop<br/>Notifications"]
+
+    subgraph "Remote Machine (optional)"
+        CC4["Claude Code<br/>(Session 4)"] --> CS4["Channel Server"]
+    end
+    CS4 -->|WebSocket| HUB
+
+    style HUB fill:#7c6aef,stroke:#5a4db8,color:#fff
+    style DASH fill:#3dd68c,stroke:#22a06b,color:#000
+    style NOTIF fill:#f5c542,stroke:#d4a72c,color:#000
 ```
 
 ## Features
 
-- **Web Dashboard** — Monitor all Claude Code sessions in one place
-- **Two-way Messaging** — Send messages to Claude and receive replies (with markdown rendering)
-- **Desktop Notifications** — Get Windows/macOS/Linux toast notifications
-- **Session Status** — See which sessions are idle, working, or waiting for input
-- **Token Auth** — Secure hub access with auto-generated tokens
-- **Multi-session** — Connect multiple Claude Code instances simultaneously
+```mermaid
+graph TD
+    A["Multi-Session<br/>Monitoring"] --> |"real-time"| B["Session Status<br/>idle · working · waiting"]
+    A --> |"two-way"| C["Message Exchange<br/>text + markdown + images"]
+    A --> |"alerts"| D["Desktop Notifications<br/>Windows · macOS · Linux"]
+    A --> |"security"| E["Token Auth<br/>auto-generated"]
+    A --> |"theme"| F["Dark / Light Mode"]
+    A --> |"remote"| G["Multi-Machine<br/>Support"]
+
+    style A fill:#7c6aef,stroke:#5a4db8,color:#fff
+    style B fill:#60a5fa,stroke:#3b82f6,color:#000
+    style C fill:#3dd68c,stroke:#22a06b,color:#000
+    style D fill:#f5c542,stroke:#d4a72c,color:#000
+    style E fill:#ef4444,stroke:#dc2626,color:#fff
+    style F fill:#8b8fa3,stroke:#6b7280,color:#fff
+    style G fill:#a78bfa,stroke:#7c3aed,color:#000
+```
 
 ## Quick Start
 
-### 1. Install & Initialize
-
-In your project directory:
+### 1. Install
 
 ```bash
-npx @delt/claude-alarm init
+npm install -g @delt/claude-alarm
 ```
-
-This creates `.mcp.json` with the claude-alarm channel server config.
 
 ### 2. Start the Hub
 
 ```bash
-npx @delt/claude-alarm hub start
+claude-alarm hub start
 ```
 
-This starts the hub server and prints your auth token.
+### 3. Initialize Project
 
-### 3. Run Claude Code
+```bash
+cd your-project
+claude-alarm init
+```
+
+### 4. Run Claude Code
 
 ```bash
 claude --dangerously-load-development-channels server:claude-alarm
 ```
 
-To allow remote control without approval prompts:
-
-```bash
-claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions
-```
-
-> **WARNING:** `--dangerously-skip-permissions` allows Claude to execute any action without your approval. Only use in trusted, isolated environments.
-
-### 4. Open Dashboard
+### 5. Open Dashboard
 
 Open `http://127.0.0.1:7900` in your browser.
 
+## Message Flow
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard
+    participant H as Hub Server
+    participant C as Channel Server
+    participant CC as Claude Code
+
+    D->>H: Send message
+    H->>C: Forward via WebSocket
+    C->>CC: MCP Channel notification
+    CC->>CC: Process & execute
+    CC->>C: Call reply tool
+    C->>H: Forward reply
+    H->>D: Display in chat
+    H->>H: Desktop notification
+```
+
+## Dashboard Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Claude Alarm                              ☽  ● Connected  │
+├──────────────┬──────────────────────┬───────────────────────┤
+│  SESSIONS    │  Messages            │  NOTIFICATIONS        │
+│              │                      │                       │
+│ ┌──────────┐ │  ┌─────────────────┐ │  ┌─────────────────┐ │
+│ │ my-app   │ │  │ Claude · 14:30  │ │  │ ● Task complete │ │
+│ │ idle     │ │  │ Build succeeded │ │  │   my-app · 14:30│ │
+│ └──────────┘ │  └─────────────────┘ │  └─────────────────┘ │
+│ ┌──────────┐ │                      │  ┌─────────────────┐ │
+│ │ api-svc  │ │       ┌────────────┐ │  │ ● Error found   │ │
+│ │ working  │ │       │ You · 14:31│ │  │   api-svc · 14:2│ │
+│ └──────────┘ │       │ Fix the bug│ │  └─────────────────┘ │
+│ ┌──────────┐ │       └────────────┘ │                       │
+│ │ frontend │ │                      │                       │
+│ │ waiting  │ │                      │                       │
+│ └──────────┘ │                      │                       │
+├──────────────┴──────────────────────┴───────────────────────┤
+│  📎 [Message input...  Shift+Enter ↵]           [ Send ]   │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## CLI Commands
 
-```
-claude-alarm init             Setup everything and show next steps
-claude-alarm hub start [-d]   Start the hub server (-d for daemon mode)
-claude-alarm hub stop         Stop the hub daemon
-claude-alarm hub status       Show hub status
-claude-alarm setup [dir]      Add claude-alarm to .mcp.json
-claude-alarm test             Send a test notification
-claude-alarm token            Show current auth token
-```
+| Command | Description |
+|---------|-------------|
+| `claude-alarm init` | Setup project and show next steps |
+| `claude-alarm hub start [-d]` | Start hub server (`-d` for daemon) |
+| `claude-alarm hub stop` | Stop hub daemon |
+| `claude-alarm hub status` | Show hub status |
+| `claude-alarm token` | Show auth token |
+| `claude-alarm test` | Send test notification |
 
-## How It Works
-
-claude-alarm uses [MCP Channels](https://modelcontextprotocol.io) to create a communication bridge between Claude Code and a web dashboard.
-
-- **Hub Server** — Central server that manages sessions, serves the dashboard, and routes messages
-- **Channel Server** — MCP server that runs inside Claude Code, providing tools and forwarding messages
-- **Dashboard** — Web UI for monitoring sessions and sending messages
-
-### Tools Available to Claude
+## Tools Available to Claude
 
 | Tool | Description |
 |------|-------------|
@@ -85,7 +147,7 @@ claude-alarm uses [MCP Channels](https://modelcontextprotocol.io) to create a co
 
 ## Configuration
 
-Config is stored at `~/.claude-alarm/config.json`:
+Config stored at `~/.claude-alarm/config.json`:
 
 ```json
 {
@@ -104,8 +166,6 @@ Config is stored at `~/.claude-alarm/config.json`:
 
 ### Custom Session Names
 
-The `.mcp.json` created by `claude-alarm init` automatically uses the project directory name as the session name. You can customize it:
-
 ```json
 {
   "mcpServers": {
@@ -122,8 +182,6 @@ The `.mcp.json` created by `claude-alarm init` automatically uses the project di
 
 ### Webhooks
 
-Send notifications to external services:
-
 ```json
 {
   "webhooks": [
@@ -137,11 +195,29 @@ Send notifications to external services:
 
 ## Remote Access
 
-To access the hub from another machine:
+```mermaid
+graph LR
+    subgraph "Hub PC"
+        HUB["Hub Server<br/>0.0.0.0:7900"]
+    end
+
+    subgraph "Remote PC"
+        RC["Claude Code"] --> RCS["Channel Server"]
+    end
+
+    subgraph "Browser (any device)"
+        DASH["Dashboard"]
+    end
+
+    RCS -->|"WS + token"| HUB
+    DASH -->|"HTTP + token"| HUB
+
+    style HUB fill:#7c6aef,stroke:#5a4db8,color:#fff
+```
 
 1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
 2. Open port 7900 in your firewall
-3. On the remote machine, run `claude-alarm init` and select remote hub (Y), or manually set `.mcp.json`:
+3. On remote machine: `claude-alarm init` → select remote hub (Y)
 
 ```json
 {
@@ -159,17 +235,22 @@ To access the hub from another machine:
 }
 ```
 
+## Image Upload (Local Sessions)
+
+Send images to Claude via the dashboard:
+- **Ctrl+V** — Paste from clipboard
+- **Drag & Drop** — Drop image onto message area
+- **Attach button** — Click 📎 to browse files
+
+> Images are only available for local sessions (same machine as Hub). Max 10MB, auto-deleted after 5 minutes.
+
 ## Platform Support
 
-Desktop notifications work across all major platforms via [node-notifier](https://github.com/mikaelbr/node-notifier):
-
-| Platform | Notification Engine | Click to Open |
-|----------|-------------------|---------------|
-| Windows  | SnoreToast (built-in) | `Start-Process` |
-| macOS    | terminal-notifier | `open` |
-| Linux    | notify-send (libnotify) | `xdg-open` |
-
-No additional setup needed — `node-notifier` automatically detects your OS and uses the appropriate tool.
+| Platform | Notifications | Engine |
+|----------|:---:|--------|
+| Windows | ✓ | SnoreToast |
+| macOS | ✓ | terminal-notifier |
+| Linux | ✓ | notify-send |
 
 ## Requirements
 
