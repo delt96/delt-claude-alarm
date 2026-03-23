@@ -565,13 +565,13 @@
 
 <div class="token-overlay hidden" id="webhookOverlay">
   <div class="token-form" style="max-width:500px;text-align:left">
-    <h2 style="text-align:center">Webhook Settings</h2>
-    <p style="text-align:center">Add webhook URLs to receive notifications externally.</p>
-    <div id="webhookList"></div>
-    <button id="webhookAdd" style="width:100%;margin-top:8px;background:var(--surface);color:var(--text);border:1px dashed var(--border);border-radius:6px;padding:8px;cursor:pointer;font-size:13px">+ Add Webhook</button>
-    <div style="display:flex;gap:8px;margin-top:16px">
-      <button id="webhookSave" style="flex:1">Save</button>
-      <button id="webhookCancel" style="flex:1;background:var(--surface);color:var(--text);border:1px solid var(--border)">Cancel</button>
+    <h2 style="text-align:center;margin-bottom:4px">Webhook Settings</h2>
+    <p style="text-align:center;margin-bottom:16px">Send notifications to Slack, Discord, or any webhook endpoint.</p>
+    <div id="webhookList" style="max-height:240px;overflow-y:auto"></div>
+    <button id="webhookAdd" style="width:100%;margin-top:10px;background:none;color:var(--text-dim);border:1px dashed var(--border);border-radius:6px;padding:10px;cursor:pointer;font-size:13px;transition:border-color 0.15s">+ Add Webhook</button>
+    <div style="display:flex;gap:8px;margin-top:20px">
+      <button id="webhookSave" style="flex:1;padding:10px">Save</button>
+      <button id="webhookCancel" style="flex:1;padding:10px;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500">Cancel</button>
     </div>
   </div>
 </div>
@@ -1086,12 +1086,26 @@
   });
   function renderWebhooks() {
     const el = $('#webhookList');
-    el.innerHTML = webhookData.map((w, i) => `<div style="display:flex;gap:6px;margin-bottom:6px">
-      <input type="text" value="${esc(w.url)}" placeholder="https://hooks.slack.com/..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px;outline:none" data-idx="${i}">
-      <button onclick="this.parentElement.remove()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;padding:4px 8px">&times;</button>
+    if (!webhookData.length) {
+      el.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:16px;font-size:13px">No webhooks configured</div>';
+      return;
+    }
+    el.innerHTML = webhookData.map((w, i) => `<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+      <input type="text" value="${esc(w.url)}" placeholder="https://hooks.slack.com/services/..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;font-family:monospace" data-idx="${i}">
+      <button style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;padding:6px 10px;font-size:14px;transition:color 0.15s" data-rm="${i}">&times;</button>
     </div>`).join('');
     el.querySelectorAll('input').forEach(inp => {
       inp.addEventListener('input', () => { webhookData[parseInt(inp.dataset.idx)].url = inp.value; });
+      inp.addEventListener('focus', () => { inp.style.borderColor = 'var(--accent)'; });
+      inp.addEventListener('blur', () => { inp.style.borderColor = 'var(--border)'; });
+    });
+    el.querySelectorAll('[data-rm]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        webhookData.splice(parseInt(btn.dataset.rm), 1);
+        renderWebhooks();
+      });
+      btn.addEventListener('mouseenter', () => { btn.style.color = 'var(--red)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.color = 'var(--text-dim)'; });
     });
   }
 
