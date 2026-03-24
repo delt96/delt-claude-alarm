@@ -321,11 +321,18 @@ export class TelegramBot {
       else if (contentMatch) preview = contentMatch[1].slice(0, 500);
     }
 
-    const truncNote = truncated ? '\n<i>...truncated</i>' : '';
+    const truncNote = truncated ? '\n\n<i>...truncated</i>' : '';
+    const previewSlice = preview.slice(0, 800);
+    // Use <code> for short single-line (commands), plain text for longer content
+    const isShort = !previewSlice.includes('\n') && previewSlice.length < 100;
+    const previewHtml = isShort
+      ? `<code>${this.escHtml(previewSlice)}</code>`
+      : this.escHtml(previewSlice);
     const text = `⚠️ <b>Permission Request</b>\n\n` +
       `📂 <b>${this.escHtml(sessionLabel)}</b>\n` +
-      `🔧 <code>${this.escHtml(toolName)}</code> — ${this.escHtml(description)}\n\n` +
-      `<pre>${this.escHtml(preview.slice(0, 800))}</pre>${truncNote}`;
+      `🔧 <code>${this.escHtml(toolName)}</code>\n` +
+      `${this.escHtml(description)}\n\n` +
+      `${previewHtml}${truncNote}`;
 
     const replyMarkup = {
       inline_keyboard: [[
