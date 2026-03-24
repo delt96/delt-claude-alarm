@@ -19,6 +19,7 @@ Monitor and interact with multiple Claude Code sessions from a web dashboard. Ge
 - **Webhook Support** — Slack, Discord, or custom webhook endpoints
 - **Token Auth** — Auto-generated secure access
 - **Dark / Light Mode** — Theme toggle with persistence
+- **Permission Relay** — Approve/deny tool calls from dashboard or phone
 - **Multi-Machine** — Remote hub access support
 
 ## Quick Start
@@ -166,6 +167,17 @@ Two-way messaging with Claude sessions via Telegram — text and images.
   }
 }
 ```
+
+## Permission Relay
+
+Approve or deny Claude's tool calls remotely — from the dashboard or your phone — without `--dangerously-skip-permissions`.
+
+When Claude wants to run a tool (Bash, Write, Edit, etc.), a permission request appears on the dashboard with **Allow / Deny** buttons. Keyboard shortcuts: **Enter** = Allow, **Esc** = Deny.
+
+- Works with Claude Code **v2.1.81+**
+- No extra setup needed — automatically enabled
+- Local terminal prompt stays open; whichever answer arrives first (local or dashboard) is applied
+- Parsed previews: Bash commands show `$ command`, file operations show file paths
 
 ## Remote Access
 
