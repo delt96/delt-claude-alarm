@@ -454,7 +454,19 @@ export class TelegramBot {
 
   /** Convert markdown to Telegram HTML (escape first, then apply formatting) */
   private mdToHtml(s: string): string {
-    let html = this.escHtml(s);
+    // Handle tables before escaping (convert to clean text format)
+    let text = s.replace(
+      /^(\|.+\|)\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/gm,
+      (_match, header: string, body: string) => {
+        const headerCells = header.split('|').filter((c: string) => c.trim()).map((c: string) => c.trim());
+        const headerLine = headerCells.join(' | ');
+        const bodyLines = body.trim().split('\n').map((row: string) => {
+          return row.split('|').filter((c: string) => c.trim()).map((c: string) => c.trim()).join(' | ');
+        });
+        return `**${headerLine}**\n${bodyLines.join('\n')}`;
+      },
+    );
+    let html = this.escHtml(text);
     // Code blocks: ```...```
     html = html.replace(/```(?:\w*)\n?([\s\S]*?)```/g, '<pre>$1</pre>');
     // Inline code: `...`
