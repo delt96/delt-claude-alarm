@@ -306,6 +306,7 @@ export class TelegramBot {
     try {
       const p = JSON.parse(inputPreview);
       if (p.command) preview = `$ ${p.command}`;
+      else if (p.title && p.message) preview = `${p.title}\n${p.message}`;
       else if (p.file_path) {
         preview = p.file_path;
         if (p.content) { preview += '\n' + p.content.slice(0, 500); if (p.content.length > 500) truncated = true; }
