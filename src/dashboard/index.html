@@ -1403,11 +1403,14 @@
     if (!raw) return { text: '' };
     let p = null;
     try { p = JSON.parse(raw); } catch {
-      // Truncated JSON - extract known fields with regex
-      const cmdMatch = raw.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const fileMatch = raw.match(/"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const contentMatch = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      // Truncated JSON - extract known fields with regex (closing quote optional for truncated strings)
+      const cmdMatch = raw.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      const fileMatch = raw.match(/"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      const contentMatch = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      const titleMatch = raw.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      const msgMatch = raw.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      if (titleMatch && msgMatch) return { text: msgMatch[1] };
       if (cmdMatch) return { text: '$ ' + cmdMatch[1] };
       if (fileMatch) return { text: fileMatch[1] };
       if (patternMatch) return { text: patternMatch[1] };
