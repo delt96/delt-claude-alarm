@@ -1201,7 +1201,7 @@
       }
       return `<div class="notif-item" data-session="${n.sessionId}" data-index="${i}">
         <div class="notif-title"><span class="notif-level ${n.level}"></span><span class="notif-title-text">${esc(n.title)}</span><button class="notif-dismiss" data-index="${i}">&times;</button></div>
-        <div class="notif-message">${renderMarkdown(n.message)}</div>${permButtons}
+        <div class="notif-message">${esc(stripMarkdown(n.message))}</div>${permButtons}
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
@@ -1352,6 +1352,18 @@
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  function stripMarkdown(s) {
+    return s
+      .replace(/```[\s\S]*?```/g, '')       // code blocks
+      .replace(/`([^`]+)`/g, '$1')           // inline code
+      .replace(/\*\*(.+?)\*\*/g, '$1')       // bold
+      .replace(/\*(.+?)\*/g, '$1')           // italic
+      .replace(/^#{1,3}\s+/gm, '')           // headings
+      .replace(/^- /gm, '· ')               // list items
+      .replace(/\n{2,}/g, '\n')              // multiple newlines
+      .trim();
   }
 
   function renderMarkdown(text) {
