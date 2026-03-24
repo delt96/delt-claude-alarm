@@ -1198,7 +1198,7 @@
       }
       return `<div class="notif-item" data-session="${n.sessionId}" data-index="${i}">
         <div class="notif-title"><span class="notif-level ${n.level}"></span><span class="notif-title-text">${esc(n.title)}</span><button class="notif-dismiss" data-index="${i}">&times;</button></div>
-        <div class="notif-message">${esc(n.message)}</div>${permButtons}
+        <div class="notif-message">${renderMarkdown(n.message)}</div>${permButtons}
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
