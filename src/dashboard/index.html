@@ -1398,22 +1398,21 @@
     return toolName;
   }
 
-  // Returns { text, truncated } — truncated=true when input_preview was cut off
+  // Returns { text } — dashboard shows full content, no truncation
   function formatPermPreview(toolName, raw) {
-    if (!raw) return { text: '', truncated: false };
+    if (!raw) return { text: '' };
     let p = null;
-    let truncated = false;
     try { p = JSON.parse(raw); } catch {
-      truncated = true; // JSON parse failed = likely truncated by Claude Code
+      // Truncated JSON - extract known fields with regex
       const cmdMatch = raw.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const fileMatch = raw.match(/"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const contentMatch = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      if (cmdMatch) return { text: '$ ' + cmdMatch[1], truncated };
-      if (fileMatch) return { text: fileMatch[1], truncated };
-      if (patternMatch) return { text: patternMatch[1], truncated };
-      if (contentMatch) return { text: contentMatch[1].slice(0, 200), truncated };
-      return { text: raw.slice(0, 300), truncated };
+      if (cmdMatch) return { text: '$ ' + cmdMatch[1] };
+      if (fileMatch) return { text: fileMatch[1] };
+      if (patternMatch) return { text: patternMatch[1] };
+      if (contentMatch) return { text: contentMatch[1] };
+      return { text: raw };
     }
     let text;
     switch (toolName) {
@@ -1423,8 +1422,8 @@
       case 'Edit':
         if (p.file_path) {
           text = p.file_path;
-          if (p.new_string) { text += '\n+ ' + p.new_string.slice(0, 200); if (p.new_string.length > 200) truncated = true; }
-          else if (p.content) { text += '\n' + p.content.slice(0, 200); if (p.content.length > 200) truncated = true; }
+          if (p.new_string) text += '\n+ ' + p.new_string;
+          else if (p.content) text += '\n' + p.content;
         } else { text = raw; }
         break;
       case 'Read':
@@ -1435,18 +1434,16 @@
         text = (p.pattern || '') + (p.path ? '  in ' + p.path : ''); break;
       default:
         if (p.title && p.message) {
-          // Tools like notify: title is already shown in tool name, show message only
           text = p.message;
         } else if (p.content && typeof p.content === 'string') {
-          text = p.content.slice(0, 300);
-          if (p.content.length > 300) truncated = true;
+          text = p.content;
         } else {
           const entries = Object.entries(p);
-          if (entries.length <= 3) text = entries.map(([k, v]) => k + ': ' + String(v).slice(0, 150)).join('\n');
-          else { text = JSON.stringify(p, null, 1).slice(0, 300); truncated = true; }
+          if (entries.length <= 3) text = entries.map(([k, v]) => k + ': ' + String(v)).join('\n');
+          else text = JSON.stringify(p, null, 1);
         }
     }
-    return { text: text || '', truncated };
+    return { text: text || '' };
   }
 
   function sendPermissionVerdict(sessionId, requestId, behavior) {
@@ -1470,8 +1467,7 @@
     if (!reqs.length) { bar.classList.remove('active'); bar.innerHTML = ''; return; }
     bar.classList.add('active');
     bar.innerHTML = reqs.map(r => {
-      const { text: previewText, truncated } = formatPermPreview(r.toolName, r.inputPreview);
-      const truncLabel = truncated ? '<span style="color:var(--text-dim);font-size:10px;font-style:italic"> ...truncated</span>' : '';
+      const { text: previewText } = formatPermPreview(r.toolName, r.inputPreview);
       const displayName = formatToolName(r.toolName, r.inputPreview);
       return `<div class="perm-item">
         <div class="perm-icon">&#9888;</div>
@@ -1479,7 +1475,7 @@
           <div class="perm-header">
             <span class="perm-tool">${esc(displayName)}</span>
           </div>
-          ${previewText ? `<div class="perm-preview">${esc(previewText)}${truncLabel}</div>` : ''}
+          ${previewText ? `<div class="perm-preview">${esc(previewText)}</div>` : ''}
         </div>
         <div class="perm-actions">
           <button class="perm-allow" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Allow <span class="perm-kbd">(Enter)</span></button>
