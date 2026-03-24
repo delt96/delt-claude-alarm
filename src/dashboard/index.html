@@ -1368,36 +1368,40 @@
   // --- Permission relay ---
   function formatPermPreview(toolName, raw) {
     if (!raw) return '';
-    // Try JSON parse
-    try {
-      const p = JSON.parse(raw);
-      switch (toolName) {
-        case 'Bash':
-          return p.command ? '$ ' + p.command : raw;
-        case 'Write':
-        case 'Edit':
-          if (p.file_path) {
-            let s = p.file_path;
-            if (p.new_string) s += '\n+ ' + p.new_string.slice(0, 200);
-            else if (p.content) s += '\n' + p.content.slice(0, 200);
-            return s;
-          }
-          return raw;
-        case 'Read':
-          return p.file_path || raw;
-        case 'Glob':
-          return p.pattern || raw;
-        case 'Grep':
-          return (p.pattern || '') + (p.path ? '  in ' + p.path : '');
-        default:
-          // Generic: show key=value pairs
-          const entries = Object.entries(p);
-          if (entries.length <= 3) return entries.map(([k, v]) => k + ': ' + String(v).slice(0, 100)).join('\n');
-          return JSON.stringify(p, null, 1).slice(0, 200);
-      }
-    } catch {
-      // Not valid JSON - show raw but clean up
-      return raw.slice(0, 200);
+    // Try JSON parse first, then fallback to regex extraction for truncated JSON
+    let p = null;
+    try { p = JSON.parse(raw); } catch {
+      // Truncated JSON - try to extract known fields with regex
+      const cmdMatch = raw.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const fileMatch = raw.match(/"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (cmdMatch) return '$ ' + cmdMatch[1];
+      if (fileMatch) return fileMatch[1];
+      if (patternMatch) return patternMatch[1];
+      return raw.slice(0, 300);
+    }
+    switch (toolName) {
+      case 'Bash':
+        return p.command ? '$ ' + p.command : raw;
+      case 'Write':
+      case 'Edit':
+        if (p.file_path) {
+          let s = p.file_path;
+          if (p.new_string) s += '\n+ ' + p.new_string.slice(0, 200);
+          else if (p.content) s += '\n' + p.content.slice(0, 200);
+          return s;
+        }
+        return raw;
+      case 'Read':
+        return p.file_path || raw;
+      case 'Glob':
+        return p.pattern || raw;
+      case 'Grep':
+        return (p.pattern || '') + (p.path ? '  in ' + p.path : '');
+      default:
+        const entries = Object.entries(p);
+        if (entries.length <= 3) return entries.map(([k, v]) => k + ': ' + String(v).slice(0, 100)).join('\n');
+        return JSON.stringify(p, null, 1).slice(0, 200);
     }
   }
 
