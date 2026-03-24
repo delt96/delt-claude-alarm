@@ -414,6 +414,8 @@ export class TelegramBot {
     html = html.replace(/```(?:\w*)\n?([\s\S]*?)```/g, '<pre>$1</pre>');
     // Inline code: `...`
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Headings: # / ## / ### → bold (Telegram has no heading tags)
+    html = html.replace(/^#{1,3}\s+(.+)$/gm, '<b>$1</b>');
     // Bold: **...**
     html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
     // Italic: *...*
