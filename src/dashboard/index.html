@@ -445,7 +445,10 @@
     transition: opacity 0.15s;
   }
   .notif-dismiss:hover { color: var(--red); }
-  .notif-item .notif-message { color: var(--text-dim); }
+  .notif-item .notif-message { color: var(--text-dim); overflow: hidden; word-break: break-word; }
+  .notif-item .notif-message h2, .notif-item .notif-message h3, .notif-item .notif-message h4 { font-size: 12px; margin: 2px 0; }
+  .notif-item .notif-message pre { font-size: 10px; padding: 4px 6px; max-height: 60px; overflow: hidden; }
+  .notif-item .notif-message code { font-size: 10px; }
   .notif-item .notif-time { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
   .notif-header {
     display: flex;
