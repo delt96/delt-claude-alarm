@@ -302,20 +302,30 @@ export class TelegramBot {
   async sendPermissionRequest(sessionId: string, sessionLabel: string, requestId: string, toolName: string, description: string, inputPreview: string): Promise<void> {
     // Parse inputPreview for readable display
     let preview = inputPreview;
+    let truncated = false;
     try {
       const p = JSON.parse(inputPreview);
       if (p.command) preview = `$ ${p.command}`;
-      else if (p.file_path) preview = p.file_path + (p.content ? '\n' + p.content.slice(0, 150) : '');
+      else if (p.file_path) {
+        preview = p.file_path;
+        if (p.content) { preview += '\n' + p.content.slice(0, 500); if (p.content.length > 500) truncated = true; }
+      } else if (p.content && typeof p.content === 'string') {
+        preview = p.content.slice(0, 500);
+        if (p.content.length > 500) truncated = true;
+      }
     } catch {
-      // Try regex for truncated JSON
+      truncated = true;
       const cmdMatch = inputPreview.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const contentMatch = inputPreview.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       if (cmdMatch) preview = `$ ${cmdMatch[1]}`;
+      else if (contentMatch) preview = contentMatch[1].slice(0, 500);
     }
 
+    const truncNote = truncated ? '\n<i>...truncated</i>' : '';
     const text = `⚠️ <b>Permission Request</b>\n\n` +
       `📂 <b>${this.escHtml(sessionLabel)}</b>\n` +
       `🔧 <code>${this.escHtml(toolName)}</code> — ${this.escHtml(description)}\n\n` +
-      `<pre>${this.escHtml(preview.slice(0, 800))}</pre>`;
+      `<pre>${this.escHtml(preview.slice(0, 800))}</pre>${truncNote}`;
 
     const replyMarkup = {
       inline_keyboard: [[
