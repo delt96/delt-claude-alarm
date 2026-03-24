@@ -1435,8 +1435,8 @@
         text = (p.pattern || '') + (p.path ? '  in ' + p.path : ''); break;
       default:
         if (p.title && p.message) {
-          // Tools like notify: show title + message cleanly
-          text = p.title + '\n' + p.message;
+          // Tools like notify: title is already shown in tool name, show message only
+          text = p.message;
         } else if (p.content && typeof p.content === 'string') {
           text = p.content.slice(0, 300);
           if (p.content.length > 300) truncated = true;

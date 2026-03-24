@@ -306,7 +306,7 @@ export class TelegramBot {
     try {
       const p = JSON.parse(inputPreview);
       if (p.command) preview = `$ ${p.command}`;
-      else if (p.title && p.message) preview = `${p.title}\n${p.message}`;
+      else if (p.title && p.message) preview = p.message;
       else if (p.file_path) {
         preview = p.file_path;
         if (p.content) { preview += '\n' + p.content.slice(0, 500); if (p.content.length > 500) truncated = true; }
@@ -329,10 +329,17 @@ export class TelegramBot {
     const previewHtml = isShort
       ? `<code>${this.escHtml(previewSlice)}</code>`
       : this.escHtml(previewSlice);
-    // Friendly tool name for Telegram
+    // Friendly tool name for Telegram — use title for notify tools
     let displayTool = toolName;
-    const mcpMatch = toolName.match(/__([^_]+)$/);
-    if (mcpMatch) displayTool = mcpMatch[1].charAt(0).toUpperCase() + mcpMatch[1].slice(1);
+    if ((toolName.endsWith('__notify') || toolName === 'notify') && inputPreview) {
+      try { const pp = JSON.parse(inputPreview); if (pp.title) displayTool = pp.title; } catch {
+        const tm = inputPreview.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (tm) displayTool = tm[1];
+      }
+    } else {
+      const mcpMatch = toolName.match(/__([^_]+)$/);
+      if (mcpMatch) displayTool = mcpMatch[1].charAt(0).toUpperCase() + mcpMatch[1].slice(1);
+    }
 
     const text = `⚠️ <b>Permission Request</b> — ${this.escHtml(sessionLabel)}\n\n` +
       `🔧 <b>${this.escHtml(displayTool)}</b>\n` +
