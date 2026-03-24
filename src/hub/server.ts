@@ -371,6 +371,12 @@ export class HubServer {
           inputPreview: msg.inputPreview,
           timestamp: msg.timestamp,
         });
+        // Forward to Telegram
+        if (this.telegramBot) {
+          const session = this.sessions.get(msg.sessionId);
+          const label = this.getSessionLabel(session);
+          this.telegramBot.sendPermissionRequest(msg.sessionId, label, msg.requestId, msg.toolName, msg.description, msg.inputPreview);
+        }
         break;
       }
     }
@@ -508,6 +514,14 @@ export class HubServer {
         const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption };
         channelWs.send(JSON.stringify(msg));
         logger.info(`Telegram photo forwarded to session: ${sessionId}`);
+      }
+    };
+    this.telegramBot.onPermissionVerdict = (sessionId, requestId, behavior) => {
+      const channelWs = this.channelSockets.get(sessionId);
+      if (channelWs?.readyState === WebSocket.OPEN) {
+        const msg: ChannelMessage = { type: 'permission_response', sessionId, requestId, behavior };
+        channelWs.send(JSON.stringify(msg));
+        logger.info(`Telegram permission verdict [${requestId}]: ${behavior} -> session ${sessionId}`);
       }
     };
     this.notifier.configure({ telegramBot: this.telegramBot });

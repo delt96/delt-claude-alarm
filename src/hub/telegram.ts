@@ -24,9 +24,17 @@ interface TelegramMessage {
   reply_to_message?: { message_id: number };
 }
 
+interface TelegramCallbackQuery {
+  id: string;
+  from: { id: number };
+  message?: TelegramMessage;
+  data?: string;
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export class TelegramBot {
@@ -42,6 +50,8 @@ export class TelegramBot {
   public onMessageToSession?: (sessionId: string, content: string) => void;
   // Callback: when an image arrives from Telegram for a session
   public onImageToSession?: (sessionId: string, imagePath: string, mimeType: string, caption?: string) => void;
+  // Callback: when a permission verdict arrives from Telegram
+  public onPermissionVerdict?: (sessionId: string, requestId: string, behavior: 'allow' | 'deny') => void;
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
   // Pending messages for session selection
@@ -138,7 +148,9 @@ export class TelegramBot {
       if (data.ok && data.result.length > 0) {
         for (const update of data.result) {
           this.offset = update.update_id + 1;
-          if (update.message) {
+          if (update.callback_query) {
+            this.handleCallbackQuery(update.callback_query);
+          } else if (update.message) {
             this.handleIncomingMessage(update.message);
           }
         }
@@ -284,6 +296,87 @@ export class TelegramBot {
 
   private getLabel(session: SessionInfo): string {
     return session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+  }
+
+  /** Send a permission request with inline buttons */
+  async sendPermissionRequest(sessionId: string, sessionLabel: string, requestId: string, toolName: string, description: string, inputPreview: string): Promise<void> {
+    // Parse inputPreview for readable display
+    let preview = inputPreview;
+    try {
+      const p = JSON.parse(inputPreview);
+      if (p.command) preview = `$ ${p.command}`;
+      else if (p.file_path) preview = p.file_path + (p.content ? '\n' + p.content.slice(0, 150) : '');
+    } catch {
+      // Try regex for truncated JSON
+      const cmdMatch = inputPreview.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (cmdMatch) preview = `$ ${cmdMatch[1]}`;
+    }
+
+    const text = `⚠️ <b>Permission Request</b>\n\n` +
+      `📂 <b>${this.escHtml(sessionLabel)}</b>\n` +
+      `🔧 <code>${this.escHtml(toolName)}</code> — ${this.escHtml(description)}\n\n` +
+      `<pre>${this.escHtml(preview.slice(0, 300))}</pre>`;
+
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: '✅ Allow', callback_data: `perm:allow:${sessionId}:${requestId}` },
+        { text: '❌ Deny', callback_data: `perm:deny:${sessionId}:${requestId}` },
+      ]],
+    };
+
+    await this.sendMessage(text, undefined, replyMarkup);
+  }
+
+  private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
+    if (!query.data?.startsWith('perm:')) return;
+
+    const parts = query.data.split(':');
+    if (parts.length < 4) return;
+    const [, action, sessionId, requestId] = parts;
+    const behavior = action === 'allow' ? 'allow' : 'deny';
+
+    // Send verdict
+    if (this.onPermissionVerdict) {
+      this.onPermissionVerdict(sessionId, requestId, behavior as 'allow' | 'deny');
+    }
+
+    // Answer callback to remove loading state
+    await this.answerCallbackQuery(query.id, behavior === 'allow' ? '✅ Allowed' : '❌ Denied');
+
+    // Update message to show result
+    if (query.message) {
+      const label = behavior === 'allow' ? '✅ <b>Allowed</b>' : '❌ <b>Denied</b>';
+      const original = query.message.text || '';
+      await this.editMessageText(query.message.chat.id, query.message.message_id, original + `\n\n${label}`);
+    }
+  }
+
+  private async answerCallbackQuery(callbackQueryId: string, text: string): Promise<void> {
+    try {
+      await fetch(`${this.apiUrl}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+      });
+    } catch (err) {
+      logger.warn(`Telegram answerCallbackQuery error: ${(err as Error).message}`);
+    }
+  }
+
+  private async editMessageText(chatId: number, messageId: number, text: string): Promise<void> {
+    try {
+      await fetch(`${this.apiUrl}/editMessageText`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' }),
+      });
+    } catch (err) {
+      logger.warn(`Telegram editMessageText error: ${(err as Error).message}`);
+    }
+  }
+
+  private escHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   /** Update config (e.g., from dashboard settings) */
