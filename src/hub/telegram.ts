@@ -328,10 +328,8 @@ export class TelegramBot {
     const previewHtml = isShort
       ? `<code>${this.escHtml(previewSlice)}</code>`
       : this.escHtml(previewSlice);
-    const text = `⚠️ <b>Permission Request</b>\n\n` +
-      `📂 <b>${this.escHtml(sessionLabel)}</b>\n` +
+    const text = `⚠️ <b>Permission Request</b> — ${this.escHtml(sessionLabel)}\n\n` +
       `🔧 <code>${this.escHtml(toolName)}</code>\n` +
-      `${this.escHtml(description)}\n\n` +
       `${previewHtml}${truncNote}`;
 
     const replyMarkup = {
