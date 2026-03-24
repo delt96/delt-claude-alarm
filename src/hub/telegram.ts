@@ -232,17 +232,23 @@ export class TelegramBot {
       return;
     }
 
-    // Multiple sessions — ask user to pick
+    // Multiple sessions — ask user to pick with inline buttons
     if (hasPhoto) {
       const largest = msg.photo![msg.photo!.length - 1];
       this.pendingMessages.set(msg.chat.id, { photoFileId: largest.file_id, caption: text });
     } else {
       this.pendingMessages.set(msg.chat.id, { text });
     }
-    const sessionList = sessions
-      .map((s, i) => `/s_${i + 1} - ${this.getLabel(s)}`)
-      .join('\n');
-    this.sendMessage(`Multiple sessions active. Reply with a command to select:\n\n${sessionList}`);
+    const buttons = sessions.map((s, i) => ({
+      text: this.getLabel(s),
+      callback_data: `sess:${i}:${msg.chat.id}`,
+    }));
+    // Arrange buttons in rows of 2
+    const rows: Array<typeof buttons> = [];
+    for (let i = 0; i < buttons.length; i += 2) {
+      rows.push(buttons.slice(i, i + 2));
+    }
+    this.sendMessage('Multiple sessions active. Select one:', undefined, { inline_keyboard: rows });
   }
 
   private deliverToSession(sessionId: string, content: string): void {
@@ -356,7 +362,14 @@ export class TelegramBot {
   }
 
   private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
-    if (!query.data?.startsWith('perm:')) return;
+    if (!query.data) return;
+
+    if (query.data.startsWith('sess:')) {
+      await this.handleSessionSelectCallback(query);
+      return;
+    }
+
+    if (!query.data.startsWith('perm:')) return;
 
     const parts = query.data.split(':');
     if (parts.length < 4) return;
@@ -376,6 +389,38 @@ export class TelegramBot {
       const label = behavior === 'allow' ? '✅ <b>Allowed</b>' : '❌ <b>Denied</b>';
       const original = this.escHtml(query.message.text || '');
       await this.editMessageText(query.message.chat.id, query.message.message_id, original + `\n\n${label}`);
+    }
+  }
+
+  private async handleSessionSelectCallback(query: TelegramCallbackQuery): Promise<void> {
+    const parts = query.data!.split(':');
+    if (parts.length < 3) return;
+    const [, idxStr, chatIdStr] = parts;
+    const idx = parseInt(idxStr, 10);
+    const chatId = parseInt(chatIdStr, 10);
+
+    const sessions = this.getSessions?.() ?? [];
+    if (idx < 0 || idx >= sessions.length) {
+      await this.answerCallbackQuery(query.id, 'Session not found');
+      return;
+    }
+
+    const session = sessions[idx];
+    const pending = this.pendingMessages.get(chatId);
+    this.pendingMessages.delete(chatId);
+
+    if (pending) {
+      if (pending.photoFileId) {
+        await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
+      } else if (pending.text) {
+        this.deliverToSession(session.id, pending.text);
+      }
+    }
+
+    await this.answerCallbackQuery(query.id, `Sent to ${this.getLabel(session)}`);
+    // Update message to show which session was selected
+    if (query.message) {
+      await this.editMessageText(query.message.chat.id, query.message.message_id, `✅ Sent to <b>${this.escHtml(this.getLabel(session))}</b>`);
     }
   }
 
