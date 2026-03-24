@@ -309,9 +309,9 @@ export class TelegramBot {
       else if (p.title && p.message) preview = p.message;
       else if (p.file_path) {
         preview = p.file_path;
-        if (p.content) { preview += '\n' + p.content.slice(0, 500); if (p.content.length > 500) truncated = true; }
+        if (p.content) { preview += '\n' + p.content.slice(0, 3000); if (p.content.length > 500) truncated = true; }
       } else if (p.content && typeof p.content === 'string') {
-        preview = p.content.slice(0, 500);
+        preview = p.content.slice(0, 3000);
         if (p.content.length > 500) truncated = true;
       }
     } catch {
@@ -319,11 +319,11 @@ export class TelegramBot {
       const cmdMatch = inputPreview.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const contentMatch = inputPreview.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       if (cmdMatch) preview = `$ ${cmdMatch[1]}`;
-      else if (contentMatch) preview = contentMatch[1].slice(0, 500);
+      else if (contentMatch) preview = contentMatch[1].slice(0, 3000);
     }
 
     const truncNote = truncated ? '\n\n<i>...truncated</i>' : '';
-    const previewSlice = preview.slice(0, 800);
+    const previewSlice = preview.slice(0, 3000);
     // Use <code> for short single-line (commands), plain text for longer content
     const isShort = !previewSlice.includes('\n') && previewSlice.length < 100;
     const previewHtml = isShort
