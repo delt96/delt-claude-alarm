@@ -67,7 +67,7 @@ export class TelegramBot {
 
   /** Send a notification message to Telegram */
   async sendNotification(sessionId: string, _sessionLabel: string, title: string, message: string): Promise<void> {
-    const text = `${title}\n${message}`;
+    const text = `<b>${this.escHtml(title)}</b>\n${this.mdToHtml(message)}`;
     const result = await this.sendMessage(text);
     if (result?.message_id) {
       this.messageSessionMap.set(result.message_id, sessionId);
@@ -405,6 +405,20 @@ export class TelegramBot {
 
   private escHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /** Convert markdown to Telegram HTML (escape first, then apply formatting) */
+  private mdToHtml(s: string): string {
+    let html = this.escHtml(s);
+    // Code blocks: ```...```
+    html = html.replace(/```(?:\w*)\n?([\s\S]*?)```/g, '<pre>$1</pre>');
+    // Inline code: `...`
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold: **...**
+    html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    // Italic: *...*
+    html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
+    return html;
   }
 
   /** Update config (e.g., from dashboard settings) */
