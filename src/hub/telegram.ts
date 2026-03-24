@@ -315,7 +315,7 @@ export class TelegramBot {
     const text = `⚠️ <b>Permission Request</b>\n\n` +
       `📂 <b>${this.escHtml(sessionLabel)}</b>\n` +
       `🔧 <code>${this.escHtml(toolName)}</code> — ${this.escHtml(description)}\n\n` +
-      `<pre>${this.escHtml(preview.slice(0, 300))}</pre>`;
+      `<pre>${this.escHtml(preview.slice(0, 800))}</pre>`;
 
     const replyMarkup = {
       inline_keyboard: [[

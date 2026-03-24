@@ -1066,6 +1066,17 @@
         // Play notification sound effect via title flash
         flashTitle('Permission Request');
         break;
+      case 'permission_response':
+        // Another source (Telegram, other dashboard) resolved a permission request
+        const permReqs = state.permissionRequests[msg.sessionId] || [];
+        const permReq = permReqs.find(r => r.requestId === msg.requestId);
+        if (permReq && !permReq.resolved) {
+          permReq.resolved = true;
+          permReq.behavior = msg.behavior;
+          renderPermissionBar();
+          renderNotifications();
+        }
+        break;
     }
   }
 
@@ -1375,9 +1386,11 @@
       const cmdMatch = raw.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const fileMatch = raw.match(/"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const contentMatch = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       if (cmdMatch) return '$ ' + cmdMatch[1];
       if (fileMatch) return fileMatch[1];
       if (patternMatch) return patternMatch[1];
+      if (contentMatch) return contentMatch[1].slice(0, 200);
       return raw.slice(0, 300);
     }
     switch (toolName) {
@@ -1399,9 +1412,11 @@
       case 'Grep':
         return (p.pattern || '') + (p.path ? '  in ' + p.path : '');
       default:
+        // For tools like mcp__*__reply, show content directly
+        if (p.content && typeof p.content === 'string') return p.content.slice(0, 300);
         const entries = Object.entries(p);
-        if (entries.length <= 3) return entries.map(([k, v]) => k + ': ' + String(v).slice(0, 100)).join('\n');
-        return JSON.stringify(p, null, 1).slice(0, 200);
+        if (entries.length <= 3) return entries.map(([k, v]) => k + ': ' + String(v).slice(0, 150)).join('\n');
+        return JSON.stringify(p, null, 1).slice(0, 300);
     }
   }
 

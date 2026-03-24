@@ -523,6 +523,8 @@ export class HubServer {
         channelWs.send(JSON.stringify(msg));
         logger.info(`Telegram permission verdict [${requestId}]: ${behavior} -> session ${sessionId}`);
       }
+      // Also notify dashboards so they can dismiss the permission bar
+      this.broadcastToDashboards({ type: 'permission_response', sessionId, requestId, behavior });
     };
     this.notifier.configure({ telegramBot: this.telegramBot });
     this.telegramBot.startPolling();
