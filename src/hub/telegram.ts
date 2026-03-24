@@ -329,8 +329,13 @@ export class TelegramBot {
     const previewHtml = isShort
       ? `<code>${this.escHtml(previewSlice)}</code>`
       : this.escHtml(previewSlice);
+    // Friendly tool name for Telegram
+    let displayTool = toolName;
+    const mcpMatch = toolName.match(/__([^_]+)$/);
+    if (mcpMatch) displayTool = mcpMatch[1].charAt(0).toUpperCase() + mcpMatch[1].slice(1);
+
     const text = `⚠️ <b>Permission Request</b> — ${this.escHtml(sessionLabel)}\n\n` +
-      `🔧 <code>${this.escHtml(toolName)}</code>\n` +
+      `🔧 <b>${this.escHtml(displayTool)}</b>\n` +
       `${previewHtml}${truncNote}`;
 
     const replyMarkup = {
@@ -359,10 +364,10 @@ export class TelegramBot {
     // Answer callback to remove loading state
     await this.answerCallbackQuery(query.id, behavior === 'allow' ? '✅ Allowed' : '❌ Denied');
 
-    // Update message to show result
+    // Update message to show result (use escaped original text since it's plain)
     if (query.message) {
       const label = behavior === 'allow' ? '✅ <b>Allowed</b>' : '❌ <b>Denied</b>';
-      const original = query.message.text || '';
+      const original = this.escHtml(query.message.text || '');
       await this.editMessageText(query.message.chat.id, query.message.message_id, original + `\n\n${label}`);
     }
   }

@@ -1377,6 +1377,27 @@
   }
 
   // --- Permission relay ---
+  // Format tool name for display — extract title for notify, friendly names for known tools
+  function formatToolName(toolName, inputPreview) {
+    // For notify: use title from input
+    if (toolName.endsWith('__notify') || toolName === 'notify') {
+      try {
+        const p = JSON.parse(inputPreview);
+        if (p.title) return p.title;
+      } catch {
+        const m = inputPreview.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (m) return m[1];
+      }
+    }
+    // Friendly names for common tools
+    const friendly = { 'Bash': 'Bash', 'Write': 'Write', 'Edit': 'Edit', 'Read': 'Read', 'Glob': 'Glob', 'Grep': 'Grep' };
+    if (friendly[toolName]) return friendly[toolName];
+    // MCP tools: extract last part (e.g. mcp__claude-alarm__reply → Reply)
+    const mcpMatch = toolName.match(/__([^_]+)$/);
+    if (mcpMatch) return mcpMatch[1].charAt(0).toUpperCase() + mcpMatch[1].slice(1);
+    return toolName;
+  }
+
   // Returns { text, truncated } — truncated=true when input_preview was cut off
   function formatPermPreview(toolName, raw) {
     if (!raw) return { text: '', truncated: false };
@@ -1451,11 +1472,12 @@
     bar.innerHTML = reqs.map(r => {
       const { text: previewText, truncated } = formatPermPreview(r.toolName, r.inputPreview);
       const truncLabel = truncated ? '<span style="color:var(--text-dim);font-size:10px;font-style:italic"> ...truncated</span>' : '';
+      const displayName = formatToolName(r.toolName, r.inputPreview);
       return `<div class="perm-item">
         <div class="perm-icon">&#9888;</div>
         <div class="perm-info">
           <div class="perm-header">
-            <span class="perm-tool">${esc(r.toolName)}</span>
+            <span class="perm-tool">${esc(displayName)}</span>
           </div>
           ${previewText ? `<div class="perm-preview">${esc(previewText)}${truncLabel}</div>` : ''}
         </div>
