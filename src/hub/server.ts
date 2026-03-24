@@ -358,6 +358,21 @@ export class HubServer {
         });
         break;
       }
+
+      case 'permission_request': {
+        this.sessions.updateActivity(msg.sessionId);
+        logger.info(`Permission request [${msg.requestId}] from ${msg.sessionId}: ${msg.toolName}`);
+        this.broadcastToDashboards({
+          type: 'permission_request',
+          sessionId: msg.sessionId,
+          requestId: msg.requestId,
+          toolName: msg.toolName,
+          description: msg.description,
+          inputPreview: msg.inputPreview,
+          timestamp: msg.timestamp,
+        });
+        break;
+      }
     }
   }
 
@@ -384,6 +399,12 @@ export class HubServer {
           }
         } else if (msg.type === 'image_upload') {
           this.handleImageUpload(msg);
+        } else if (msg.type === 'permission_response') {
+          const channelWs = this.channelSockets.get(msg.sessionId);
+          if (channelWs?.readyState === WebSocket.OPEN) {
+            channelWs.send(JSON.stringify(msg));
+            logger.info(`Permission verdict [${msg.requestId}]: ${msg.behavior} -> session ${msg.sessionId}`);
+          }
         }
       } catch {
         logger.warn('Invalid message from dashboard');

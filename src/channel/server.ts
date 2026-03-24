@@ -4,6 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../shared/logger.js';
@@ -22,7 +23,10 @@ const server = new Server(
   },
   {
     capabilities: {
-      experimental: { 'claude/channel': {} },
+      experimental: {
+        'claude/channel': {},
+        'claude/channel/permission': {},
+      },
       tools: {},
     },
     instructions:
@@ -159,6 +163,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// --- Permission Relay ---
+
+const PermissionRequestSchema = z.object({
+  method: z.literal('notifications/claude/channel/permission_request'),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string(),
+    description: z.string(),
+    input_preview: z.string(),
+  }),
+});
+
+// Handle permission_request from Claude Code and forward to hub
+server.setNotificationHandler(
+  PermissionRequestSchema,
+  async (notification) => {
+    const { request_id, tool_name, description, input_preview } = notification.params;
+    logger.info(`Permission request [${request_id}]: ${tool_name} - ${description}`);
+    hubClient.send({
+      type: 'permission_request',
+      sessionId,
+      requestId: request_id,
+      toolName: tool_name,
+      description,
+      inputPreview: input_preview,
+      timestamp: Date.now(),
+    });
+  },
+);
+
 // --- Startup ---
 
 async function main() {
@@ -186,6 +220,15 @@ async function main() {
         params: {
           content: `[Image: ${msg.originalName || 'image'}] The user sent an image. Read the file to view it: ${msg.imagePath}${textPart}`,
           meta: { sender: 'dashboard', timestamp: String(Date.now()), imagePath: msg.imagePath, mimeType: msg.mimeType },
+        },
+      });
+    } else if (msg.type === 'permission_response' && msg.sessionId === sessionId) {
+      logger.info(`Permission verdict [${msg.requestId}]: ${msg.behavior}`);
+      await server.notification({
+        method: 'notifications/claude/channel/permission',
+        params: {
+          request_id: msg.requestId,
+          behavior: msg.behavior,
         },
       });
     }

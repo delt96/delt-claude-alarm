@@ -506,6 +506,159 @@
   .message-body li { margin: 2px 0; }
   .message-body strong { font-weight: 600; }
 
+  /* Permission request - fixed bar above input */
+  .permission-bar {
+    border-top: 2px solid var(--yellow);
+    background: linear-gradient(180deg, rgba(245,158,11,0.08) 0%, transparent 100%);
+    padding: 0;
+    display: none;
+  }
+  .permission-bar.active { display: block; }
+  .perm-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 20px;
+    animation: permSlideIn 0.3s ease-out;
+  }
+  @keyframes permSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .perm-item + .perm-item {
+    border-top: 1px solid var(--border);
+  }
+  .perm-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: rgba(245,158,11,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    animation: permPulse 2s ease-in-out infinite;
+  }
+  @keyframes permPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.2); }
+    50% { box-shadow: 0 0 0 6px rgba(245,158,11,0); }
+  }
+  .perm-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .perm-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .perm-tool {
+    font-family: monospace;
+    background: rgba(245,158,11,0.18);
+    color: var(--yellow);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .perm-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .perm-preview {
+    font-size: 12px;
+    color: var(--text);
+    font-family: monospace;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 10px;
+    margin-top: 5px;
+    max-height: 60px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  .perm-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .perm-actions button {
+    padding: 10px 28px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    border: none;
+    transition: all 0.15s;
+    letter-spacing: 0.3px;
+  }
+  .perm-actions button:active { transform: scale(0.96); }
+  .perm-allow {
+    background: var(--green);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(61,214,140,0.35);
+  }
+  .perm-allow:hover { background: #2fc77e; box-shadow: 0 3px 12px rgba(61,214,140,0.45); }
+  .perm-deny {
+    background: var(--red);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(239,68,68,0.3);
+    border: none !important;
+  }
+  .perm-deny:hover { background: #dc2626 !important; box-shadow: 0 3px 12px rgba(239,68,68,0.4); }
+  .perm-resolved-label {
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+    padding: 4px 12px;
+  }
+  .perm-resolved-label.allowed { color: var(--green); }
+  .perm-resolved-label.denied { color: var(--red); }
+  .perm-kbd {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: 2px;
+    font-weight: 400;
+  }
+  /* Permission in notification panel */
+  .notif-perm-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .notif-perm-actions button {
+    flex: 1;
+    padding: 6px 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    border: none;
+    transition: all 0.15s;
+  }
+  .notif-perm-actions button:active { transform: scale(0.96); }
+  .notif-perm-allow {
+    background: var(--green);
+    color: #fff;
+  }
+  .notif-perm-allow:hover { background: #2fc77e; }
+  .notif-perm-deny {
+    background: var(--red);
+    color: #fff;
+  }
+  .notif-perm-deny:hover { background: #dc2626; }
+
   .empty-state {
     color: var(--text-dim);
     font-size: 13px;
@@ -746,6 +899,7 @@
     </div>
     <button class="scroll-bottom" id="scrollBottom" title="Scroll to bottom">&#8595;</button>
     <div class="drag-overlay" id="dragOverlay">Drop image here</div>
+    <div class="permission-bar" id="permissionBar"></div>
     <div class="image-preview" id="imagePreview">
       <img id="previewImg" src="" alt="preview">
       <span class="preview-name" id="previewName"></span>
@@ -782,6 +936,7 @@
     pendingImage: null,
     unread: {},
     waitingReply: {},
+    permissionRequests: {},  // sessionId -> [{ requestId, toolName, description, inputPreview, timestamp, resolved, behavior }]
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -891,6 +1046,26 @@
         state.notifications.unshift({ sessionId: msg.sessionId, title: msg.title, message: msg.message, level: msg.level || 'info', time: msg.timestamp });
         renderNotifications();
         break;
+      case 'permission_request':
+        if (!state.permissionRequests[msg.sessionId]) state.permissionRequests[msg.sessionId] = [];
+        state.permissionRequests[msg.sessionId].unshift({
+          requestId: msg.requestId,
+          toolName: msg.toolName,
+          description: msg.description,
+          inputPreview: msg.inputPreview,
+          timestamp: msg.timestamp,
+          resolved: false,
+          behavior: null,
+        });
+        // Auto-select session if none selected
+        if (!state.selectedSession && state.sessions[msg.sessionId]) selectSession(msg.sessionId);
+        if (state.selectedSession === msg.sessionId) { renderMessages(); renderPermissionBar(); }
+        // Also show in notifications with permission info
+        state.notifications.unshift({ sessionId: msg.sessionId, title: 'Permission Request', message: `${msg.toolName}: ${msg.description}`, level: 'warning', time: msg.timestamp, permRequestId: msg.requestId });
+        renderNotifications();
+        // Play notification sound effect via title flash
+        flashTitle('Permission Request');
+        break;
     }
   }
 
@@ -977,6 +1152,7 @@
     if (state.waitingReply[state.selectedSession]) {
       el.innerHTML += '<div class="typing-indicator active"><div class="typing-dots"><span></span><span></span><span></span></div></div>';
     }
+    renderPermissionBar();
     setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
   }
 
@@ -993,9 +1169,25 @@
       const timeStr = relativeTime(n.time);
       const session = state.sessions[n.sessionId];
       const sName = session ? session.name : n.sessionId.slice(0, 8);
+      // Check if this is an unresolved permission request
+      let permButtons = '';
+      if (n.permRequestId) {
+        const reqs = state.permissionRequests[n.sessionId] || [];
+        const req = reqs.find(r => r.requestId === n.permRequestId);
+        if (req && !req.resolved) {
+          permButtons = `<div class="notif-perm-actions">
+            <button class="notif-perm-allow" data-req-id="${esc(n.permRequestId)}" data-session-id="${esc(n.sessionId)}">Allow</button>
+            <button class="notif-perm-deny" data-req-id="${esc(n.permRequestId)}" data-session-id="${esc(n.sessionId)}">Deny</button>
+          </div>`;
+        } else if (req && req.resolved) {
+          const label = req.behavior === 'allow' ? 'Allowed' : 'Denied';
+          const cls = req.behavior === 'allow' ? 'allowed' : 'denied';
+          permButtons = `<div class="perm-resolved-label ${cls}">${label}</div>`;
+        }
+      }
       return `<div class="notif-item" data-session="${n.sessionId}" data-index="${i}">
         <div class="notif-title"><span class="notif-level ${n.level}"></span><span class="notif-title-text">${esc(n.title)}</span><button class="notif-dismiss" data-index="${i}">&times;</button></div>
-        <div class="notif-message">${esc(n.message)}</div>
+        <div class="notif-message">${esc(n.message)}</div>${permButtons}
         <div class="notif-time">${sName} &middot; ${timeStr}</div>
       </div>`;
     }).join('');
@@ -1014,6 +1206,7 @@
         renderNotifications();
       });
     });
+    bindPermissionButtons(el);
   }
 
   // --- Image handling ---
@@ -1170,6 +1363,127 @@
     html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
     return html;
+  }
+
+  // --- Permission relay ---
+  function formatPermPreview(toolName, raw) {
+    if (!raw) return '';
+    // Try JSON parse
+    try {
+      const p = JSON.parse(raw);
+      switch (toolName) {
+        case 'Bash':
+          return p.command ? '$ ' + p.command : raw;
+        case 'Write':
+        case 'Edit':
+          if (p.file_path) {
+            let s = p.file_path;
+            if (p.new_string) s += '\n+ ' + p.new_string.slice(0, 200);
+            else if (p.content) s += '\n' + p.content.slice(0, 200);
+            return s;
+          }
+          return raw;
+        case 'Read':
+          return p.file_path || raw;
+        case 'Glob':
+          return p.pattern || raw;
+        case 'Grep':
+          return (p.pattern || '') + (p.path ? '  in ' + p.path : '');
+        default:
+          // Generic: show key=value pairs
+          const entries = Object.entries(p);
+          if (entries.length <= 3) return entries.map(([k, v]) => k + ': ' + String(v).slice(0, 100)).join('\n');
+          return JSON.stringify(p, null, 1).slice(0, 200);
+      }
+    } catch {
+      // Not valid JSON - show raw but clean up
+      return raw.slice(0, 200);
+    }
+  }
+
+  function sendPermissionVerdict(sessionId, requestId, behavior) {
+    if (!state.ws) return;
+    state.ws.send(JSON.stringify({ type: 'permission_response', sessionId, requestId, behavior }));
+    const reqs = state.permissionRequests[sessionId] || [];
+    const req = reqs.find(r => r.requestId === requestId);
+    if (req) {
+      req.resolved = true;
+      req.behavior = behavior;
+    }
+    renderPermissionBar();
+    renderNotifications();
+  }
+
+  function renderPermissionBar() {
+    const bar = $('#permissionBar');
+    const sid = state.selectedSession;
+    if (!sid) { bar.classList.remove('active'); bar.innerHTML = ''; return; }
+    const reqs = (state.permissionRequests[sid] || []).filter(r => !r.resolved);
+    if (!reqs.length) { bar.classList.remove('active'); bar.innerHTML = ''; return; }
+    bar.classList.add('active');
+    bar.innerHTML = reqs.map(r => {
+      const preview = formatPermPreview(r.toolName, r.inputPreview);
+      return `<div class="perm-item">
+        <div class="perm-icon">&#9888;</div>
+        <div class="perm-info">
+          <div class="perm-header">
+            <span class="perm-tool">${esc(r.toolName)}</span>
+            ${esc(r.description)}
+          </div>
+          ${preview ? `<div class="perm-preview">${esc(preview)}</div>` : ''}
+        </div>
+        <div class="perm-actions">
+          <button class="perm-allow" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Allow <span class="perm-kbd">(Enter)</span></button>
+          <button class="perm-deny" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Deny <span class="perm-kbd">(Esc)</span></button>
+        </div>
+      </div>`;
+    }).join('');
+    bindPermissionButtons(bar);
+  }
+
+  function bindPermissionButtons(container) {
+    (container || document).querySelectorAll('.perm-allow, .notif-perm-allow').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); sendPermissionVerdict(btn.dataset.sessionId, btn.dataset.reqId, 'allow'); });
+    });
+    (container || document).querySelectorAll('.perm-deny, .notif-perm-deny').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); sendPermissionVerdict(btn.dataset.sessionId, btn.dataset.reqId, 'deny'); });
+    });
+  }
+
+  // Keyboard shortcuts: Enter=allow, Esc=deny — works even in textarea when permission is pending
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    const sid = state.selectedSession;
+    if (!sid) return;
+    const reqs = state.permissionRequests[sid] || [];
+    const pending = reqs.find(r => !r.resolved);
+    if (!pending) return;
+    // Permission pending: intercept Enter/Esc everywhere (even in textarea)
+    // Shift+Enter in textarea still inserts newline
+    if (e.key === 'Enter' && e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    sendPermissionVerdict(sid, pending.requestId, e.key === 'Enter' ? 'allow' : 'deny');
+  }, true);
+
+  // Flash title for attention
+  let flashInterval = null;
+  function flashTitle(msg) {
+    const original = document.title;
+    let on = true;
+    clearInterval(flashInterval);
+    flashInterval = setInterval(() => {
+      document.title = on ? `** ${msg} **` : original;
+      on = !on;
+    }, 500);
+    const stopFlash = () => {
+      clearInterval(flashInterval);
+      flashInterval = null;
+      document.title = original;
+      window.removeEventListener('focus', stopFlash);
+    };
+    window.addEventListener('focus', stopFlash);
+    setTimeout(stopFlash, 30000);
   }
 
   // Clear all notifications

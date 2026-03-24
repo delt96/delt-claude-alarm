@@ -28,6 +28,8 @@ export type ChannelMessage =
   | { type: 'session_updated'; session: SessionInfo }
   | { type: 'notification'; sessionId: string; title: string; message: string; level?: NotifyLevel; timestamp: number }
   | { type: 'reply_from_session'; sessionId: string; content: string; timestamp: number }
+  | { type: 'permission_request'; sessionId: string; requestId: string; toolName: string; description: string; inputPreview: string; timestamp: number }
+  | { type: 'permission_response'; sessionId: string; requestId: string; behavior: 'allow' | 'deny' }
   | { type: 'error'; message: string };
 
 export type NotifyLevel = 'info' | 'warning' | 'error' | 'success';
