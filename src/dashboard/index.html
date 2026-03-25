@@ -944,6 +944,40 @@
 
   const $ = (sel) => document.querySelector(sel);
 
+  // --- Message persistence (localStorage, last 5 per session) ---
+  const MSG_STORAGE_KEY = 'claude-alarm-messages';
+  const MSG_LIMIT = 5;
+
+  function saveMessages() {
+    try {
+      const data = {};
+      for (const [sid, msgs] of Object.entries(state.messages)) {
+        if (msgs.length) {
+          // Exclude imageData to save localStorage space
+          data[sid] = msgs.slice(-MSG_LIMIT).map(m => {
+            if (m.imageData) return { ...m, imageData: null, imageName: m.imageName ? '[image] ' + m.imageName : null };
+            return m;
+          });
+        }
+      }
+      localStorage.setItem(MSG_STORAGE_KEY, JSON.stringify(data));
+    } catch {}
+  }
+
+  function loadMessages() {
+    try {
+      const raw = localStorage.getItem(MSG_STORAGE_KEY);
+      if (raw) {
+        const data = JSON.parse(raw);
+        for (const [sid, msgs] of Object.entries(data)) {
+          if (Array.isArray(msgs) && msgs.length) state.messages[sid] = msgs;
+        }
+      }
+    } catch {}
+  }
+
+  loadMessages();
+
   // --- Theme ---
   function initTheme() {
     const saved = localStorage.getItem('claude-alarm-theme') || 'dark';
@@ -1039,6 +1073,7 @@
       case 'reply_from_session':
         if (!state.messages[msg.sessionId]) state.messages[msg.sessionId] = [];
         state.messages[msg.sessionId].push({ from: 'session', content: msg.content, time: msg.timestamp });
+        saveMessages();
         state.waitingReply[msg.sessionId] = false;
         if (state.selectedSession === msg.sessionId) { renderMessages(); }
         else { state.unread[msg.sessionId] = (state.unread[msg.sessionId] || 0) + 1; renderSessions(); }
@@ -1322,6 +1357,7 @@
       imageName: hasImage ? state.pendingImage.name : null,
       time: Date.now(),
     });
+    saveMessages();
 
     input.value = '';
     input.style.height = 'auto';
