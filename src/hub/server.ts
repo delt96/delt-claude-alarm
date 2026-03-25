@@ -538,6 +538,10 @@ export class HubServer {
     if (!telegram) { this.jsonResponse(res, 400, { error: 'telegram config required' }); return; }
 
     const config = loadConfig();
+    // If botToken is masked (contains '...'), keep the existing token
+    if (telegram.botToken.includes('...') && config.telegram?.botToken) {
+      telegram.botToken = config.telegram.botToken;
+    }
     config.telegram = telegram;
     saveConfig(config);
 

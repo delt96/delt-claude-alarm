@@ -1793,6 +1793,7 @@
     const chatId = $('#tgChatId').value.trim();
     const enabled = $('#tgEnabled').checked;
     if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
+    if (botToken.includes('...')) { showTgStatus('Bot Token is masked. Please enter the full token.', false); return; }
     try {
       const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
       await fetch(`/api/telegram${tokenQuery}`, {
