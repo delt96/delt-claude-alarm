@@ -1203,7 +1203,11 @@
       el.innerHTML += '<div class="typing-indicator active"><div class="typing-dots"><span></span><span></span><span></span></div></div>';
     }
     renderPermissionBar();
-    setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
+    // Only auto-scroll if user is near the bottom (within 150px)
+    setTimeout(() => {
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (gap < 150) el.scrollTop = el.scrollHeight;
+    }, 0);
   }
 
   function renderNotifications() {
