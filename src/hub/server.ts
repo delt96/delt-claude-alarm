@@ -651,7 +651,7 @@ export class HubServer {
 
   private getSessionLabel(session?: SessionInfo): string {
     if (!session) return 'unknown';
-    return session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+    return session.displayName || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
   }
 
   private jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {

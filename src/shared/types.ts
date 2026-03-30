@@ -5,6 +5,7 @@ export type SessionStatus = 'idle' | 'working' | 'waiting_input';
 export interface SessionInfo {
   id: string;
   name: string;
+  displayName?: string;
   status: SessionStatus;
   connectedAt: number;
   lastActivity: number;

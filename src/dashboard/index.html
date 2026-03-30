@@ -1131,9 +1131,11 @@
       const active = state.selectedSession === id ? ' active' : '';
       const cwdDisplay = s.cwd ? s.cwd.replace(/^.*[/\\]/, '') : '';
       const unread = state.unread[id] || 0;
+      const dispName = s.displayName || s.name;
+      const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return `<div class="session-card${active}" data-id="${id}">
-        <div class="session-name">${esc(s.name)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
-        ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)}</div>` : ''}
+        <div class="session-name">${esc(dispName)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
+        ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} · ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
         <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
       </div>`;
     }).join('');
@@ -1175,7 +1177,7 @@
     }
 
     const s = state.sessions[state.selectedSession];
-    header.textContent = s ? s.name : state.selectedSession.slice(0, 12);
+    header.textContent = s ? (s.displayName || s.name) : state.selectedSession.slice(0, 12);
 
     const msgs = state.messages[state.selectedSession] || [];
     if (!msgs.length) {

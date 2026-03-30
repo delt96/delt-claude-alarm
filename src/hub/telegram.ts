@@ -301,7 +301,7 @@ export class TelegramBot {
   }
 
   private getLabel(session: SessionInfo): string {
-    return session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+    return session.displayName || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
   }
 
   /** Send a permission request with inline buttons */
