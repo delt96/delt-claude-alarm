@@ -693,7 +693,8 @@ if (process.argv[1] && (
   process.argv[1].endsWith('hub/server.js') ||
   process.argv[1].endsWith('hub/server.ts')
 )) {
-  const hub = new HubServer();
+  const config = loadConfig();
+  const hub = new HubServer(config);
   hub.start().catch((err) => {
     logger.error('Failed to start hub:', err);
     process.exit(1);
