@@ -36,6 +36,8 @@ export class HubServer {
   private dashboardSockets = new Set<WebSocket>();
 
   private telegramBot?: TelegramBot;
+  private heartbeatInterval?: ReturnType<typeof setInterval>;
+  private channelAlive = new Map<string, boolean>(); // sessionId -> alive flag
 
   private host: string;
   private port: number;
@@ -104,6 +106,7 @@ export class HubServer {
 
   async start(): Promise<void> {
     this.cleanupUploads();
+    this.startHeartbeat();
     return new Promise((resolve, reject) => {
       this.httpServer.on('error', reject);
       this.httpServer.listen(this.port, this.host, () => {
@@ -116,6 +119,9 @@ export class HubServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      // Stop heartbeat
+      if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+
       // Stop telegram bot
       if (this.telegramBot) this.telegramBot.stopPolling();
 
@@ -150,7 +156,7 @@ export class HubServer {
     if (origin && (origin.includes('127.0.0.1') || origin.includes('localhost'))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
@@ -184,6 +190,20 @@ export class HubServer {
         sessions: this.sessions.count(),
         uptime: Date.now() - this.startTime,
       });
+    } else if (url.pathname.startsWith('/api/sessions/') && req.method === 'DELETE') {
+      const sessionId = url.pathname.slice('/api/sessions/'.length);
+      const ws = this.channelSockets.get(sessionId);
+      if (ws) { ws.terminate(); }
+      const session = this.sessions.unregister(sessionId);
+      this.channelSockets.delete(sessionId);
+      this.localChannels.delete(sessionId);
+      this.channelAlive.delete(sessionId);
+      if (session) {
+        this.broadcastToDashboards({ type: 'session_disconnected', sessionId });
+        this.jsonResponse(res, 200, { ok: true });
+      } else {
+        this.jsonResponse(res, 404, { error: 'Session not found' });
+      }
     } else if (url.pathname === '/api/send' && req.method === 'POST') {
       this.handleApiSend(req, res);
     } else if (url.pathname === '/api/notify' && req.method === 'POST') {
@@ -277,6 +297,13 @@ export class HubServer {
     const isLocal = this.isLocalRequest(req);
     logger.info(`Channel server connected (local: ${isLocal})`);
 
+    // Track pong responses for heartbeat
+    ws.on('pong', () => {
+      for (const [sessionId, sock] of this.channelSockets) {
+        if (sock === ws) { this.channelAlive.set(sessionId, true); break; }
+      }
+    });
+
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString()) as ChannelMessage;
@@ -293,6 +320,7 @@ export class HubServer {
           const session = this.sessions.unregister(sessionId);
           this.channelSockets.delete(sessionId);
           this.localChannels.delete(sessionId);
+          this.channelAlive.delete(sessionId);
           logger.info(`Channel disconnected: ${sessionId}`);
           this.broadcastToDashboards({
             type: 'session_disconnected',
@@ -636,6 +664,22 @@ export class HubServer {
     } catch (err) {
       this.jsonResponse(res, 500, { error: (err as Error).message });
     }
+  }
+
+  private startHeartbeat(): void {
+    // Ping channel WebSockets every 30s, terminate unresponsive ones
+    this.heartbeatInterval = setInterval(() => {
+      for (const [sessionId, ws] of this.channelSockets) {
+        if (this.channelAlive.get(sessionId) === false) {
+          // No pong received since last ping — terminate
+          logger.info(`Heartbeat timeout, terminating session: ${sessionId}`);
+          ws.terminate();
+          continue;
+        }
+        this.channelAlive.set(sessionId, false);
+        ws.ping();
+      }
+    }, 30000);
   }
 
   private cleanupUploads(): void {

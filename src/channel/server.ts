@@ -237,6 +237,18 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info('MCP channel server running on stdio');
+
+  // Exit when stdin closes (Claude Code session ended)
+  process.stdin.on('end', () => {
+    logger.info('stdin closed, exiting');
+    hubClient.disconnect();
+    process.exit(0);
+  });
+  process.stdin.on('close', () => {
+    logger.info('stdin closed, exiting');
+    hubClient.disconnect();
+    process.exit(0);
+  });
 }
 
 main().catch((err) => {
