@@ -466,17 +466,29 @@ export class TelegramBot {
         return `**${headerLine}**\n${bodyLines.join('\n')}`;
       },
     );
+    // Extract code spans/blocks BEFORE escaping/formatting so that bold/italic
+    // regexes can't cross into them and produce overlapping tags (Telegram rejects).
+    const tokens: string[] = [];
+    const placeholder = (i: number) => `\u0000CODE${i}\u0000`;
+    text = text.replace(/```(?:\w*)\n?([\s\S]*?)```/g, (_m, body: string) => {
+      const i = tokens.push(`<pre>${this.escHtml(body)}</pre>`) - 1;
+      return placeholder(i);
+    });
+    text = text.replace(/`([^`\n]+)`/g, (_m, body: string) => {
+      const i = tokens.push(`<code>${this.escHtml(body)}</code>`) - 1;
+      return placeholder(i);
+    });
+
     let html = this.escHtml(text);
-    // Code blocks: ```...```
-    html = html.replace(/```(?:\w*)\n?([\s\S]*?)```/g, '<pre>$1</pre>');
-    // Inline code: `...`
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     // Headings: # / ## / ### → bold (Telegram has no heading tags)
     html = html.replace(/^#{1,3}\s+(.+)$/gm, '<b>$1</b>');
     // Bold: **...**
     html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-    // Italic: *...*
-    html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
+    // Italic: *...* (single line only, to avoid swallowing across blocks)
+    html = html.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
+
+    // Restore code tokens
+    html = html.replace(/\u0000CODE(\d+)\u0000/g, (_m, n: string) => tokens[Number(n)] ?? '');
     return html;
   }
 
