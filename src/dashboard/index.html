@@ -150,10 +150,42 @@
     padding: 12px;
     margin-bottom: 8px;
     cursor: pointer;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, opacity 0.15s;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
   }
   .session-card:hover, .session-card.active {
     border-color: var(--accent);
+  }
+  .session-card.dragging { opacity: 0.4; }
+  .session-card.drag-over { border-color: var(--accent); border-style: dashed; }
+  .session-body { flex: 1; min-width: 0; }
+  .drag-handle {
+    flex-shrink: 0;
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1.4;
+    cursor: grab;
+    opacity: 0.45;
+    user-select: none;
+    padding-top: 1px;
+    transition: opacity 0.15s, color 0.15s;
+  }
+  .session-card:hover .drag-handle { opacity: 0.8; }
+  .drag-handle:hover { opacity: 1 !important; color: var(--accent); }
+  .drag-handle:active { cursor: grabbing; }
+  .name-edit-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 1px 5px;
+    outline: none;
+    font-family: inherit;
   }
   .session-name {
     font-size: 14px;
@@ -940,6 +972,7 @@
     unread: {},
     waitingReply: {},
     permissionRequests: {},  // sessionId -> [{ requestId, toolName, description, inputPreview, timestamp, resolved, behavior }]
+    sessionMeta: { names: {}, order: [] },  // custom names + order, keyed by volatile sessionId
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -977,6 +1010,67 @@
   }
 
   loadMessages();
+
+  // --- Session meta persistence (custom names + order) ---
+  // Keyed by sessionId, which is volatile: same id survives a browser refresh
+  // (terminal stays alive) but changes on reconnect/server restart, so renamed
+  // names and custom order naturally reset when a session truly ends.
+  const META_STORAGE_KEY = 'claude-alarm-session-meta';
+
+  function saveSessionMeta() {
+    try { localStorage.setItem(META_STORAGE_KEY, JSON.stringify(state.sessionMeta)); } catch {}
+  }
+
+  function loadSessionMeta() {
+    try {
+      const raw = localStorage.getItem(META_STORAGE_KEY);
+      if (raw) {
+        const data = JSON.parse(raw);
+        state.sessionMeta = {
+          names: (data && typeof data.names === 'object' && data.names) || {},
+          order: Array.isArray(data && data.order) ? data.order : [],
+        };
+      }
+    } catch {}
+  }
+
+  // Drop meta + messages for sessions that no longer exist. Must run only after
+  // a sessions_list arrives (state.sessions populated), never on initial load.
+  function pruneSessionData() {
+    const live = new Set(Object.keys(state.sessions));
+    let metaChanged = false;
+    for (const id of Object.keys(state.sessionMeta.names)) {
+      if (!live.has(id)) { delete state.sessionMeta.names[id]; metaChanged = true; }
+    }
+    const trimmedOrder = state.sessionMeta.order.filter(id => live.has(id));
+    if (trimmedOrder.length !== state.sessionMeta.order.length) {
+      state.sessionMeta.order = trimmedOrder;
+      metaChanged = true;
+    }
+    if (metaChanged) saveSessionMeta();
+
+    let msgChanged = false;
+    for (const id of Object.keys(state.messages)) {
+      if (!live.has(id)) { delete state.messages[id]; msgChanged = true; }
+    }
+    if (msgChanged) saveMessages();
+  }
+
+  loadSessionMeta();
+
+  // Ordered session ids: explicitly-ordered ones first (in saved order),
+  // then any newly-arrived sessions in registration order.
+  function getOrderedSessionIds() {
+    const liveSet = new Set(Object.keys(state.sessions));
+    const ordered = state.sessionMeta.order.filter(id => liveSet.has(id));
+    const orderedSet = new Set(ordered);
+    const rest = Object.keys(state.sessions).filter(id => !orderedSet.has(id));
+    return [...ordered, ...rest];
+  }
+
+  function sessionDisplayName(s) {
+    return state.sessionMeta.names[s.id] || s.displayName || s.name;
+  }
 
   // --- Theme ---
   function initTheme() {
@@ -1054,6 +1148,7 @@
       case 'sessions_list':
         state.sessions = {};
         msg.sessions.forEach(s => { state.sessions[s.id] = s; });
+        pruneSessionData();
         renderSessions();
         break;
       case 'session_connected':
@@ -1063,6 +1158,9 @@
         break;
       case 'session_disconnected':
         delete state.sessions[msg.sessionId];
+        delete state.sessionMeta.names[msg.sessionId];
+        state.sessionMeta.order = state.sessionMeta.order.filter(id => id !== msg.sessionId);
+        saveSessionMeta();
         if (state.selectedSession === msg.sessionId) { state.selectedSession = null; renderMessages(); }
         renderSessions();
         break;
@@ -1121,7 +1219,7 @@
   // --- Render ---
   function renderSessions() {
     const el = $('#sessionsList');
-    const ids = Object.keys(state.sessions);
+    const ids = getOrderedSessionIds();
     if (!ids.length) {
       el.innerHTML = '<div class="no-sessions">No active sessions.<br>Click + to see connection commands.</div>';
       return;
@@ -1131,18 +1229,128 @@
       const active = state.selectedSession === id ? ' active' : '';
       const cwdDisplay = s.cwd ? s.cwd.replace(/^.*[/\\]/, '') : '';
       const unread = state.unread[id] || 0;
-      const dispName = s.displayName || s.name;
+      const dispName = sessionDisplayName(s);
       const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return `<div class="session-card${active}" data-id="${id}">
-        <div class="session-name">${esc(dispName)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
-        ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} · ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
-        <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
+        <span class="drag-handle" title="Drag to reorder">&#10303;</span>
+        <div class="session-body">
+          <div class="session-name" title="Double-click to rename">${esc(dispName)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
+          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
+          <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
+        </div>
       </div>`;
     }).join('');
-    el.querySelectorAll('.session-card').forEach(card => {
-      card.addEventListener('click', () => selectSession(card.dataset.id));
-    });
+    bindSessionCards(el);
     updateImageUI();
+  }
+
+  function bindSessionCards(el) {
+    el.querySelectorAll('.session-card').forEach(card => {
+      const id = card.dataset.id;
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.drag-handle')) return;
+        if (e.target.classList.contains('name-edit-input')) return;
+        selectSession(id);
+      });
+      const nameEl = card.querySelector('.session-name');
+      nameEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        startRename(id, nameEl);
+      });
+      // Drag only via handle: enable draggable on handle press, reset on dragend
+      const handle = card.querySelector('.drag-handle');
+      handle.addEventListener('mousedown', () => card.setAttribute('draggable', 'true'));
+      handle.addEventListener('touchstart', () => card.setAttribute('draggable', 'true'), { passive: true });
+      // Reset draggable if the handle was pressed but no drag occurred
+      card.addEventListener('mouseup', () => card.setAttribute('draggable', 'false'));
+      card.addEventListener('dragstart', (e) => onDragStart(e, id, card));
+      card.addEventListener('dragend', () => onDragEnd(card));
+      card.addEventListener('dragover', (e) => onDragOver(e, card));
+      card.addEventListener('drop', (e) => onDrop(e, id, card));
+    });
+  }
+
+  // --- Rename (inline edit) ---
+  function startRename(id, nameEl) {
+    const s = state.sessions[id];
+    if (!s) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'name-edit-input';
+    input.value = sessionDisplayName(s);
+    nameEl.innerHTML = '';
+    nameEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = (save) => {
+      if (done) return;
+      done = true;
+      if (save) {
+        const val = input.value.trim();
+        const baseName = s.displayName || s.name;
+        if (!val || val === baseName) delete state.sessionMeta.names[id];
+        else state.sessionMeta.names[id] = val;
+        saveSessionMeta();
+      }
+      renderSessions();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+    input.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  // --- Reorder (drag & drop) ---
+  let dragSrcId = null;
+
+  function onDragStart(e, id, card) {
+    dragSrcId = id;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', id); } catch {}
+  }
+
+  function onDragEnd(card) {
+    card.classList.remove('dragging');
+    card.setAttribute('draggable', 'false');
+    document.querySelectorAll('.session-card.drag-over').forEach(c => c.classList.remove('drag-over'));
+    dragSrcId = null;
+  }
+
+  function onDragOver(e, card) {
+    if (!dragSrcId || card.dataset.id === dragSrcId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    document.querySelectorAll('.session-card.drag-over').forEach(c => { if (c !== card) c.classList.remove('drag-over'); });
+    card.classList.add('drag-over');
+  }
+
+  function onDrop(e, targetId, card) {
+    e.preventDefault();
+    card.classList.remove('drag-over');
+    if (!dragSrcId || dragSrcId === targetId) return;
+    const rect = card.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height / 2;
+    reorderSessions(dragSrcId, targetId, after);
+  }
+
+  function reorderSessions(srcId, targetId, after) {
+    const order = getOrderedSessionIds();
+    const from = order.indexOf(srcId);
+    if (from === -1) return;
+    order.splice(from, 1);
+    let to = order.indexOf(targetId);
+    if (to === -1) return;
+    if (after) to += 1;
+    order.splice(to, 0, srcId);
+    state.sessionMeta.order = order;
+    saveSessionMeta();
+    renderSessions();
   }
 
   function selectSession(id) {
@@ -1152,7 +1360,13 @@
     $('#msgInput').disabled = false;
     $('#sendBtn').disabled = false;
     $('#msgInput').placeholder = 'Send a message to session... (Shift+Enter for new line)';
-    renderSessions();
+    // Update active highlight + clear unread badge in place. A full renderSessions()
+    // here would replace the card DOM mid-click and break the rename double-click.
+    document.querySelectorAll('#sessionsList .session-card').forEach(c => {
+      const isSel = c.dataset.id === id;
+      c.classList.toggle('active', isSel);
+      if (isSel) { const badge = c.querySelector('.unread-badge'); if (badge) badge.remove(); }
+    });
     renderMessages();
     updateImageUI();
     $('#msgInput').focus();
@@ -1177,7 +1391,7 @@
     }
 
     const s = state.sessions[state.selectedSession];
-    header.textContent = s ? (s.displayName || s.name) : state.selectedSession.slice(0, 12);
+    header.textContent = s ? sessionDisplayName(s) : state.selectedSession.slice(0, 12);
 
     const msgs = state.messages[state.selectedSession] || [];
     if (!msgs.length) {
@@ -1224,7 +1438,7 @@
     el.innerHTML = state.notifications.slice(0, 50).map((n, i) => {
       const timeStr = relativeTime(n.time);
       const session = state.sessions[n.sessionId];
-      const sName = session ? session.name : n.sessionId.slice(0, 8);
+      const sName = session ? sessionDisplayName(session) : n.sessionId.slice(0, 8);
       // Check if this is an unresolved permission request
       let permButtons = '';
       if (n.permRequestId) {
@@ -1559,6 +1773,7 @@
   // Keyboard shortcuts: Enter=allow, Esc=deny — works even in textarea when permission is pending
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    if (e.target.classList && e.target.classList.contains('name-edit-input')) return;
     const sid = state.selectedSession;
     if (!sid) return;
     const reqs = state.permissionRequests[sid] || [];
