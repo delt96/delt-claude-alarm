@@ -29,14 +29,20 @@ const server = new Server(
       },
       tools: {},
     },
-    instructions:
-      'Messages from the claude-alarm dashboard arrive as <channel source="claude-alarm" sender="...">. ' +
-      'Read the message and act on it. Reply with the same detail and depth as you normally would — do not shorten your response. ' +
-      'IMPORTANT: The dashboard user can ONLY see messages sent via the reply tool. Your terminal output is NOT visible on the dashboard. ' +
-      'Therefore, when responding to a dashboard message, you MUST call the reply tool with your response so the dashboard user can see it. ' +
-      'Use the notify tool to send desktop notifications for key events: task completion, errors, or when user input is needed. ' +
-      'Do NOT notify for intermediate steps or simple acknowledgments. ' +
-      'Use the status tool to update your session status.',
+    instructions: `Messages from the claude-alarm dashboard arrive as <channel source="claude-alarm" sender="...">. Read the message and act on it.
+
+REPLYING:
+- The dashboard user ONLY sees messages sent via the reply tool — your terminal output is invisible to them. You MUST call reply with your response.
+- The dashboard renders Markdown (headings, lists, tables, code blocks). Provide a thorough, complete answer; do not apply CLI-style brevity.
+- Reply in the user's language (match the language they wrote in).
+
+IMAGES: If a channel message contains "[Image: ...] Read the file to view it: <path>", use the Read tool on that path before responding — otherwise the image is invisible to you.
+
+STATUS: Call status("working") before starting a long task, status("waiting_input") when blocked on user input, status("idle") when finished responding.
+
+NOTIFICATIONS:
+- Use notify only for key events: task completion, errors, or when user attention is needed. Not for intermediate steps or simple acknowledgments.
+- Pick level: success=completion, error=failure, warning=attention needed, info=neutral status.`,
   },
 );
 
