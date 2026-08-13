@@ -16,6 +16,7 @@ import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
 import { TelegramBot } from './telegram.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
+import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,13 +72,19 @@ export class HubServer {
     // WebSocket for channel servers
     this.wssChannel = new WebSocketServer({ noServer: true });
     this.wssChannel.on('connection', (ws: WebSocket, req: http.IncomingMessage) => this.handleChannelConnection(ws, req));
+    this.wssChannel.on('error', (err) => logger.warn(`Channel WebSocket server error: ${err.message}`));
 
     // WebSocket for dashboard
     this.wssDashboard = new WebSocketServer({ noServer: true });
     this.wssDashboard.on('connection', (ws) => this.handleDashboardConnection(ws));
+    this.wssDashboard.on('error', (err) => logger.warn(`Dashboard WebSocket server error: ${err.message}`));
 
     // Route WebSocket upgrade requests
     this.httpServer.on('upgrade', (req, socket, head) => {
+      // Once 'upgrade' has a listener the socket is ours; an unhandled 'error'
+      // on it would take the whole process down.
+      socket.on('error', (err) => logger.debug(`Upgrade socket error: ${err.message}`));
+
       const url = new URL(req.url!, `http://${req.headers.host}`);
       const pathname = url.pathname;
 
@@ -108,8 +115,12 @@ export class HubServer {
     this.cleanupUploads();
     this.startHeartbeat();
     return new Promise((resolve, reject) => {
-      this.httpServer.on('error', reject);
+      const onStartupError = (err: Error) => reject(err);
+      this.httpServer.once('error', onStartupError);
       this.httpServer.listen(this.port, this.host, () => {
+        // Past startup a rejected promise is a no-op, so errors must be logged instead
+        this.httpServer.removeListener('error', onStartupError);
+        this.httpServer.on('error', (err) => logger.error(`HTTP server error: ${err.message}`));
         const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
         logger.info(`Hub server listening on http://${displayHost}:${this.port}`);
         resolve();
@@ -297,6 +308,14 @@ export class HubServer {
     const isLocal = this.isLocalRequest(req);
     logger.info(`Channel server connected (local: ${isLocal})`);
 
+    // ws emits 'error' for protocol violations and socket failures; without a
+    // listener Node rethrows it and kills the hub. 'close' still follows, so
+    // session cleanup is handled there.
+    ws.on('error', (err) => {
+      logger.warn(`Channel WebSocket error: ${err.message}`);
+      ws.terminate();
+    });
+
     // Track pong responses for heartbeat
     ws.on('pong', () => {
       for (const [sessionId, sock] of this.channelSockets) {
@@ -415,6 +434,11 @@ export class HubServer {
   private handleDashboardConnection(ws: WebSocket): void {
     this.dashboardSockets.add(ws);
     logger.info(`Dashboard connected (total: ${this.dashboardSockets.size})`);
+
+    ws.on('error', (err) => {
+      logger.warn(`Dashboard WebSocket error: ${err.message}`);
+      ws.terminate();
+    });
 
     // Send current session list
     const sessionsMsg: ChannelMessage = {
@@ -737,6 +761,8 @@ if (process.argv[1] && (
   process.argv[1].endsWith('hub/server.js') ||
   process.argv[1].endsWith('hub/server.ts')
 )) {
+  installCrashGuard('hub daemon');
+  logStartup('Hub daemon');
   const config = loadConfig();
   const hub = new HubServer(config);
   hub.start().catch((err) => {

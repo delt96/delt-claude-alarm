@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken } from './shared/config.js';
 import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT } from './shared/constants.js';
 import { logger } from './shared/logger.js';
+import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +97,9 @@ async function hubStart(daemon: boolean) {
     // Foreground mode - import and run directly
     console.log(`Starting hub on http://${displayHost}:${port} (press Ctrl+C to stop)`);
     console.log(`Token: ${config.hub.token}`);
+    console.log(`Logs: ${LOG_FILE}`);
+    installCrashGuard('hub foreground');
+    logStartup('Hub foreground');
     const { HubServer } = await import('./hub/server.js');
     const hub = new HubServer(config);
     await hub.start();
