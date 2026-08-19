@@ -306,35 +306,46 @@ export class TelegramBot {
 
   /** Send a permission request with inline buttons */
   async sendPermissionRequest(sessionId: string, sessionLabel: string, requestId: string, toolName: string, description: string, inputPreview: string): Promise<void> {
-    // Parse inputPreview for readable display
+    // Parse inputPreview for readable display.
+    // kind 'code' must stay byte-exact: running it through mdToHtml would swallow the
+    // ** and ` characters the approver needs to judge what actually gets executed.
+    // Only notify-style messages (prose Claude wrote) are safe to render as markdown.
+    const isNotify = toolName.endsWith('__notify') || toolName === 'notify';
     let preview = inputPreview;
+    let kind: 'code' | 'prose' = 'code';
+    let lang = '';
     let truncated = false;
     try {
       const p = JSON.parse(inputPreview);
-      if (p.command) preview = `$ ${p.command}`;
-      else if (p.title && p.message) preview = p.message;
+      if (p.command) { preview = `$ ${p.command}`; lang = 'bash'; }
+      else if (p.title && p.message) { preview = p.message; kind = 'prose'; }
       else if (p.file_path) {
         preview = p.file_path;
+        lang = this.langOf(p.file_path);
         if (p.content) { preview += '\n' + p.content.slice(0, 3000); if (p.content.length > 500) truncated = true; }
       } else if (p.content && typeof p.content === 'string') {
         preview = p.content.slice(0, 3000);
+        if (isNotify) kind = 'prose';
         if (p.content.length > 500) truncated = true;
       }
     } catch {
       truncated = true;
       const cmdMatch = inputPreview.match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const contentMatch = inputPreview.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      if (cmdMatch) preview = `$ ${cmdMatch[1]}`;
+      if (cmdMatch) { preview = `$ ${cmdMatch[1]}`; lang = 'bash'; }
       else if (contentMatch) preview = contentMatch[1].slice(0, 3000);
     }
 
     const truncNote = truncated ? '\n\n<i>...truncated</i>' : '';
     const previewSlice = preview.slice(0, 3000);
-    // Use <code> for short single-line (commands), plain text for longer content
+    // Short single-line commands read better inline; anything longer gets a code block
     const isShort = !previewSlice.includes('\n') && previewSlice.length < 100;
-    const previewHtml = isShort
-      ? `<code>${this.escHtml(previewSlice)}</code>`
-      : this.escHtml(previewSlice);
+    const langAttr = lang ? ` class="language-${lang}"` : '';
+    const previewHtml = kind === 'prose'
+      ? this.mdToHtml(previewSlice)
+      : isShort
+        ? `<code>${this.escHtml(previewSlice)}</code>`
+        : `<pre><code${langAttr}>${this.escHtml(previewSlice)}</code></pre>`;
     // Friendly tool name for Telegram — use title for notify tools
     let displayTool = toolName;
     if ((toolName.endsWith('__notify') || toolName === 'notify') && inputPreview) {
@@ -450,6 +461,20 @@ export class TelegramBot {
 
   private escHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  private static readonly LANG_BY_EXT: Record<string, string> = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', go: 'go',
+    java: 'java', kt: 'kotlin', rs: 'rust', php: 'php', cs: 'csharp',
+    sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+    json: 'json', yml: 'yaml', yaml: 'yaml', xml: 'xml', sql: 'sql',
+    md: 'markdown', html: 'html', vue: 'html', css: 'css', scss: 'scss',
+  };
+
+  private langOf(path: string): string {
+    const m = /\.([a-z0-9]+)$/i.exec(path || '');
+    return m ? (TelegramBot.LANG_BY_EXT[m[1].toLowerCase()] ?? '') : '';
   }
 
   /** Convert markdown to Telegram HTML (escape first, then apply formatting) */

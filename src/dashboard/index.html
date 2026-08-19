@@ -617,12 +617,35 @@
     border-radius: 5px;
     padding: 6px 10px;
     margin-top: 5px;
-    max-height: 60px;
-    overflow-y: auto;
+    max-height: 220px;
+    overflow: auto;
     white-space: pre-wrap;
     word-break: break-all;
     line-height: 1.4;
   }
+  .perm-preview pre {
+    margin: 0;
+    white-space: pre;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .perm-preview code { font-family: inherit; }
+  .perm-preview.prose {
+    font-family: inherit;
+    white-space: normal;
+    word-break: normal;
+  }
+  .perm-preview.prose pre,
+  .perm-preview.prose code { font-family: monospace; }
+  .perm-preview.prose ul { margin: 4px 0; padding-left: 20px; }
+  .perm-preview.prose li { margin: 2px 0; }
+  .perm-preview.prose strong { font-weight: 600; }
+  .perm-preview.prose h2,
+  .perm-preview.prose h3,
+  .perm-preview.prose h4 { font-size: 12px; font-weight: 600; margin: 4px 0; }
+  .perm-preview.prose table { border-collapse: collapse; margin: 4px 0; font-size: 11px; }
+  .perm-preview.prose th,
+  .perm-preview.prose td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; }
   .perm-actions {
     display: flex;
     gap: 10px;
@@ -1670,9 +1693,26 @@
     return toolName;
   }
 
-  // Returns { text } — dashboard shows full content, no truncation
+  const LANG_BY_EXT = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', go: 'go',
+    java: 'java', kt: 'kotlin', rs: 'rust', php: 'php', cs: 'csharp',
+    sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+    json: 'json', yml: 'yaml', yaml: 'yaml', xml: 'xml', sql: 'sql',
+    md: 'markdown', html: 'html', vue: 'html', css: 'css', scss: 'scss',
+  };
+  function langOf(path) {
+    const m = /\.([a-z0-9]+)$/i.exec(path || '');
+    return m ? (LANG_BY_EXT[m[1].toLowerCase()] || '') : '';
+  }
+
+  // Returns { text, kind, lang } — dashboard shows full content, no truncation.
+  // kind 'code' must stay byte-exact: markdown rendering would swallow the ** and `
+  // characters that the approver needs to see to judge what actually gets executed.
+  // Only notify-style messages (prose Claude wrote) are safe to render as markdown.
   function formatPermPreview(toolName, raw) {
-    if (!raw) return { text: '' };
+    if (!raw) return { text: '', kind: 'code', lang: '' };
+    const isNotify = toolName === 'notify' || toolName.endsWith('__notify');
     let p = null;
     try { p = JSON.parse(raw); } catch {
       // Truncated JSON - extract known fields with regex (closing quote optional for truncated strings)
@@ -1682,43 +1722,52 @@
       const contentMatch = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
       const titleMatch = raw.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
       const msgMatch = raw.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
-      if (titleMatch && msgMatch) return { text: msgMatch[1] };
-      if (cmdMatch) return { text: '$ ' + cmdMatch[1] };
-      if (fileMatch) return { text: fileMatch[1] };
-      if (patternMatch) return { text: patternMatch[1] };
-      if (contentMatch) return { text: contentMatch[1] };
-      return { text: raw };
+      if (titleMatch && msgMatch) return { text: msgMatch[1], kind: 'prose', lang: '' };
+      if (cmdMatch) return { text: '$ ' + cmdMatch[1], kind: 'code', lang: 'bash' };
+      if (fileMatch) return { text: fileMatch[1], kind: 'code', lang: langOf(fileMatch[1]) };
+      if (patternMatch) return { text: patternMatch[1], kind: 'code', lang: '' };
+      if (contentMatch) return { text: contentMatch[1], kind: 'code', lang: '' };
+      return { text: raw, kind: 'code', lang: '' };
     }
     let text;
+    let kind = 'code';
+    let lang = '';
     switch (toolName) {
       case 'Bash':
-        text = p.command ? '$ ' + p.command : raw; break;
+        text = p.command ? '$ ' + p.command : raw; lang = 'bash'; break;
       case 'Write':
       case 'Edit':
         if (p.file_path) {
           text = p.file_path;
+          lang = langOf(p.file_path);
           if (p.new_string) text += '\n+ ' + p.new_string;
           else if (p.content) text += '\n' + p.content;
         } else { text = raw; }
         break;
       case 'Read':
-        text = p.file_path || raw; break;
+        text = p.file_path || raw; lang = langOf(p.file_path); break;
       case 'Glob':
         text = p.pattern || raw; break;
       case 'Grep':
         text = (p.pattern || '') + (p.path ? '  in ' + p.path : ''); break;
       default:
         if (p.title && p.message) {
-          text = p.message;
+          text = p.message; kind = 'prose';
         } else if (p.content && typeof p.content === 'string') {
-          text = p.content;
+          text = p.content; kind = isNotify ? 'prose' : 'code';
         } else {
           const entries = Object.entries(p);
           if (entries.length <= 3) text = entries.map(([k, v]) => k + ': ' + String(v)).join('\n');
           else text = JSON.stringify(p, null, 1);
         }
     }
-    return { text: text || '' };
+    return { text: text || '', kind, lang };
+  }
+
+  function renderPermPreview(text, kind, lang) {
+    if (kind === 'prose') return `<div class="perm-preview prose">${renderMarkdown(text)}</div>`;
+    const cls = lang ? ` class="lang-${esc(lang)}"` : '';
+    return `<div class="perm-preview"><pre><code${cls}>${esc(text)}</code></pre></div>`;
   }
 
   function sendPermissionVerdict(sessionId, requestId, behavior) {
@@ -1742,7 +1791,7 @@
     if (!reqs.length) { bar.classList.remove('active'); bar.innerHTML = ''; return; }
     bar.classList.add('active');
     bar.innerHTML = reqs.map(r => {
-      const { text: previewText } = formatPermPreview(r.toolName, r.inputPreview);
+      const { text: previewText, kind: previewKind, lang: previewLang } = formatPermPreview(r.toolName, r.inputPreview);
       const displayName = formatToolName(r.toolName, r.inputPreview);
       return `<div class="perm-item">
         <div class="perm-icon">&#9888;</div>
@@ -1750,7 +1799,7 @@
           <div class="perm-header">
             <span class="perm-tool">${esc(displayName)}</span>
           </div>
-          ${previewText ? `<div class="perm-preview">${esc(previewText)}</div>` : ''}
+          ${previewText ? renderPermPreview(previewText, previewKind, previewLang) : ''}
         </div>
         <div class="perm-actions">
           <button class="perm-allow" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Allow <span class="perm-kbd">(Enter)</span></button>
