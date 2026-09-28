@@ -103,3 +103,30 @@ test('custom name shared by two sessions is ambiguous', () => {
   const h = loadHelpers(sessions, { b: 'x', c: 'x' });
   assert.equal(h.buildRouting('@x hi').ok, false);
 });
+
+function query(value: string, caret = value.length) {
+  const h = loadHelpers(sessions, names);
+  const q = h.currentMentionQuery({ value, selectionStart: caret });
+  return q ? { ...q } : null;
+}
+
+test('@ at start opens an empty query', () => {
+  assert.deepEqual(query('@'), { start: 0, query: '' });
+});
+
+test('@ after a space captures the partial name', () => {
+  assert.deepEqual(query('hi @fr'), { start: 3, query: 'fr' });
+});
+
+test('bracket form strips the opening bracket', () => {
+  assert.deepEqual(query('@[ebill b'), { start: 0, query: 'ebill b' });
+});
+
+test('@ glued to a word does not open', () => {
+  assert.equal(query('a@b'), null);
+});
+
+test('query ends at the caret', () => {
+  assert.equal(query('@front hi'), null);
+  assert.deepEqual(query('@front hi', 3), { start: 0, query: 'fr' });
+});

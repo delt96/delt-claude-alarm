@@ -407,6 +407,32 @@
     font-size: 12px;
   }
   .mention-error.show { display: block; }
+  .message-input-area { position: relative; }
+  .mention-popup {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 20px;
+    min-width: 220px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 20;
+  }
+  .mention-popup.open { display: block; }
+  .mention-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mention-item.active, .mention-item:hover { background: var(--border); }
+  .mention-folder { color: var(--text-dim); font-size: 11px; }
   .message-input-area {
     border-top: 1px solid var(--border);
     padding: 12px 20px;
@@ -972,6 +998,7 @@
     </div>
     <div class="mention-error" id="mentionError"></div>
     <div class="message-input-area">
+      <div class="mention-popup" id="mentionPopup"></div>
       <button class="attach-btn" id="attachBtn" disabled title="Attach image">&#128206;</button>
       <input type="file" id="fileInput" accept="image/*" style="display:none">
       <textarea id="msgInput" placeholder="Send a message to session... (Shift+Enter for new line)" disabled rows="1"></textarea>
@@ -1159,6 +1186,60 @@
     el.textContent = msg || '';
     el.classList.toggle('show', !!msg);
   }
+
+  let mentionState = { open: false, items: [], index: 0, start: -1 };
+
+  function currentMentionQuery(input) {
+    const upto = input.value.slice(0, input.selectionStart);
+    const m = upto.match(/(^|\s)@(\[[^\]\n]*|[^\s\[\]]*)$/);
+    if (!m) return null;
+    return { start: upto.length - m[2].length - 1, query: m[2].replace(/^\[/, '') };
+  }
+
+  function closeMentionPopup() {
+    mentionState = { open: false, items: [], index: 0, start: -1 };
+    $('#mentionPopup').classList.remove('open');
+  }
+
+  function renderMentionPopup() {
+    $('#mentionPopup').innerHTML = mentionState.items.map((s, i) =>
+      `<div class="mention-item${i === mentionState.index ? ' active' : ''}" data-idx="${i}">` +
+      `<span>${esc(sessionDisplayName(s))}</span><span class="mention-folder">${esc(folderName(s))}</span></div>`
+    ).join('');
+  }
+
+  function updateMentionPopup() {
+    const q = currentMentionQuery($('#msgInput'));
+    if (!q) return closeMentionPopup();
+    const key = normName(q.query);
+    const items = mentionTargets().filter(s =>
+      normName(sessionDisplayName(s)).includes(key) || normName(folderName(s)).includes(key));
+    if (!items.length) return closeMentionPopup();
+    const index = mentionState.open ? Math.min(mentionState.index, items.length - 1) : 0;
+    mentionState = { open: true, items, index, start: q.start };
+    renderMentionPopup();
+    $('#mentionPopup').classList.add('open');
+  }
+
+  function applyMention(s) {
+    const input = $('#msgInput');
+    const label = sessionDisplayName(s);
+    const token = /\s/.test(label) ? `@[${label}] ` : `@${label} `;
+    const before = input.value.slice(0, mentionState.start);
+    const after = input.value.slice(input.selectionStart);
+    input.value = before + token + after;
+    const pos = before.length + token.length;
+    input.setSelectionRange(pos, pos);
+    closeMentionPopup();
+    input.focus();
+  }
+
+  $('#mentionPopup').addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.mention-item');
+    if (!item) return;
+    e.preventDefault();
+    applyMention(mentionState.items[Number(item.dataset.idx)]);
+  });
 
   // --- Theme ---
   function initTheme() {
@@ -1676,6 +1757,7 @@
     saveMessages();
 
     input.value = '';
+    closeMentionPopup();
     input.style.height = 'auto';
     clearPendingImage();
     state.waitingReply[state.selectedSession] = true;
@@ -1684,12 +1766,24 @@
 
   $('#sendBtn').addEventListener('click', sendMessage);
   $('#msgInput').addEventListener('keydown', (e) => {
+    if (mentionState.open) {
+      // Enter while an IME (e.g. Korean) is composing only commits the syllable.
+      if (e.isComposing) return;
+      const n = mentionState.items.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); mentionState.index = (mentionState.index + 1) % n; renderMentionPopup(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); mentionState.index = (mentionState.index - 1 + n) % n; renderMentionPopup(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyMention(mentionState.items[mentionState.index]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closeMentionPopup(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+  $('#msgInput').addEventListener('blur', closeMentionPopup);
+  $('#msgInput').addEventListener('click', updateMentionPopup);
   $('#msgInput').addEventListener('input', function() {
     showMentionError(null);
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    updateMentionPopup();
   });
 
   function relativeTime(ts) {
