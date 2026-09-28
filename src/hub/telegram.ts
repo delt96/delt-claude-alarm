@@ -374,6 +374,7 @@ export class TelegramBot {
 
   private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
     if (!query.data) return;
+    if (String(query.message?.chat.id) !== String(this.config.chatId)) return;
 
     if (query.data.startsWith('sess:')) {
       await this.handleSessionSelectCallback(query);
