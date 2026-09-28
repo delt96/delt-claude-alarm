@@ -51,6 +51,7 @@ export class HubServer {
   private telegramBot?: TelegramBot;
   private heartbeatInterval?: ReturnType<typeof setInterval>;
   private channelAlive = new Map<string, boolean>(); // sessionId -> alive flag
+  private socketOwners = new WeakMap<WebSocket, string>();
 
   private host: string;
   private port: number;
@@ -378,6 +379,19 @@ export class HubServer {
   }
 
   private handleChannelMessage(ws: WebSocket, isLocal: boolean, msg: ChannelMessage): void {
+    if (msg.type === 'register') {
+      const id = msg.session.id;
+      const owned = this.socketOwners.get(ws);
+      const holder = this.channelSockets.get(id);
+      if ((owned && owned !== id) || (holder && holder !== ws && holder.readyState === WebSocket.OPEN)) {
+        logger.warn(`Rejected register for ${id}: id is held by another connection`);
+        return;
+      }
+      this.socketOwners.set(ws, id);
+    } else if ('sessionId' in msg && this.socketOwners.get(ws) !== msg.sessionId) {
+      return;
+    }
+
     switch (msg.type) {
       case 'register': {
         const session = msg.session;
@@ -403,7 +417,6 @@ export class HubServer {
       }
 
       case 'peer_name': {
-        if (this.channelSockets.get(msg.sessionId) !== ws) break;
         const updated = this.sessions.setPeerName(msg.sessionId, msg.peerName);
         if (updated) {
           logger.info(`Peer name for ${msg.sessionId}: ${msg.peerName ?? '-'}`);
