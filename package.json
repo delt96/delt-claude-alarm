@@ -28,7 +28,7 @@
     "dev": "tsup --watch",
     "start:hub": "node dist/cli.js hub start",
     "start:channel": "node dist/channel/server.js",
-    "test": "node --import tsx --test --test-timeout=30000 \"test/**/*.test.ts\""
+    "test": "node --import tsx --import ./test/isolate-home.ts --test --test-timeout=30000 \"test/**/*.test.ts\""
   },
   "keywords": [
     "claude",
