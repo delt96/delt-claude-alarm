@@ -205,6 +205,19 @@ When Claude wants to run a tool (Bash, Write, Edit, etc.), a permission request 
 }
 ```
 
+## Mentioning Other Sessions
+
+In the dashboard input, type `@<session name>` to have the selected session send something to another session through Claude Code's built-in `SendMessage`:
+
+```
+@front The UserVo response gained a deptNm field — let them know
+```
+
+- Names are the ones shown in the dashboard (your custom name, or the folder name). Names with spaces are written `@[my name]`.
+- The dashboard resolves each mention to the target's `SendMessage` name and appends a routing line; unknown or ambiguous names block the send.
+- Messages exchanged between sessions are not shown in the dashboard.
+- Requires Claude Code with cross-session messaging (2.1.239+ on Windows).
+
 ## Image Support
 
 **Dashboard (local sessions):**

@@ -400,6 +400,13 @@
   }
   .drag-overlay.active { display: flex; }
 
+  .mention-error {
+    display: none;
+    padding: 6px 20px 0;
+    color: var(--red);
+    font-size: 12px;
+  }
+  .mention-error.show { display: block; }
   .message-input-area {
     border-top: 1px solid var(--border);
     padding: 12px 20px;
@@ -963,6 +970,7 @@
       <span class="preview-name" id="previewName"></span>
       <button class="preview-cancel" id="previewCancel">&times;</button>
     </div>
+    <div class="mention-error" id="mentionError"></div>
     <div class="message-input-area">
       <button class="attach-btn" id="attachBtn" disabled title="Attach image">&#128206;</button>
       <input type="file" id="fileInput" accept="image/*" style="display:none">
@@ -1093,6 +1101,63 @@
 
   function sessionDisplayName(s) {
     return state.sessionMeta.names[s.id] || s.displayName || s.name;
+  }
+
+  function normName(s) {
+    return String(s).normalize('NFC').trim().toLowerCase();
+  }
+
+  function folderName(s) {
+    return s.displayName || s.name;
+  }
+
+  function mentionTargets() {
+    return Object.values(state.sessions).filter(s => s.id !== state.selectedSession && s.peerName);
+  }
+
+  function resolveMention(name) {
+    const key = normName(name);
+    const targets = mentionTargets();
+    const byCustom = targets.filter(s => state.sessionMeta.names[s.id] && normName(state.sessionMeta.names[s.id]) === key);
+    if (byCustom.length) return byCustom.length === 1 ? byCustom[0] : null;
+    const byFolder = targets.filter(s => normName(folderName(s)) === key);
+    return byFolder.length === 1 ? byFolder[0] : null;
+  }
+
+  function extractMentions(text) {
+    const re = /(^|\s)@(?:\[([^\]\n]+)\]|([^\s\[\]]+))/g;
+    const found = [];
+    let m;
+    while ((m = re.exec(text))) {
+      const name = m[2] !== undefined ? m[2] : m[3].replace(/[.,!?;:)]+$/, '');
+      found.push({ raw: m[0].trim(), name });
+    }
+    return found;
+  }
+
+  // The routing line is the contract with the channel instructions in
+  // src/channel/server.ts (ROUTING) — change both together.
+  function buildRouting(text) {
+    const mentions = extractMentions(text);
+    if (!mentions.length) return { ok: true, content: text };
+    const unknown = [];
+    const lines = [];
+    const seen = new Set();
+    for (const m of mentions) {
+      const s = resolveMention(m.name);
+      if (!s) { unknown.push(m.raw); continue; }
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      lines.push(`[claude-alarm] @${m.name} = SendMessage to "${s.peerName}"`);
+    }
+    if (unknown.length) return { ok: false, unknown };
+    return { ok: true, content: `${text}\n\n${lines.join('\n')}` };
+  }
+
+  function showMentionError(msg) {
+    const el = $('#mentionError');
+    el.textContent = msg || '';
+    el.classList.toggle('show', !!msg);
   }
 
   // --- Theme ---
@@ -1577,6 +1642,13 @@
     if (!content && !hasImage) return;
     if (!state.selectedSession || !state.ws) return;
 
+    const routing = buildRouting(content);
+    if (!routing.ok) {
+      showMentionError(`Unknown session: ${routing.unknown.join(', ')} — pick from the @ list, or put a space right after the name.`);
+      return;
+    }
+    showMentionError(null);
+
     if (hasImage) {
       // Send image + text together
       state.ws.send(JSON.stringify({
@@ -1585,11 +1657,11 @@
         imageData: state.pendingImage.data,
         mimeType: state.pendingImage.mimeType,
         originalName: state.pendingImage.name,
-        content: content || '',
+        content: routing.content || '',
       }));
     } else if (content) {
       // Text only
-      state.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: state.selectedSession, content }));
+      state.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: state.selectedSession, content: routing.content }));
     }
 
     // Add to local messages
@@ -1615,6 +1687,7 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   $('#msgInput').addEventListener('input', function() {
+    showMentionError(null);
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
