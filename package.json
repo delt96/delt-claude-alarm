@@ -27,7 +27,8 @@
     "build": "tsup && node -e \"const fs=require('fs');const p=require('path');fs.mkdirSync(p.join('dist','dashboard'),{recursive:true});fs.copyFileSync(p.join('src','dashboard','index.html'),p.join('dist','dashboard','index.html'));\"",
     "dev": "tsup --watch",
     "start:hub": "node dist/cli.js hub start",
-    "start:channel": "node dist/channel/server.js"
+    "start:channel": "node dist/channel/server.js",
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
   },
   "keywords": [
     "claude",
@@ -55,6 +56,7 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "tsup": "^8.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.5.0"
   },
   "engines": {
