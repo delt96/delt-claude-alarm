@@ -1,3 +1,5 @@
+// Must stay the first import: it redirects the home directory before any src module reads it.
+import './isolate-home.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
@@ -98,6 +100,20 @@ test('non-json posts are rejected before auth', async () => {
     method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${TOKEN}` }, body: '{}',
   });
   assert.equal(r.status, 415);
+});
+
+test('a malformed Host header does not crash the hub', async () => {
+  const net = await import('node:net');
+  const reply = await new Promise<string>((resolve) => {
+    const sock = net.connect(PORT, '127.0.0.1', () => sock.write('GET /api/sessions HTTP/1.1\r\nHost: x:99999\r\nConnection: close\r\n\r\n'));
+    let data = '';
+    sock.on('data', (d) => { data += d; });
+    sock.on('close', () => resolve(data));
+    sock.on('error', () => resolve(data));
+    sock.setTimeout(3000, () => sock.destroy());
+  });
+  assert.match(reply, /^HTTP\/1\.1 401/);
+  assert.equal((await fetch(`${BASE}/api/status`, { headers: { Authorization: `Bearer ${TOKEN}` } })).status, 200);
 });
 
 test('oversized frames close the connection', { timeout: 10_000 }, async () => {

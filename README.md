@@ -198,7 +198,18 @@ Every connection to the hub needs the hub token — including ones from the same
 Pick one:
 
 1. **Tailscale (recommended)** — set `host` to the hub machine's Tailscale IP and use that address from other machines. Traffic is encrypted and never exposed to the internet.
-2. **Cloudflare Tunnel / nginx with HTTPS** — keep `host: "127.0.0.1"` and point the tunnel or proxy at `http://127.0.0.1:7900`. Forward `X-Forwarded-Proto` so the dashboard cookie is marked `Secure`.
+2. **Cloudflare Tunnel / nginx with HTTPS** — keep `host: "127.0.0.1"` and point the tunnel or proxy at `http://127.0.0.1:7900`. The proxy must keep the browser's `Host` header (the hub rejects requests whose `Origin` doesn't match it), pass WebSocket upgrades, and forward `X-Forwarded-Proto` so the dashboard cookie is marked `Secure`. For nginx:
+
+   ```nginx
+   location / {
+     proxy_pass http://127.0.0.1:7900;
+     proxy_http_version 1.1;
+     proxy_set_header Host $host;
+     proxy_set_header Upgrade $http_upgrade;
+     proxy_set_header Connection "upgrade";
+     proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   ```
 3. **Direct `0.0.0.0`** — set `host` to `0.0.0.0` and open port 7900. Traffic, including the token, is plain HTTP: use only on networks you trust.
 
 On the remote machine run `claude-alarm init` → select remote hub (Y), or configure:

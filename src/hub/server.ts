@@ -98,7 +98,7 @@ export class HubServer {
       // on it would take the whole process down.
       socket.on('error', (err) => logger.debug(`Upgrade socket error: ${err.message}`));
 
-      const url = new URL(req.url!, `http://${req.headers.host}`);
+      const url = new URL(req.url ?? '/', 'http://hub');
       const pathname = url.pathname;
 
       if (isCrossOrigin(req)) {
@@ -173,7 +173,7 @@ export class HubServer {
   // --- HTTP Handler ---
 
   private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
-    const url = new URL(req.url!, `http://${req.headers.host}`);
+    const url = new URL(req.url ?? '/', 'http://hub');
 
     if (isCrossOrigin(req)) {
       this.jsonResponse(res, 403, { error: 'Cross-origin request rejected' });
@@ -382,10 +382,17 @@ export class HubServer {
     if (msg.type === 'register') {
       const id = msg.session.id;
       const owned = this.socketOwners.get(ws);
-      const holder = this.channelSockets.get(id);
-      if ((owned && owned !== id) || (holder && holder !== ws && holder.readyState === WebSocket.OPEN)) {
-        logger.warn(`Rejected register for ${id}: id is held by another connection`);
+      if (owned && owned !== id) {
+        logger.warn(`Rejected register for ${id}: connection already owns ${owned}`);
         return;
+      }
+      // A channel that reconnects after sleep or a network change reuses its id
+      // while the hub may still see the old socket as open until the heartbeat
+      // fires; the newest connection must win or the session is lost.
+      const holder = this.channelSockets.get(id);
+      if (holder && holder !== ws) {
+        this.socketOwners.delete(holder);
+        holder.terminate();
       }
       this.socketOwners.set(ws, id);
     } else if ('sessionId' in msg && this.socketOwners.get(ws) !== msg.sessionId) {

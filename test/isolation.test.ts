@@ -1,3 +1,5 @@
+// Must stay the first import: it redirects the home directory before any src module reads it.
+import './isolate-home.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';

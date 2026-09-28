@@ -1,3 +1,5 @@
+// Must stay the first import: it redirects the home directory before any src module reads it.
+import './isolate-home.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
@@ -37,18 +39,22 @@ async function send(sessionId: string, content: string) {
   });
 }
 
-test('a second socket cannot take over a live session id', async () => {
+test('a reconnect replaces a half-open socket holding the same id', async () => {
   const a = await open('/ws/channel');
   const b = await open('/ws/channel');
+  const aClosed = new Promise((r) => a.ws.on('close', r));
   register(a.ws, 'dup');
   await settle();
   register(b.ws, 'dup');
+  await aClosed;
   await settle();
   await send('dup', 'hello');
   await settle();
-  assert.equal(a.inbox.filter((m) => m.type === 'message_to_session').length, 1);
-  assert.equal(b.inbox.filter((m) => m.type === 'message_to_session').length, 0);
-  a.ws.close(); b.ws.close();
+  assert.equal(b.inbox.filter((m) => m.type === 'message_to_session').length, 1);
+  assert.equal(a.inbox.filter((m) => m.type === 'message_to_session').length, 0);
+  const sessions = await (await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json() as any;
+  assert.ok(sessions.sessions.some((s: any) => s.id === 'dup'));
+  b.ws.close();
 });
 
 test('a socket cannot speak for a session it does not own', async () => {
