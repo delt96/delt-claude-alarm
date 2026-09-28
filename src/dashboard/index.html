@@ -871,7 +871,7 @@
 <div class="token-overlay hidden" id="tokenOverlay">
   <div class="token-form">
     <h2>Authentication Required</h2>
-    <p>Enter the hub token to connect. Find it by running: <code>claude-alarm token</code></p>
+    <p>Enter the hub token to connect. Run <code>claude-alarm token</code>, or open the login link printed by <code>claude-alarm hub start</code>.</p>
     <input type="text" id="tokenInput" placeholder="Paste token here..." autocomplete="off">
     <button id="tokenSubmit">Connect</button>
     <div class="token-error" id="tokenError">Connection failed. Check your token.</div>
@@ -1026,7 +1026,6 @@
     selectedSession: null,
     messages: {},
     notifications: [],
-    token: null,
     pendingImage: null,
     unread: {},
     waitingReply: {},
@@ -1291,25 +1290,28 @@
   initTheme();
 
   // --- Token handling ---
-  function getToken() {
-    const params = new URLSearchParams(location.search);
-    const urlToken = params.get('token');
-    if (urlToken) {
-      sessionStorage.setItem('claude-alarm-token', urlToken);
-      return urlToken;
+  async function checkAuth() {
+    try {
+      return (await fetch('/api/status')).status !== 401;
+    } catch {
+      return true;
     }
-    return sessionStorage.getItem('claude-alarm-token');
   }
 
   function showTokenForm() { $('#tokenOverlay').classList.remove('hidden'); }
   function hideTokenForm() { $('#tokenOverlay').classList.add('hidden'); }
 
-  $('#tokenSubmit').addEventListener('click', () => {
+  $('#tokenSubmit').addEventListener('click', async () => {
     const token = $('#tokenInput').value.trim();
     if (!token) return;
-    state.token = token;
-    sessionStorage.setItem('claude-alarm-token', token);
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).catch(() => null);
+    if (!res || !res.ok) { $('#tokenError').style.display = 'block'; return; }
     $('#tokenError').style.display = 'none';
+    $('#tokenInput').value = '';
     hideTokenForm();
     connect();
   });
@@ -1320,24 +1322,22 @@
   // --- WebSocket ---
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-    const ws = new WebSocket(`${proto}://${location.host}/ws/dashboard${tokenQuery}`);
+    const ws = new WebSocket(`${proto}://${location.host}/ws/dashboard`);
+    let opened = false;
 
     ws.onopen = () => {
+      opened = true;
       state.ws = ws;
       hideTokenForm();
       $('#connDot').classList.add('connected');
       $('#connLabel').textContent = 'Connected';
     };
-    ws.onclose = () => {
+    ws.onclose = async () => {
       state.ws = null;
       $('#connDot').classList.remove('connected');
       $('#connLabel').textContent = 'Disconnected';
+      if (!opened && !(await checkAuth())) { showTokenForm(); return; }
       setTimeout(connect, 3000);
-    };
-    ws.onerror = () => {
-      if (!state.token) { showTokenForm(); } else { $('#tokenError').style.display = 'block'; showTokenForm(); }
-      ws.close();
     };
     ws.onmessage = (e) => { try { handleMessage(JSON.parse(e.data)); } catch {} };
   }
@@ -2128,16 +2128,14 @@
   $('#settingsToggle').addEventListener('click', async () => {
     // Load webhook data
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      const res = await fetch(`/api/webhooks${tokenQuery}`);
+      const res = await fetch(`/api/webhooks`);
       const data = await res.json();
       webhookData = data.webhooks || [];
     } catch { webhookData = []; }
     renderWebhooks();
     // Load telegram data
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      const res = await fetch(`/api/telegram${tokenQuery}`);
+      const res = await fetch(`/api/telegram`);
       const data = await res.json();
       const tg = data.telegram || {};
       if (!$('#tgBotToken').value || $('#tgBotToken').value.includes('...')) {
@@ -2172,8 +2170,7 @@
   $('#webhookSave').addEventListener('click', async () => {
     const valid = webhookData.filter(w => w.url.trim());
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      await fetch(`/api/webhooks${tokenQuery}`, {
+      await fetch(`/api/webhooks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ webhooks: valid }),
@@ -2248,8 +2245,7 @@
     $('#tgDetectStatus').textContent = 'Detecting...';
     $('#tgChatList').innerHTML = '';
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      const res = await fetch(`/api/telegram/detect${tokenQuery}`, {
+      const res = await fetch(`/api/telegram/detect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ botToken }),
@@ -2286,8 +2282,7 @@
     const chatId = $('#tgChatId').value.trim();
     if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      const res = await fetch(`/api/telegram/test${tokenQuery}`, {
+      const res = await fetch(`/api/telegram/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ botToken, chatId }),
@@ -2306,8 +2301,7 @@
     if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
     if (botToken.includes('...')) { showTgStatus('Bot Token is masked. Please enter the full token.', false); return; }
     try {
-      const tokenQuery = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-      await fetch(`/api/telegram${tokenQuery}`, {
+      await fetch(`/api/telegram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ telegram: { botToken, chatId, enabled } }),
@@ -2335,8 +2329,7 @@
     document.querySelector('.sessions-panel').classList.add('mobile-active');
   }
 
-  state.token = getToken();
-  connect();
+  checkAuth().then((ok) => (ok ? connect() : showTokenForm()));
 })();
 </script>
 </body>

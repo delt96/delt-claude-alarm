@@ -179,15 +179,29 @@ When Claude wants to run a tool (Bash, Write, Edit, etc.), a permission request 
 - Local terminal prompt stays open; whichever answer arrives first (local or dashboard) is applied
 - Parsed previews: Bash commands show `$ command`, file operations show file paths
 
+## Authentication
+
+Every connection to the hub needs the hub token — including ones from the same machine.
+
+- **Channel servers** read it from `~/.claude-alarm/config.json` automatically (or `CLAUDE_ALARM_HUB_TOKEN`).
+- **Dashboard**: open the login link printed by `claude-alarm hub start` (`http://127.0.0.1:7900/?token=…`), or paste the token from `claude-alarm token` into the login form. The browser keeps an HttpOnly cookie for 30 days, and the token is removed from the URL.
+- **CLI / scripts**: send `Authorization: Bearer <token>`.
+
+> Upgrading from 0.9.x: a local session that sets `CLAUDE_ALARM_HUB_TOKEN` to a different value than the hub's token no longer connects. Scripts that called the local API without a token now get `401`.
+
 ## Remote Access
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/remote-access.svg" alt="Remote Access" width="600">
 </p>
 
-1. Set host to `0.0.0.0` in `~/.claude-alarm/config.json`
-2. Open port 7900 in your firewall
-3. On remote machine: `claude-alarm init` → select remote hub (Y)
+Pick one:
+
+1. **Tailscale (recommended)** — set `host` to the hub machine's Tailscale IP and use that address from other machines. Traffic is encrypted and never exposed to the internet.
+2. **Cloudflare Tunnel / nginx with HTTPS** — keep `host: "127.0.0.1"` and point the tunnel or proxy at `http://127.0.0.1:7900`. Forward `X-Forwarded-Proto` so the dashboard cookie is marked `Secure`.
+3. **Direct `0.0.0.0`** — set `host` to `0.0.0.0` and open port 7900. Traffic, including the token, is plain HTTP: use only on networks you trust.
+
+On the remote machine run `claude-alarm init` → select remote hub (Y), or configure:
 
 ```json
 {
@@ -196,7 +210,7 @@ When Claude wants to run a tool (Bash, Write, Edit, etc.), a permission request 
       "command": "npx",
       "args": ["-y", "@delt/claude-alarm", "serve"],
       "env": {
-        "CLAUDE_ALARM_HUB_HOST": "your-server-ip",
+        "CLAUDE_ALARM_HUB_HOST": "your-hub-address",
         "CLAUDE_ALARM_HUB_PORT": "7900",
         "CLAUDE_ALARM_HUB_TOKEN": "your-token"
       }

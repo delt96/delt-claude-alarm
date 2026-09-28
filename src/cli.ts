@@ -10,6 +10,14 @@ import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function authHeaders(token?: string): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function loginLink(displayHost: string, port: number, token?: string): string {
+  return `http://${displayHost}:${port}/${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
 function printUsage() {
   console.log(`
 claude-alarm - Monitor Claude Code sessions with notifications
@@ -64,7 +72,7 @@ async function hubStart(daemon: boolean) {
   if (fs.existsSync(PID_FILE)) {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
     if (isProcessRunning(pid)) {
-      console.log(`Hub is already running (PID: ${pid}) on http://${displayHost}:${port}`);
+      console.log(`Hub is already running (PID: ${pid}). Dashboard: ${loginLink(displayHost, port, config.hub.token)}`);
       return;
     }
     // Stale PID file
@@ -86,7 +94,7 @@ async function hubStart(daemon: boolean) {
       fs.writeFileSync(PID_FILE, String(child.pid), 'utf-8');
       child.unref();
       console.log(`Hub started as daemon (PID: ${child.pid})`);
-      console.log(`Dashboard: http://${displayHost}:${port}`);
+      console.log(`Dashboard: ${loginLink(displayHost, port, config.hub.token)}`);
       console.log(`Token: ${config.hub.token}`);
       console.log(`Logs: ${LOG_FILE}`);
     } else {
@@ -96,6 +104,7 @@ async function hubStart(daemon: boolean) {
   } else {
     // Foreground mode - import and run directly
     console.log(`Starting hub on http://${displayHost}:${port} (press Ctrl+C to stop)`);
+    console.log(`Dashboard: ${loginLink(displayHost, port, config.hub.token)}`);
     console.log(`Token: ${config.hub.token}`);
     console.log(`Logs: ${LOG_FILE}`);
     installCrashGuard('hub foreground');
@@ -154,7 +163,7 @@ async function hubStatus() {
 
   // Try to reach the hub HTTP API
   try {
-    const res = await fetch(`http://${host}:${port}/api/status`);
+    const res = await fetch(`http://${host}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
     if (res.ok) {
       const data = await res.json() as any;
       console.log(`Hub: running (PID: ${data.pid})`);
@@ -274,7 +283,7 @@ async function init() {
     const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     let hubRunning = false;
     try {
-      const res = await fetch(`http://${host}:${port}/api/status`);
+      const res = await fetch(`http://${host}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
       hubRunning = res.ok;
     } catch {}
 
