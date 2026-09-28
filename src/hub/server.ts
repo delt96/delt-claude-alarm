@@ -1,4 +1,5 @@
 import http from 'node:http';
+import type { Duplex } from 'node:stream';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +19,19 @@ import { TelegramBot } from './telegram.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig } from '../shared/types.js';
+import {
+  isAuthorized,
+  isCrossOrigin,
+  isJsonRequest,
+  isSecureRequest,
+  safeEqual,
+  sessionCookieHeader,
+} from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 10MB images arrive base64-encoded (~13.4MB) over the dashboard socket.
+const MAX_WS_PAYLOAD = 16 * 1024 * 1024;
 
 export class HubServer {
   private httpServer: http.Server;
@@ -70,12 +82,12 @@ export class HubServer {
     this.httpServer = http.createServer((req, res) => this.handleHttp(req, res));
 
     // WebSocket for channel servers
-    this.wssChannel = new WebSocketServer({ noServer: true });
+    this.wssChannel = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD });
     this.wssChannel.on('connection', (ws: WebSocket, req: http.IncomingMessage) => this.handleChannelConnection(ws, req));
     this.wssChannel.on('error', (err) => logger.warn(`Channel WebSocket server error: ${err.message}`));
 
     // WebSocket for dashboard
-    this.wssDashboard = new WebSocketServer({ noServer: true });
+    this.wssDashboard = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD });
     this.wssDashboard.on('connection', (ws) => this.handleDashboardConnection(ws));
     this.wssDashboard.on('error', (err) => logger.warn(`Dashboard WebSocket server error: ${err.message}`));
 
@@ -88,13 +100,13 @@ export class HubServer {
       const url = new URL(req.url!, `http://${req.headers.host}`);
       const pathname = url.pathname;
 
-      // Token auth for WebSocket connections (skip for local requests)
-      if (this.token && !this.isLocalRequest(req)) {
-        const wsToken = url.searchParams.get('token');
-        if (wsToken !== this.token) {
-          socket.destroy();
-          return;
-        }
+      if (isCrossOrigin(req)) {
+        this.rejectUpgrade(socket, 403, 'Forbidden', pathname, req);
+        return;
+      }
+      if (!this.authorized(req, true)) {
+        this.rejectUpgrade(socket, 401, 'Unauthorized', pathname, req);
+        return;
       }
 
       if (pathname === WS_PATH_CHANNEL) {
@@ -162,36 +174,29 @@ export class HubServer {
   private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
-    // CORS headers - restrict to same origin
-    const origin = req.headers.origin;
-    if (origin && (origin.includes('127.0.0.1') || origin.includes('localhost'))) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
+    if (isCrossOrigin(req)) {
+      this.jsonResponse(res, 403, { error: 'Cross-origin request rejected' });
+      return;
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
+    if (req.method === 'POST' && !isJsonRequest(req)) {
+      this.jsonResponse(res, 415, { error: 'Content-Type must be application/json' });
+      return;
+    }
+    if (url.pathname === '/' && req.method === 'GET') {
+      this.serveDashboard(req, res, url);
+      return;
+    }
+    if (url.pathname === '/api/login' && req.method === 'POST') {
+      this.handleLogin(req, res);
+      return;
+    }
+    if (!this.authorized(req, false)) {
+      this.jsonResponse(res, 401, { error: 'Unauthorized' });
       return;
     }
 
-    // Token auth for API endpoints (skip dashboard HTML serving)
-    if (url.pathname !== '/' && this.token) {
-      if (!this.isLocalRequest(req)) {
-        const authHeader = req.headers['authorization'];
-        const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-        if (bearerToken !== this.token) {
-          this.jsonResponse(res, 401, { error: 'Unauthorized' });
-          return;
-        }
-      }
-    }
-
     // Route
-    if (url.pathname === '/' && req.method === 'GET') {
-      this.serveDashboard(res);
-    } else if (url.pathname === '/api/sessions' && req.method === 'GET') {
+    if (url.pathname === '/api/sessions' && req.method === 'GET') {
       this.jsonResponse(res, 200, { sessions: this.sessions.getAll() });
     } else if (url.pathname === '/api/status' && req.method === 'GET') {
       this.jsonResponse(res, 200, {
@@ -242,7 +247,13 @@ export class HubServer {
     }
   }
 
-  private serveDashboard(res: http.ServerResponse): void {
+  private serveDashboard(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    const linkToken = url.searchParams.get('token');
+    if (linkToken !== null && this.token && safeEqual(linkToken, this.token)) {
+      res.writeHead(302, { Location: '/', 'Set-Cookie': sessionCookieHeader(this.token, isSecureRequest(req)) });
+      res.end();
+      return;
+    }
     // Look for dashboard HTML relative to this file (dist) or source
     const candidates = [
       path.join(__dirname, '..', 'dashboard', 'index.html'),       // from dist/hub/
@@ -265,6 +276,21 @@ export class HubServer {
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end('<html><body><h1>claude-alarm</h1><p>Dashboard HTML not found. Reinstall the package.</p></body></html>');
+  }
+
+  private async handleLogin(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req) as { token?: unknown } | null;
+    if (!this.token) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (typeof body?.token !== 'string' || !safeEqual(body.token, this.token)) {
+      this.jsonResponse(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+    res.writeHead(204, { 'Set-Cookie': sessionCookieHeader(this.token, isSecureRequest(req)) });
+    res.end();
   }
 
   private async handleApiSend(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -735,6 +761,16 @@ export class HubServer {
   private jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
+  }
+
+  private authorized(req: http.IncomingMessage, allowQueryToken: boolean): boolean {
+    return !this.token || isAuthorized(req, this.token, allowQueryToken);
+  }
+
+  private rejectUpgrade(socket: Duplex, status: number, text: string, pathname: string, req: http.IncomingMessage): void {
+    logger.warn(`Rejected ${pathname} upgrade (${status}) from ${req.socket.remoteAddress}`);
+    socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    socket.destroy();
   }
 
   private isLocalRequest(req: http.IncomingMessage): boolean {
