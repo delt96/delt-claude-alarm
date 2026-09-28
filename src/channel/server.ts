@@ -11,10 +11,12 @@ import { logger } from '../shared/logger.js';
 import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
+import { readPeerName } from './peer-name.js';
 import type { SessionStatus, NotifyLevel } from '../shared/types.js';
 
 const sessionId = randomUUID();
 const sessionName = process.env.CLAUDE_ALARM_SESSION_NAME ?? path.basename(process.cwd());
+let peerName = readPeerName();
 
 const server = new Server(
   {
@@ -38,6 +40,8 @@ REPLYING:
 
 IMAGES: If a channel message contains "[Image: ...] Read the file to view it: <path>", use the Read tool on that path before responding — otherwise the image is invisible to you.
 
+ROUTING: If a dashboard message has lines like [claude-alarm] @X = SendMessage to "Y", do what the message asks and deliver the result with the SendMessage tool to exactly "Y". Never guess other recipients. Then reply to the dashboard with what you sent.
+
 STATUS: Call status("working") before starting a long task, status("waiting_input") when blocked on user input, status("idle") when finished responding.
 
 NOTIFICATIONS:
@@ -59,6 +63,7 @@ const hubClient = new HubClient(
   hubHost,
   hubPort,
   hubToken,
+  () => peerName,
 );
 
 // --- Tools ---
@@ -206,6 +211,18 @@ async function main() {
 
   // Connect to hub (non-blocking, will retry)
   hubClient.connect();
+
+  // The registry entry can be written after this MCP server starts, so re-check
+  // shortly after boot, then poll to follow /rename.
+  const refreshPeerName = () => {
+    const next = readPeerName();
+    if (next === peerName) return;
+    peerName = next;
+    logger.info(`Peer name: ${next ?? '(none)'}`);
+    hubClient.send({ type: 'peer_name', sessionId, peerName: next });
+  };
+  setTimeout(refreshPeerName, 2_000).unref();
+  setInterval(refreshPeerName, 30_000).unref();
 
   // Listen for messages from hub and forward to Claude via channel notification
   hubClient.onMessage(async (msg) => {

@@ -12,12 +12,14 @@ export interface SessionInfo {
   cwd?: string;
   channelEnabled?: boolean;
   isLocal?: boolean;
+  peerName?: string;
 }
 
 /** Messages sent between channel server and hub */
 export type ChannelMessage =
   | { type: 'register'; session: SessionInfo }
   | { type: 'status'; sessionId: string; status: SessionStatus }
+  | { type: 'peer_name'; sessionId: string; peerName?: string }
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel }
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string }

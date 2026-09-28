@@ -16,6 +16,7 @@ export class HubClient {
     private hubHost = DEFAULT_HUB_HOST,
     private hubPort = DEFAULT_HUB_PORT,
     private token?: string,
+    private getPeerName: () => string | undefined = () => undefined,
   ) {}
 
   connect(): void {
@@ -41,6 +42,7 @@ export class HubClient {
             lastActivity: Date.now(),
             cwd: process.cwd(),
             channelEnabled: true,
+            peerName: this.getPeerName(),
           },
         };
         this.ws!.send(JSON.stringify(registration));

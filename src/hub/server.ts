@@ -360,7 +360,7 @@ export class HubServer {
         this.sessions.register(session);
         this.channelSockets.set(session.id, ws);
         if (isLocal) this.localChannels.add(session.id);
-        logger.info(`Session registered: ${session.id} (${session.name}, channel: ${session.channelEnabled ?? false})`);
+        logger.info(`Session registered: ${session.id} (${session.name}, channel: ${session.channelEnabled ?? false}, peer: ${session.peerName ?? '-'})`);
         this.broadcastToDashboards({
           type: isReregister ? 'session_updated' : 'session_connected',
           session,
@@ -371,6 +371,15 @@ export class HubServer {
       case 'status': {
         const updated = this.sessions.updateStatus(msg.sessionId, msg.status);
         if (updated) {
+          this.broadcastToDashboards({ type: 'session_updated', session: updated });
+        }
+        break;
+      }
+
+      case 'peer_name': {
+        const updated = this.sessions.setPeerName(msg.sessionId, msg.peerName);
+        if (updated) {
+          logger.info(`Peer name for ${msg.sessionId}: ${msg.peerName ?? '-'}`);
           this.broadcastToDashboards({ type: 'session_updated', session: updated });
         }
         break;

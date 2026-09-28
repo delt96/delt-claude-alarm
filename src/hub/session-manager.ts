@@ -44,6 +44,14 @@ export class SessionManager {
     return session;
   }
 
+  setPeerName(sessionId: string, peerName: string | undefined): SessionInfo | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.peerName = peerName;
+    }
+    return session;
+  }
+
   updateActivity(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
