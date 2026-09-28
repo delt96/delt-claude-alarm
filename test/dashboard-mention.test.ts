@@ -130,3 +130,25 @@ test('query ends at the caret', () => {
   assert.equal(query('@front hi'), null);
   assert.deepEqual(query('@front hi', 3), { start: 0, query: 'fr' });
 });
+
+test('rename rejects another session folder name', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.renameError('kg_ebill_front', 'a'), 'Name already used by another session');
+});
+
+test('rename rejects another session custom name ignoring case', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.renameError('FRONT', 'a'), 'Name already used by another session');
+});
+
+test('rename rejects bracket and at characters', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.renameError('a[b]', 'a'), 'Name cannot contain [, ] or @');
+  assert.equal(h.renameError('me@x', 'a'), 'Name cannot contain [, ] or @');
+});
+
+test('rename allows a fresh name and the session own current name', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.renameError('backend', 'a'), null);
+  assert.equal(h.renameError('front', 'b'), null);
+});

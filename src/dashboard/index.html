@@ -187,6 +187,7 @@
     outline: none;
     font-family: inherit;
   }
+  .name-edit-input.invalid { border-color: var(--red); }
   .session-name {
     font-size: 14px;
     font-weight: 500;
@@ -1138,6 +1139,14 @@
     return s.displayName || s.name;
   }
 
+  function renameError(val, id) {
+    if (/[\[\]@]/.test(val)) return 'Name cannot contain [, ] or @';
+    const key = normName(val);
+    const taken = Object.values(state.sessions).some(o => o.id !== id &&
+      (normName(sessionDisplayName(o)) === key || normName(folderName(o)) === key));
+    return taken ? 'Name already used by another session' : null;
+  }
+
   function mentionTargets() {
     return Object.values(state.sessions).filter(s => s.id !== state.selectedSession && s.peerName);
   }
@@ -1453,12 +1462,18 @@
     input.select();
 
     let done = false;
-    const commit = (save) => {
+    const commit = (save, fromBlur) => {
       if (done) return;
+      const val = input.value.trim();
+      const baseName = s.displayName || s.name;
+      const err = save && val && val !== baseName ? renameError(val, id) : null;
+      if (err && !fromBlur) {
+        input.classList.add('invalid');
+        input.title = err;
+        return;
+      }
       done = true;
-      if (save) {
-        const val = input.value.trim();
-        const baseName = s.displayName || s.name;
+      if (save && !err) {
         if (!val || val === baseName) delete state.sessionMeta.names[id];
         else state.sessionMeta.names[id] = val;
         saveSessionMeta();
@@ -1467,10 +1482,11 @@
     };
     input.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+      if (e.key === 'Enter') { e.preventDefault(); commit(true, false); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false, false); }
     });
-    input.addEventListener('blur', () => commit(true));
+    input.addEventListener('input', () => { input.classList.remove('invalid'); input.title = ''; });
+    input.addEventListener('blur', () => commit(true, true));
     input.addEventListener('click', (e) => e.stopPropagation());
   }
 
