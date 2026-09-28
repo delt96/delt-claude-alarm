@@ -1147,26 +1147,43 @@
     return taken ? 'Name already used by another session' : null;
   }
 
+  function sessionNames(s) {
+    return [state.sessionMeta.names[s.id], folderName(s), s.peerName].filter(Boolean);
+  }
+
+  // Built-in SendMessage only reaches sessions on the hub's own machine.
   function mentionTargets() {
-    return Object.values(state.sessions).filter(s => s.id !== state.selectedSession && s.peerName);
+    const selected = state.sessions[state.selectedSession];
+    if (!selected || !selected.isLocal) return [];
+    return Object.values(state.sessions).filter(s => s.id !== selected.id && s.isLocal && s.peerName);
   }
 
   function resolveMention(name) {
     const key = normName(name);
-    const targets = mentionTargets();
-    const byCustom = targets.filter(s => state.sessionMeta.names[s.id] && normName(state.sessionMeta.names[s.id]) === key);
-    if (byCustom.length) return byCustom.length === 1 ? byCustom[0] : null;
-    const byFolder = targets.filter(s => normName(folderName(s)) === key);
-    return byFolder.length === 1 ? byFolder[0] : null;
+    const matches = mentionTargets().filter(s => sessionNames(s).some(n => normName(n) === key));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function mentionLabel(s) {
+    return [sessionDisplayName(s), folderName(s), s.peerName].find(n => resolveMention(n) === s) || s.peerName;
+  }
+
+  // A token only counts as a mention when it names (or starts with) some
+  // session, so pasted code like @Override or npm @types/x is left alone.
+  function looksLikeSessionMention(name) {
+    const key = normName(name);
+    return Object.values(state.sessions).some(s => sessionNames(s).some(n => key.startsWith(normName(n))));
   }
 
   function extractMentions(text) {
+    const prose = text.replace(/```[\s\S]*?(```|$)/g, ' ').replace(/`[^`\n]*`/g, ' ');
     const re = /(^|\s)@(?:\[([^\]\n]+)\]|([^\s\[\]]+))/g;
     const found = [];
     let m;
-    while ((m = re.exec(text))) {
-      const name = m[2] !== undefined ? m[2] : m[3].replace(/[.,!?;:)]+$/, '');
-      found.push({ raw: m[0].trim(), name });
+    while ((m = re.exec(prose))) {
+      const bracketed = m[2] !== undefined;
+      const name = bracketed ? m[2] : m[3].replace(/[.,!?;:)]+$/, '');
+      found.push({ raw: m[0].trim(), name, bracketed });
     }
     return found;
   }
@@ -1181,12 +1198,16 @@
     const seen = new Set();
     for (const m of mentions) {
       const s = resolveMention(m.name);
-      if (!s) { unknown.push(m.raw); continue; }
+      if (!s) {
+        if (m.bracketed || looksLikeSessionMention(m.name)) unknown.push(m.raw);
+        continue;
+      }
       if (seen.has(s.id)) continue;
       seen.add(s.id);
       lines.push(`[claude-alarm] @${m.name} = SendMessage to "${s.peerName}"`);
     }
     if (unknown.length) return { ok: false, unknown };
+    if (!lines.length) return { ok: true, content: text };
     return { ok: true, content: `${text}\n\n${lines.join('\n')}` };
   }
 
@@ -1232,7 +1253,7 @@
 
   function applyMention(s) {
     const input = $('#msgInput');
-    const label = sessionDisplayName(s);
+    const label = mentionLabel(s);
     const token = /\s/.test(label) ? `@[${label}] ` : `@${label} `;
     const before = input.value.slice(0, mentionState.start);
     const after = input.value.slice(input.selectionStart);

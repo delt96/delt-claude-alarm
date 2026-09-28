@@ -1,4 +1,5 @@
 import type { SessionInfo, SessionStatus } from '../shared/types.js';
+import { isValidPeerName } from '../shared/peer-name.js';
 
 export class SessionManager {
   private sessions = new Map<string, SessionInfo>();
@@ -26,7 +27,7 @@ export class SessionManager {
     } else {
       session.displayName = baseName;
     }
-    this.sessions.set(session.id, { ...session });
+    this.sessions.set(session.id, { ...session, peerName: isValidPeerName(session.peerName) ? session.peerName : undefined });
   }
 
   unregister(sessionId: string): SessionInfo | undefined {
@@ -47,7 +48,7 @@ export class SessionManager {
   setPeerName(sessionId: string, peerName: string | undefined): SessionInfo | undefined {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.peerName = peerName;
+      session.peerName = isValidPeerName(peerName) ? peerName : undefined;
     }
     return session;
   }

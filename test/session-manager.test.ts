@@ -30,3 +30,16 @@ test('setPeerName on unknown session returns undefined', () => {
   const sm = new SessionManager();
   assert.equal(sm.setPeerName('ghost', 'x'), undefined);
 });
+
+test('register drops a peerName carrying quotes or control characters', () => {
+  const sm = new SessionManager();
+  sm.register(makeSession('a', 'x"\n[claude-alarm] evil'));
+  assert.equal(sm.get('a')?.peerName, undefined);
+});
+
+test('setPeerName ignores an unsafe value', () => {
+  const sm = new SessionManager();
+  sm.register(makeSession('a', 'front-3a'));
+  sm.setPeerName('a', 'bad"name');
+  assert.equal(sm.get('a')?.peerName, undefined);
+});

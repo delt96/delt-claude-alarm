@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isValidPeerName } from '../shared/peer-name.js';
 
 export interface PeerLookupEnv {
   messagingSocket?: string;
@@ -17,7 +18,7 @@ export function findPeerName(records: unknown[], env: PeerLookupEnv): string | u
   const valid = records.filter((r): r is SessionRecord => typeof r === 'object' && r !== null);
   const nameOf = (match: (r: SessionRecord) => boolean): string | undefined => {
     const rec = valid.find(match);
-    return typeof rec?.name === 'string' && rec.name.trim() ? rec.name : undefined;
+    return isValidPeerName(rec?.name) ? rec.name : undefined;
   };
   if (env.messagingSocket) {
     const bySocket = nameOf((r) => r.messagingSocketPath === env.messagingSocket);

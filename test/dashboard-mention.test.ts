@@ -26,7 +26,9 @@ const sessions = {
   b: { id: 'b', name: 'kg_ebill_front', displayName: 'kg_ebill_front', peerName: 'kg_ebill_front-3a' },
   c: { id: 'c', name: 'docs', displayName: 'docs (2)', peerName: 'docs-9f' },
   d: { id: 'd', name: 'nopeer', displayName: 'nopeer' },
+  e: { id: 'e', name: 'remote', displayName: 'remote', peerName: 'remote-77', isLocal: false },
 };
+for (const s of Object.values(sessions) as any[]) if (s.isLocal === undefined) s.isLocal = true;
 const names = { b: 'front', c: 'ebill back' };
 
 test('text without mentions passes through unchanged', () => {
@@ -68,9 +70,14 @@ test('attached Korean particle blocks the send', () => {
   assert.deepEqual([...r.unknown], ['@front에']);
 });
 
-test('unknown name blocks the send', () => {
+test('unrelated @token passes through without routing', () => {
   const h = loadHelpers(sessions, names);
-  assert.equal(h.buildRouting('@nobody hi').ok, false);
+  assert.deepEqual({ ...h.buildRouting('@nobody hi') }, { ok: true, content: '@nobody hi' });
+});
+
+test('unresolved bracketed mention blocks the send', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.buildRouting('@[nobody here] hi').ok, false);
 });
 
 test('session without peerName is not a target', () => {
@@ -151,4 +158,56 @@ test('rename allows a fresh name and the session own current name', () => {
   const h = loadHelpers(sessions, names);
   assert.equal(h.renameError('backend', 'a'), null);
   assert.equal(h.renameError('front', 'b'), null);
+});
+
+test('code annotations and scoped packages pass through', () => {
+  const h = loadHelpers(sessions, names);
+  for (const text of ['@Override\npublic void run()', 'npm i @types/node', '@media (max-width: 1px)', '@Mapper interface X']) {
+    assert.deepEqual({ ...h.buildRouting(text) }, { ok: true, content: text }, text);
+  }
+});
+
+test('mentions inside code spans and fences are ignored', () => {
+  const h = loadHelpers(sessions, names);
+  for (const text of ['see `@front` there', '```\n@front\n```']) {
+    assert.deepEqual({ ...h.buildRouting(text) }, { ok: true, content: text }, text);
+  }
+});
+
+test('custom name colliding with a later folder name is ambiguous', () => {
+  const h = loadHelpers({
+    a: { id: 'a', name: 'sel', displayName: 'sel', peerName: 'sel-1', isLocal: true },
+    x: { id: 'x', name: 'x', displayName: 'x', peerName: 'x-1', isLocal: true },
+    y: { id: 'y', name: 'api', displayName: 'api', peerName: 'api-1', isLocal: true },
+  }, { x: 'api' });
+  assert.equal(h.buildRouting('@api hi').ok, false);
+});
+
+test('peer name itself resolves', () => {
+  const h = loadHelpers(sessions, names);
+  assert.match(h.buildRouting('@kg_ebill_front-3a hi').content, /SendMessage to "kg_ebill_front-3a"/);
+});
+
+test('inserted label maps back to the same session', () => {
+  const coll = {
+    a: { id: 'a', name: 'sel', displayName: 'sel', peerName: 'sel-1', isLocal: true },
+    x: { id: 'x', name: 'x', displayName: 'x', peerName: 'x-1', isLocal: true },
+    y: { id: 'y', name: 'api', displayName: 'api', peerName: 'api-1', isLocal: true },
+  };
+  const h = loadHelpers(coll, { x: 'api' });
+  for (const id of ['x', 'y']) {
+    const label = h.mentionLabel(coll[id as 'x' | 'y']);
+    assert.equal(h.resolveMention(label)?.id, id, label);
+  }
+});
+
+test('remote sessions are not targets and block the send', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.mentionTargets().some((s: any) => s.id === 'e'), false);
+  assert.equal(h.buildRouting('@remote hi').ok, false);
+});
+
+test('a remote selected session has no targets', () => {
+  const h = loadHelpers(sessions, names, 'e');
+  assert.equal(h.mentionTargets().length, 0);
 });

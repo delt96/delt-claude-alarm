@@ -214,7 +214,8 @@ In the dashboard input, type `@<session name>` to have the selected session send
 ```
 
 - Names are the ones shown in the dashboard (your custom name, or the folder name). Names with spaces are written `@[my name]`.
-- The dashboard resolves each mention to the target's `SendMessage` name and appends a routing line; unknown or ambiguous names block the send.
+- The dashboard resolves each mention to the target's `SendMessage` name and appends a routing line. A mention that looks like a session name but doesn't resolve to exactly one local session blocks the send; other `@words` (e.g. `@Override`, code spans) are left alone.
+- Only sessions on the hub's machine can be mentioned.
 - Messages exchanged between sessions are not shown in the dashboard.
 - Requires Claude Code with cross-session messaging (2.1.239+ on Windows).
 

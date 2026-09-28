@@ -73,3 +73,8 @@ test('readPeerName returns undefined without lookup env', () => {
   const dir = makeConfigDir({ '2.json': JSON.stringify(recB) });
   assert.equal(readPeerName({ CLAUDE_CONFIG_DIR: dir }), undefined);
 });
+
+test('rejects a registry name with quotes or newlines', () => {
+  const evil = { ...recA, name: 'x"\ny' };
+  assert.equal(findPeerName([evil], { messagingSocket: SOCK_A }), undefined);
+});

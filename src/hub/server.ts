@@ -377,6 +377,7 @@ export class HubServer {
       }
 
       case 'peer_name': {
+        if (this.channelSockets.get(msg.sessionId) !== ws) break;
         const updated = this.sessions.setPeerName(msg.sessionId, msg.peerName);
         if (updated) {
           logger.info(`Peer name for ${msg.sessionId}: ${msg.peerName ?? '-'}`);
