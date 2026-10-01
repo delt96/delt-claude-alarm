@@ -45,7 +45,7 @@ export type ChannelMessage =
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }
   | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string; content?: string }
-  | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string; content?: string }
+  | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string; content?: string; source?: MessageSource }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_connected'; session: SessionInfo }
   | { type: 'session_disconnected'; sessionId: string }

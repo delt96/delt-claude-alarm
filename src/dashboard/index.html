@@ -1641,7 +1641,7 @@
 
   function updateImageUI() {
     const s = state.selectedSession ? state.sessions[state.selectedSession] : null;
-    const canImage = s && s.isLocal && s.agentKind !== 'codex';
+    const canImage = s && s.isLocal;
     $('#attachBtn').disabled = !canImage;
   }
 

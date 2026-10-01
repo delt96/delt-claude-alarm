@@ -659,6 +659,7 @@ export class HubServer {
       mimeType,
       originalName,
       content,
+      source: 'dashboard',
     };
     channelWs.send(JSON.stringify(forwardMsg));
     logger.info(`Image saved and forwarded: ${filename} (${buffer.length} bytes)`);
@@ -666,7 +667,7 @@ export class HubServer {
     // Cleanup after 5 minutes
     setTimeout(() => {
       try { fs.unlinkSync(filePath); } catch {}
-    }, 5 * 60 * 1000);
+    }, 5 * 60 * 1000).unref();
   }
 
   private async handleWebhookSave(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -695,7 +696,7 @@ export class HubServer {
     this.telegramBot.onImageToSession = (sessionId, imagePath, mimeType, caption) => {
       const channelWs = this.channelSockets.get(sessionId);
       if (channelWs?.readyState === WebSocket.OPEN) {
-        const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption };
+        const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption, source: 'telegram' };
         channelWs.send(JSON.stringify(msg));
         logger.info(`Telegram photo forwarded to session: ${sessionId}`);
       }
