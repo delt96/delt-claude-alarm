@@ -32,6 +32,10 @@ claude-alarm은 Claude Code 세션만 대시보드·텔레그램으로 보고 �
 | `thread/turns/list({limit, sortDirection:'desc'})`의 첫 항목이 진행 중 턴(`inProgress`)이다 | 사전 확인 |
 | `turn/steer`는 즉시 접수되지만 진행 중인 응답이 끝난 뒤 같은 턴에서 반영된다 | 0단계, 사전 확인 |
 | Hub는 WebSocket 연결 하나에 세션 하나만 묶는다(`src/hub/server.ts:381-400` `socketOwners`) | 코드 |
+| 승인 대기 중에 새로 구독(`thread/resume`)한 클라이언트에도 대기 중인 승인 요청이 **같은 요청 ID로 다시 온다**. 요청 ID는 데몬 전체에서 같은 값이다(두 클라이언트 모두 30) | 단계 B 사전 실측 |
+| 이미 해결된 요청에 다시 답하면 데몬은 오류 없이 무시한다 | 단계 B 사전 실측 |
+| 파일 변경 승인 요청(`item/fileChange/requestApproval`)에는 `threadId`·`turnId`·`itemId`·`reason`(null 가능)·`grantRoot`만 있고 파일 목록이 없다. 파일 목록은 같은 `itemId`의 `item/started`(`type:'fileChange'`, `changes[].path`·`diff`)에 먼저 온다 | 단계 B 사전 실측 |
+| 승인 대기 중 상태는 `active` + `activeFlags:['waitingOnApproval']`이고, 해결되면 `serverRequest/resolved` 뒤 플래그가 빠진다 | 단계 B 사전 실측 |
 
 ## 설계
 
@@ -140,11 +144,14 @@ choiceId?: string;
 ```
 
 - Hub용 `requestId`는 어댑터가 만드는 불투명 문자열이다. 어댑터는 이를 원래 JSON-RPC ID(숫자/문자열 그대로)와 선택지별 정확한 응답 값에 매핑해 둔다. `choiceId`는 선택지 배열의 인덱스 문자열이다.
+- 표시 내용(영어 UI): 명령은 `toolName:'Command'`, 설명은 요청의 `reason`(없으면 "Codex wants to run a command."), 미리보기는 `command` 원문. 파일 변경은 `toolName:'File change'`, 미리보기는 같은 `itemId`의 `item/started`에서 받아 둔 파일 경로와 diff(못 받았으면 "The file list is not available here. Check the Codex window."). MCP 도구는 `toolName:'MCP tool'`, 설명은 서버 이름, 미리보기는 요청의 `message`. MCP 선택지 라벨은 Allow / Decline / Cancel.
+- 같은 대화·같은 JSON-RPC ID의 요청이 다시 오면(재구독 시 데몬이 다시 보냄) 새 요청으로 만들지 않는다.
 - 응답은 어댑터가 한 번만 보낸다. 대시보드와 텔레그램에서 동시에 눌러도 두 번째는 무시한다.
-- `serverRequest/resolved` → `permission_resolved{state:'resolved'}`. resolved는 결과를 알려 주지 않으므로 화면에는 "해결됨"으로만 표시하고 허용·거절을 추정하지 않는다. 데몬 연결이 끊기면 대기 중 요청은 모두 `expired`로 보낸다.
-- Hub는 선택지 모드 요청에 `behavior` 응답이 오거나 기존 요청에 `choiceId`가 오면 버린다.
-- 대시보드: 선택지 모드는 선택지마다 버튼을 그리고, 누르면 "전송됨"으로 바꾼 뒤 `permission_resolved`를 받으면 닫는다. 기존 Claude 요청(허용/거절, Enter/Esc)은 바꾸지 않는다.
-- 텔레그램: 선택지 버튼의 `callback_data`는 `pc:<짧은 토큰>`이고 토큰 → `{sessionId, requestId, choiceId}`는 메모리에 둔다(64바이트 제한). `permission_resolved`를 받으면 메시지를 고쳐 버튼을 없앤다. 모르는 토큰(재시작 등)은 "만료됨"으로 답한다.
+- `serverRequest/resolved` → `permission_resolved{state:'resolved'}`. resolved는 결과를 알려 주지 않으므로 화면에는 "해결됨"으로만 표시하고 허용·거절을 추정하지 않는다. 데몬 연결이 끊기거나 대화가 닫혀(closed·notLoaded 등) Hub 연결을 닫을 때 대기 중 요청은 `expired`로 보낸다. Hub도 선택지 요청을 보낸 세션의 연결이 끊기면 그 요청들을 `expired`로 알린다(어댑터가 죽은 경우 대비).
+- Hub는 선택지 모드 요청에 `behavior` 응답이 오거나, 기존 요청에 `choiceId`가 오거나, 선택지에 없는 `choiceId`가 오면 버린다. 해결·만료된 요청에 대한 응답도 버린다.
+- 대시보드: 선택지 모드는 선택지마다 버튼을 그리고 설명(`reason`)을 함께 보인다. 누르면 "Sent: <라벨>"로 바꾼 뒤 `permission_resolved`를 받으면 닫는다. Enter/Esc 단축키는 선택지 요청에 쓰지 않는다. 기존 Claude 요청(허용/거절, Enter/Esc)은 바꾸지 않는다.
+- 텔레그램: 선택지 버튼의 `callback_data`는 `pc:<짧은 토큰>`이고 토큰 → `{sessionId, requestId, choiceId}`는 메모리에 둔다(64바이트 제한). 누르면 그 요청의 토큰을 모두 지우고 메시지를 "Sent: <라벨>"로 고쳐 버튼을 없앤다. `permission_resolved`를 받으면 메시지를 "Resolved"/"Expired"로 고친다(전송 완료 전에 와도 전송 뒤 고친다). 모르는 토큰(재시작 등)은 "Expired"로 답한다.
+- 승인으로 바꾸지 않는 사용자 입력 요청(`item/tool/requestUserInput`, `item/permissions/requestApproval`, 도구 승인이 아닌 MCP 입력 요청)은 "Codex is waiting" `notify`(warning, "… Handle it in Codex.")만 보낸다. 그 밖의 서버 요청은 로그만 남긴다.
 
 ### 9. 실행 중 추가 지시와 이미지 (단계 C)
 
@@ -186,6 +193,6 @@ choiceId?: string;
 
 - App Server 프로토콜은 실험적이다. `availableDecisions`처럼 생성 스키마에 없는 필드는 없을 때의 기본값을 둔다.
 - Codex 앱·VS Code 확장에서 연 대화는 확인하지 않았다(터미널만). 같은 데몬을 쓰면 같은 방식으로 보일 것으로 추정한다.
-- 두 곳에서 같은 승인에 동시에 답할 때 데몬의 처리, 데몬이 꺼져 있을 때 `proxy`의 동작은 미검증이다.
+- 이미 해결된 승인에 뒤늦게 답하면 무시되는 것은 확인했다(1.5초 간격). 거의 같은 순간에 두 곳에서 답할 때와 데몬이 꺼져 있을 때 `proxy`의 동작은 미검증이다.
 - 터미널에서 시킨 모든 턴의 결과가 텔레그램으로 간다. 너무 잦으면 운영해 보고 필터를 따로 정한다.
 - Codex 세션 원격 제어 권한은 Hub 토큰에 묶인다(Claude 세션과 같음). 기능은 기본 꺼짐이다.
