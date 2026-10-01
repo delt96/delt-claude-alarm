@@ -15,6 +15,13 @@ export interface FileChange {
   diff: string;
 }
 
+const MAX_DESCRIPTION = 500;
+const MAX_PREVIEW = 50_000;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…(truncated)` : text;
+}
+
 const DECISION_LABELS: Record<string, string> = {
   accept: 'Allow once',
   acceptForSession: 'Allow for this session',
@@ -52,8 +59,8 @@ export function approvalView(method: string, params: any, files: FileChange[] = 
       const command = params.command ?? (params.commandActions ?? []).map((a: { command: string }) => a.command).join('\n');
       return {
         toolName: 'Command',
-        description: params.reason || 'Codex wants to run a command.',
-        inputPreview: JSON.stringify({ command: String(command) }),
+        description: clip(params.reason || 'Codex wants to run a command.', MAX_DESCRIPTION),
+        inputPreview: JSON.stringify({ command: clip(String(command), MAX_PREVIEW) }),
         choices: decisions(offered),
       };
     }
@@ -64,8 +71,8 @@ export function approvalView(method: string, params: any, files: FileChange[] = 
         : 'The file list is not available here. Check the Codex window.';
       return {
         toolName: 'File change',
-        description: params.reason || 'Codex wants to change files.',
-        inputPreview: JSON.stringify({ content }),
+        description: clip(params.reason || 'Codex wants to change files.', MAX_DESCRIPTION),
+        inputPreview: JSON.stringify({ content: clip(content, MAX_PREVIEW) }),
         choices: decisions(['accept', 'acceptForSession', 'decline', 'cancel']),
       };
     }
@@ -73,8 +80,8 @@ export function approvalView(method: string, params: any, files: FileChange[] = 
       if (params._meta?.codex_approval_kind !== 'mcp_tool_call') return null;
       return {
         toolName: 'MCP tool',
-        description: `MCP server: ${params.serverName ?? 'unknown'}`,
-        inputPreview: JSON.stringify({ content: String(params.message ?? '') }),
+        description: clip(`MCP server: ${params.serverName ?? 'unknown'}`, MAX_DESCRIPTION),
+        inputPreview: JSON.stringify({ content: clip(String(params.message ?? ''), MAX_PREVIEW) }),
         choices: [
           { label: 'Allow', response: { action: 'accept', content: {} } },
           { label: 'Decline', response: { action: 'decline' } },

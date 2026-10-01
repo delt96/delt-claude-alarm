@@ -77,3 +77,17 @@ test('other requests are not approvals claude-alarm can answer', () => {
   assert.equal(approvalView('mcpServer/elicitation/request', { threadId: 't', mode: 'form', message: 'Your name?' }), null);
   assert.equal(approvalView('item/tool/requestUserInput', { threadId: 't' }), null);
 });
+
+test('oversized reasons and previews are truncated', () => {
+  const cmd = approvalView('item/commandExecution/requestApproval', { threadId: 't', reason: 'r'.repeat(2000), command: 'c'.repeat(60_000) })!;
+  assert.equal(cmd.description, `${'r'.repeat(500)}…(truncated)`);
+  assert.equal(JSON.parse(cmd.inputPreview).command, `${'c'.repeat(50_000)}…(truncated)`);
+  const files = fileChanges({ changes: [{ path: 'a', diff: 'd'.repeat(60_000) }] });
+  const fc = approvalView('item/fileChange/requestApproval', { threadId: 't', itemId: 'p', reason: 'r'.repeat(2000) }, files)!;
+  assert.equal(fc.description, `${'r'.repeat(500)}…(truncated)`);
+  assert.equal(JSON.parse(fc.inputPreview).content.length, 50_000 + '…(truncated)'.length);
+  assert.ok(JSON.parse(fc.inputPreview).content.endsWith('…(truncated)'));
+  const mcp = approvalView('mcpServer/elicitation/request', { serverName: 's'.repeat(2000), message: 'm'.repeat(60_000), _meta: { codex_approval_kind: 'mcp_tool_call' } })!;
+  assert.equal(mcp.description, `${('MCP server: ' + 's'.repeat(2000)).slice(0, 500)}…(truncated)`);
+  assert.equal(JSON.parse(mcp.inputPreview).content, `${'m'.repeat(50_000)}…(truncated)`);
+});
