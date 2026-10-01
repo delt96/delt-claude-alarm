@@ -29,6 +29,7 @@ interface Tracked {
   hub: HubClient;
   subscribed: boolean;
   subscribing: boolean;
+  pendingTurn: boolean;
   turns: Map<string, AgentMessage[]>;
 }
 
@@ -133,7 +134,7 @@ export class CodexAdapter {
       const hub = new HubClient(codexSessionId(thread.id), threadTitle(thread), host, port, token, () => undefined, () =>
         this.registration(thread.id),
       );
-      this.threads.set(thread.id, { thread, hub, subscribed: false, subscribing: false, turns: new Map() });
+      this.threads.set(thread.id, { thread, hub, subscribed: false, subscribing: false, pendingTurn: false, turns: new Map() });
       hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
     }
@@ -210,6 +211,7 @@ export class CodexAdapter {
       return;
     }
     t.thread.status = status;
+    t.pendingTurn = false;
     t.hub.send({ type: 'status', sessionId: codexSessionId(threadId), status: hubStatus(status) });
     if (status.type === 'systemError') this.notify(threadId, 'Codex error', 'The Codex conversation hit a system error.', 'error');
     void this.subscribe(threadId);
@@ -256,15 +258,17 @@ export class CodexAdapter {
   private async sendTurn(threadId: string, content: string, source?: MessageSource): Promise<void> {
     const t = this.threads.get(threadId);
     if (!t) return;
-    if (t.thread.status.type !== 'idle') {
+    if (t.thread.status.type !== 'idle' || t.pendingTurn) {
       this.notify(threadId, 'Not delivered', 'Codex is busy, so the message was not delivered. Send it again when the task finishes.', 'warning');
       return;
     }
+    t.pendingTurn = true;
     try {
       if (!this.rpc) throw new Error('not connected to the Codex daemon');
       await this.subscribe(threadId);
       await this.rpc.request('turn/start', { threadId, input: [{ type: 'text', text: withSourcePrefix(content, source) }] });
     } catch (err) {
+      t.pendingTurn = false;
       this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
     }
   }

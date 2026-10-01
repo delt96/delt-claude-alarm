@@ -198,3 +198,19 @@ test('approval requests raise a warning that names the command', async () => {
     dash.ws.close();
   }
 });
+
+test('back-to-back messages start only one turn', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'first' }));
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'second' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.match(n.message, /busy/);
+    assert.equal(d.calls('turn/start').length, 1);
+    assert.equal(d.calls('turn/start')[0].params.input[0].text, '[claude-alarm · Dashboard] first');
+  } finally {
+    dash.ws.close();
+  }
+});
