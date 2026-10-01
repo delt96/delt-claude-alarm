@@ -1530,3 +1530,85 @@ Run: `npm test` → 전부 PASS
 git add README.md
 git commit -m "docs: explain answering Codex approvals from the dashboard and Telegram"
 ```
+
+---
+
+### Task 7: 재연결한 대시보드가 놓친 Codex 승인을 채운다 (R1, 최종 수정 뒤 실측에서 발견 — 사용자 결정으로 추가)
+
+**배경:** 최종 수정 묶음의 `permission_pending`은 키(`sessionId`, `requestId`)만 보낸다. Hub 재시작 뒤 어댑터가 대기 중 승인을 새 ID로 다시 보내는 시점이 대시보드 재연결보다 빠르면, 대시보드는 그 요청을 영영 받지 못한다(세션은 waiting input인데 버튼 없음). 페이지를 새로 고쳐도 마찬가지다.
+
+**Files:**
+- Modify: `src/shared/types.ts`, `src/hub/server.ts`, `src/dashboard/index.html`
+- Test: `test/hub-permission-choices.test.ts`, `test/dashboard-permissions.test.ts`
+
+**Interfaces:**
+- Produces: `PendingChoiceRequest` 타입, `permission_pending.requests: PendingChoiceRequest[]`(방송했던 `permission_request`와 같은 필드)
+
+- [ ] **Step 1: Write the failing tests**
+
+`test/hub-permission-choices.test.ts` — 기존 `permission_pending` 테스트 옆에 추가: 선택지 요청이 대기 중일 때 연결한 대시보드가 받는 `permission_pending.requests[0]`이 `{ sessionId, requestId, toolName: 'Command', description: 'Allow?', inputPreview: '{"command":"ls"}', timestamp: 0, choices }`와 같다(`deepEqual`).
+
+`test/dashboard-permissions.test.ts` — 추가:
+
+```ts
+test('pending choice requests the dashboard does not have are returned to be added', () => {
+  const h = loadPermissionHelpers();
+  const known = { ...choiceReq, requestId: 'r1' };
+  const permissionRequests = { 'codex:t1': [known] };
+  const listed = [
+    { sessionId: 'codex:t1', requestId: 'r1', toolName: 'Command', description: 'Allow?', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+    { sessionId: 'codex:t1', requestId: 'r9', toolName: 'Command', description: 'Again?', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+    { sessionId: 'codex:t2', requestId: 'r7', toolName: 'File change', description: 'Files', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+  ];
+  const missing = h.applyPendingChoices(permissionRequests, listed);
+  assert.deepEqual(missing.map((m: any) => m.requestId), ['r9', 'r7']);
+});
+```
+
+(기존 `applyPendingChoices` 테스트는 그대로 통과해야 한다 — 반환값만 늘어난다.)
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `node --import tsx --import ./test/isolate-home.ts --test test/hub-permission-choices.test.ts test/dashboard-permissions.test.ts`
+Expected: FAIL — pending 항목에 `toolName` 등이 없음, `applyPendingChoices`가 `undefined`를 반환.
+
+- [ ] **Step 3: Implement**
+
+`src/shared/types.ts` — `PermissionChoice` 아래에 추가하고 `permission_pending` 줄을 바꾼다:
+
+```ts
+export interface PendingChoiceRequest {
+  sessionId: string;
+  requestId: string;
+  toolName: string;
+  description: string;
+  inputPreview: string;
+  timestamp: number;
+  choices: PermissionChoice[];
+}
+```
+
+```ts
+  | { type: 'permission_pending'; requests: PendingChoiceRequest[] }
+```
+
+`src/hub/server.ts`:
+- import에 `PendingChoiceRequest`를 더한다.
+- `choiceRequests`의 값 타입을 `{ request: PendingChoiceRequest; choiceIds: Set<string> }`로 바꾸고, `case 'permission_request'`에서 `{ request: { sessionId: msg.sessionId, requestId: msg.requestId, toolName: msg.toolName, description: msg.description, inputPreview: msg.inputPreview, timestamp: msg.timestamp, choices }, choiceIds: new Set(choices.map((c) => c.id)) }`로 저장한다. `entry.sessionId`/`entry.requestId`를 쓰던 곳(`expireChoices` 등)은 `entry.request.sessionId`/`entry.request.requestId`로 바꾼다.
+- `permission_pending`은 `requests: [...this.choiceRequests.values()].map((c) => c.request)`.
+
+`src/dashboard/index.html`:
+- `applyPendingChoices`가 목록에 있는데 `permissionRequests[p.sessionId]`에 같은 `requestId`가 없는 항목들을 배열로 반환한다(목록 순서 유지). 기존 동작(Expired 처리, Sent 해제)은 그대로.
+- `case 'permission_pending':`에서 반환된 항목마다 `handleMessage({ type: 'permission_request', ...m });`를 불러 새 요청과 같은 경로(목록 추가, 알림, 제목 깜빡임)로 넣은 뒤 다시 그린다.
+
+- [ ] **Step 4: Run tests**
+
+Run: `node --import tsx --import ./test/isolate-home.ts --test test/hub-permission-choices.test.ts test/dashboard-permissions.test.ts` → PASS
+Run: `npm test` → 전부 PASS, `npx tsc --noEmit` → 오류 없음
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/types.ts src/hub/server.ts src/dashboard/index.html test/hub-permission-choices.test.ts test/dashboard-permissions.test.ts
+git commit -m "fix(dashboard): restore Codex approvals a reconnecting dashboard missed"
+```
