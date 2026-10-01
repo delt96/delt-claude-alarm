@@ -149,7 +149,11 @@ choiceId?: string;
 - 응답은 어댑터가 한 번만 보낸다. 대시보드와 텔레그램에서 동시에 눌러도 두 번째는 무시한다.
 - `serverRequest/resolved` → `permission_resolved{state:'resolved'}`. resolved는 결과를 알려 주지 않으므로 화면에는 "해결됨"으로만 표시하고 허용·거절을 추정하지 않는다. 데몬 연결이 끊기거나 대화가 닫혀(closed·notLoaded 등) Hub 연결을 닫을 때 대기 중 요청은 `expired`로 보낸다. Hub도 선택지 요청을 보낸 세션의 연결이 끊기면 그 요청들을 `expired`로 알린다(어댑터가 죽은 경우 대비).
 - Hub는 선택지 모드 요청에 `behavior` 응답이 오거나, 기존 요청에 `choiceId`가 오거나, 선택지에 없는 `choiceId`가 오면 버린다. 해결·만료된 요청에 대한 응답도 버린다.
-- 대시보드: 선택지 모드는 선택지마다 버튼을 그리고 설명(`reason`)을 함께 보인다. 누르면 "Sent: <라벨>"로 바꾼 뒤 `permission_resolved`를 받으면 닫는다. Enter/Esc 단축키는 선택지 요청에 쓰지 않는다. 기존 Claude 요청(허용/거절, Enter/Esc)은 바꾸지 않는다.
+- 대시보드: 선택지 모드는 선택지마다 버튼을 그리고 설명(`reason`)을 함께 보인다. 누르면 "Sent: <라벨>"로 바꾼 뒤 `permission_resolved`를 받으면 닫는다(소켓이 열려 있지 않으면 보내지 않고 버튼을 그대로 둔다). Enter/Esc 단축키는 선택지 요청에 쓰지 않는다. 기존 Claude 요청(허용/거절, Enter/Esc)은 바꾸지 않는다.
+- 대시보드 재연결(최종 리뷰 반영): Hub는 대시보드가 연결되면 `sessions_list` 바로 뒤에 대기 중인 선택지 요청 목록 `{ type: 'permission_pending'; requests: { sessionId: string; requestId: string }[] }`을 보낸다. 대시보드는 목록에 없는 미해결 선택지 요청을 Expired로 바꾸고, 목록에 있는데 "Sent" 상태인 것은 버튼을 다시 보여 준다(보낸 것이 끊김 중에 사라졌을 수 있다. 다시 눌러도 어댑터가 한 번만 답한다). Hub 재시작 뒤 열린 탭에 남은 버튼이 "Sent"인 채 멈추는 것을 막는다. Claude 요청은 건드리지 않는다.
+- 턴이 끝났는데(`turn/completed`) 그 턴의 승인에 `serverRequest/resolved`가 오지 않았으면(예: 중단) 어댑터가 `permission_resolved{resolved}`로 닫는다.
+- 크기 상한: 설명은 500자, 미리보기(명령·파일 diff·MCP 메시지)는 50,000자로 자른다(넘으면 끝에 "…(truncated)"). 텔레그램 메시지 4096자 제한과 WebSocket 16 MB 제한 때문이다.
+- 승인 요청의 표시 내용을 만들다 예외가 나면(형식이 다른 요청) 버리지 않고 "Codex is waiting" 경고로 대신한다.
 - 텔레그램: 선택지 버튼의 `callback_data`는 `pc:<짧은 토큰>`이고 토큰 → `{sessionId, requestId, choiceId}`는 메모리에 둔다(64바이트 제한). 누르면 그 요청의 토큰을 모두 지우고 메시지를 "Sent: <라벨>"로 고쳐 버튼을 없앤다. `permission_resolved`를 받으면 메시지를 "Resolved"/"Expired"로 고친다(전송 완료 전에 와도 전송 뒤 고친다). 모르는 토큰(재시작 등)은 "Expired"로 답한다.
 - 승인으로 바꾸지 않는 사용자 입력 요청(`item/tool/requestUserInput`, `item/permissions/requestApproval`, 도구 승인이 아닌 MCP 입력 요청)은 "Codex is waiting" `notify`(warning, "… Handle it in Codex.")만 보낸다. 그 밖의 서버 요청은 로그만 남긴다.
 
