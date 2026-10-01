@@ -94,3 +94,33 @@ test('pending choice requests the dashboard does not have are returned to be add
   const missing = h.applyPendingChoices(permissionRequests, listed);
   assert.deepEqual(missing.map((m: any) => m.requestId), ['r9', 'r7']);
 });
+
+function renderBar(requests: unknown[]) {
+  const h = loadPermissionHelpers();
+  const bar = { innerHTML: '', classList: { add() {}, remove() {} }, querySelectorAll: () => [] };
+  h.$ = () => bar;
+  h.state.selectedSession = 'claude-1';
+  h.state.permissionRequests = { 'claude-1': requests };
+  h.renderPermissionBar();
+  return bar.innerHTML;
+}
+
+test('the permission bar says how many requests are waiting when there are several', () => {
+  const html = renderBar([claudeReq, { ...claudeReq, requestId: 'r3' }, { ...claudeReq, requestId: 'r4' }]);
+  assert.match(html, /class="perm-count"[^>]*>3 permission requests waiting</);
+});
+
+test('a single waiting request gets no count line', () => {
+  const html = renderBar([claudeReq, { ...claudeReq, requestId: 'r3', resolved: true }]);
+  assert.doesNotMatch(html, /perm-count/);
+});
+
+// Layout cannot be exercised without a browser; this pins the rule that keeps the message box on screen.
+test('the permission bar caps its height and scrolls instead of pushing the message box away', () => {
+  const html = fs.readFileSync(new URL('../src/dashboard/index.html', import.meta.url), 'utf8');
+  const rule = html.match(/\n  \.permission-bar \{([^}]*)\}/);
+  assert.ok(rule, '.permission-bar rule not found');
+  assert.match(rule[1], /max-height:/);
+  assert.match(rule[1], /overflow-y: auto;/);
+  assert.match(rule[1], /flex-shrink: 0;/);
+});

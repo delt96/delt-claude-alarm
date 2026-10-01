@@ -589,8 +589,23 @@
     background: linear-gradient(180deg, rgba(245,158,11,0.08) 0%, transparent 100%);
     padding: 0;
     display: none;
+    flex-shrink: 0;
+    max-height: 45vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
   }
   .permission-bar.active { display: block; }
+  .perm-count {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 6px 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--yellow);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
   .perm-item {
     display: flex;
     align-items: center;
@@ -2085,7 +2100,8 @@
     const reqs = (state.permissionRequests[sid] || []).filter(r => !r.resolved);
     if (!reqs.length) { bar.classList.remove('active'); bar.innerHTML = ''; return; }
     bar.classList.add('active');
-    bar.innerHTML = reqs.map(r => {
+    const count = reqs.length > 1 ? `<div class="perm-count">${reqs.length} permission requests waiting</div>` : '';
+    bar.innerHTML = count + reqs.map(r => {
       const { text: previewText, kind: previewKind, lang: previewLang } = formatPermPreview(r.toolName, r.inputPreview);
       const displayName = formatToolName(r.toolName, r.inputPreview);
       return `<div class="perm-item">
