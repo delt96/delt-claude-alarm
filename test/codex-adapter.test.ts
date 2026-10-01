@@ -114,3 +114,87 @@ test('a brand-new thread is subscribed once it has a rollout', async () => {
   d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
   await until(() => d.calls('thread/resume').length === 2);
 });
+
+test('final answers are relayed as replies', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'Looking into it', phase: 'commentary' } });
+    d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm2', text: 'Done: tests pass', phase: 'final_answer' } });
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+    const reply = await until(() => dash.inbox.find((m) => m.type === 'reply_from_session' && m.sessionId === 'codex:t1'));
+    assert.equal(reply.content, 'Done: tests pass');
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('failed turns raise an error notification', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u2', status: 'failed', items: [], error: { message: 'usage limit reached' } } });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'error');
+    assert.match(n.message, /usage limit reached/);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('dashboard messages start a turn with a source prefix', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'run the tests' }));
+    await until(() => d.calls('turn/start').length > 0);
+    assert.deepEqual(d.calls('turn/start')[0].params, {
+      threadId: 't1',
+      input: [{ type: 'text', text: '[claude-alarm · Dashboard] run the tests' }],
+    });
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('messages to a thread waiting for approval are refused, not queued', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: ['waitingOnApproval'] } });
+    await session('codex:t1', (s) => s.status === 'waiting_input');
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'hello?' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'warning');
+    assert.match(n.message, /busy/);
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    await session('codex:t1', (s) => s.status === 'idle');
+    assert.equal(d.calls('turn/start').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('approval requests raise a warning that names the command', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await until(() => d.calls('thread/resume').length > 0);
+  const dash = await openDashboard();
+  try {
+    d.serverRequest(90, 'item/commandExecution/requestApproval', {
+      threadId: 't1',
+      turnId: 'u3',
+      itemId: 'i1',
+      command: '"powershell.exe" -Command \'curl.exe https://example.com\'',
+      commandActions: [{ type: 'unknown', command: 'curl.exe https://example.com' }],
+    });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Codex approval needed');
+    assert.match(n.message, /curl\.exe https:\/\/example\.com/);
+  } finally {
+    dash.ws.close();
+  }
+});

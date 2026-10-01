@@ -1,14 +1,16 @@
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
-import type { NotifyLevel, SessionInfo } from '../shared/types.js';
+import type { ChannelMessage, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { RpcClient } from './rpc.js';
 import {
   codexSessionId,
+  finalAnswer,
   hubStatus,
   isTrackable,
   threadTitle,
+  withSourcePrefix,
   type AgentMessage,
   type CodexThread,
   type CodexThreadStatus,
@@ -29,6 +31,12 @@ interface Tracked {
   subscribing: boolean;
   turns: Map<string, AgentMessage[]>;
 }
+
+const APPROVAL_REQUESTS = new Set([
+  'item/commandExecution/requestApproval',
+  'item/fileChange/requestApproval',
+  'mcpServer/elicitation/request',
+]);
 
 export class CodexAdapter {
   private conn?: ProxyConnection;
@@ -60,6 +68,7 @@ export class CodexAdapter {
       const live = new RpcClient(conn.ws);
       rpc = live;
       live.on('notification', (method: string, params: any) => this.onNotification(method, params));
+      live.on('request', (_id: unknown, method: string, params: any) => this.onServerRequest(method, params));
       live.on('close', () => {
         if (this.rpc === live) this.onDaemonLost();
       });
@@ -125,6 +134,7 @@ export class CodexAdapter {
         this.registration(thread.id),
       );
       this.threads.set(thread.id, { thread, hub, subscribed: false, subscribing: false, turns: new Map() });
+      hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
     }
     void this.subscribe(thread.id);
@@ -180,6 +190,12 @@ export class CodexAdapter {
       case 'thread/deleted':
         this.drop(params.threadId);
         break;
+      case 'item/completed':
+        if (params.item?.type === 'agentMessage') this.collect(params.threadId, params.turnId, params.item);
+        break;
+      case 'turn/completed':
+        this.onTurnCompleted(params.threadId, params.turn);
+        break;
     }
   }
 
@@ -197,6 +213,69 @@ export class CodexAdapter {
     t.hub.send({ type: 'status', sessionId: codexSessionId(threadId), status: hubStatus(status) });
     if (status.type === 'systemError') this.notify(threadId, 'Codex error', 'The Codex conversation hit a system error.', 'error');
     void this.subscribe(threadId);
+  }
+
+  private collect(threadId: string, turnId: string, item: AgentMessage): void {
+    const t = this.threads.get(threadId);
+    if (!t) return;
+    const list = t.turns.get(turnId) ?? [];
+    list.push({ text: item.text, phase: item.phase });
+    t.turns.set(turnId, list);
+  }
+
+  private onTurnCompleted(
+    threadId: string,
+    turn: { id: string; status: string; error?: { message: string } | null; items?: Array<{ type: string } & AgentMessage> },
+  ): void {
+    const t = this.threads.get(threadId);
+    if (!t) return;
+    const collected = t.turns.get(turn.id) ?? [];
+    t.turns.delete(turn.id);
+    if (turn.status === 'failed' || turn.error) {
+      this.notify(threadId, 'Codex task failed', turn.error?.message ?? 'The task ended with an error.', 'error');
+      return;
+    }
+    if (turn.status === 'interrupted') {
+      this.notify(threadId, 'Codex task stopped', 'The task was interrupted.', 'info');
+      return;
+    }
+    // turn/completed may carry only a summary of the items, so prefer what was collected live.
+    const fromTurn = (turn.items ?? []).filter((i) => i.type === 'agentMessage');
+    const text = finalAnswer(collected.length ? collected : fromTurn);
+    if (text) t.hub.send({ type: 'reply', sessionId: codexSessionId(threadId), content: text });
+  }
+
+  private onHubMessage(threadId: string, msg: ChannelMessage): void {
+    if (msg.type === 'message_to_session') {
+      void this.sendTurn(threadId, msg.content, msg.source);
+    } else if (msg.type === 'image_to_session') {
+      this.notify(threadId, 'Not delivered', 'Codex sessions do not accept images yet.', 'warning');
+    }
+  }
+
+  private async sendTurn(threadId: string, content: string, source?: MessageSource): Promise<void> {
+    const t = this.threads.get(threadId);
+    if (!t) return;
+    if (t.thread.status.type !== 'idle') {
+      this.notify(threadId, 'Not delivered', 'Codex is busy, so the message was not delivered. Send it again when the task finishes.', 'warning');
+      return;
+    }
+    try {
+      if (!this.rpc) throw new Error('not connected to the Codex daemon');
+      await this.subscribe(threadId);
+      await this.rpc.request('turn/start', { threadId, input: [{ type: 'text', text: withSourcePrefix(content, source) }] });
+    } catch (err) {
+      this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
+    }
+  }
+
+  private onServerRequest(method: string, params: any): void {
+    if (!APPROVAL_REQUESTS.has(method) || !params?.threadId) {
+      logger.debug(`Ignoring Codex server request ${method}`);
+      return;
+    }
+    const detail = params.commandActions?.[0]?.command ?? params.command ?? params.reason ?? params.message ?? method;
+    this.notify(params.threadId, 'Codex approval needed', `Approve or decline in Codex: ${String(detail).slice(0, 300)}`, 'warning');
   }
 
   private notify(threadId: string, title: string, message: string, level: NotifyLevel): void {
