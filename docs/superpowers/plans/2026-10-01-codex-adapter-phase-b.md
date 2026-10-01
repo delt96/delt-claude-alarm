@@ -41,6 +41,7 @@
 | `src/shared/types.ts` | `PermissionChoice`, 승인 메시지 확장, `permission_resolved` | 수정 |
 | `src/codex/approvals.ts` | 승인 요청 → 표시 내용·선택지·응답 값(순수 함수) | 생성 |
 | `src/codex/rpc.ts` | `respond(id, result)` | 수정 |
+| `src/shared/permission-key.ts` | 대기 중 승인의 맵 키 `permissionKey(sessionId, requestId)`(Hub·텔레그램 공용) | 생성 |
 | `src/hub/telegram.ts` | 선택지 버튼(`pc:` 토큰), 선택 콜백, 해결 표시 | 수정 |
 | `src/hub/server.ts` | 선택지 요청 기억·응답 검증·해결 중계·연결 끊김 시 만료 | 수정 |
 | `src/dashboard/index.html` | 선택지 버튼·설명·Sent/Resolved/Expired 표시, 단축키 제외, `Command` 미리보기 | 수정 |
@@ -314,12 +315,14 @@ git commit -m "feat(codex): map approval requests to choices and answer server r
 ### Task 2: 텔레그램 — 선택지 버튼 · 선택 콜백 · 해결 표시
 
 **Files:**
+- Create: `src/shared/permission-key.ts`
 - Modify: `src/hub/telegram.ts`
 - Test: `test/telegram-choices.test.ts`(생성)
 
 **Interfaces:**
 - Consumes: `PermissionChoice`(Task 1)
 - Produces (Task 3이 호출):
+  - `src/shared/permission-key.ts`: `export function permissionKey(sessionId: string, requestId: string): string`
   - `TelegramBot.onChoiceVerdict?: (sessionId: string, requestId: string, choiceId: string) => void`
   - `TelegramBot.sendChoiceRequest(sessionId, sessionLabel, requestId, toolName, description, inputPreview, choices: PermissionChoice[]): Promise<void>`
   - `TelegramBot.resolveChoiceRequest(sessionId, requestId, state: 'resolved' | 'expired'): Promise<void>`
@@ -435,19 +438,27 @@ Expected: FAIL — `bot.sendChoiceRequest is not a function`.
 
 - [ ] **Step 3: Implement**
 
+`src/shared/permission-key.ts`:
+
+```ts
+export function permissionKey(sessionId: string, requestId: string): string {
+  return `${sessionId}\n${requestId}`;
+}
+```
+
 `src/hub/telegram.ts`:
 
-import 줄을 바꾼다:
+import 줄을 바꾸고 하나를 더한다:
 
 ```ts
 import type { TelegramConfig, SessionInfo, PermissionChoice } from '../shared/types.js';
+import { permissionKey } from '../shared/permission-key.js';
 ```
 
 `const TELEGRAM_API` 아래에 추가:
 
 ```ts
 const MAX_CHOICE_MESSAGES = 200;
-const choiceKey = (sessionId: string, requestId: string) => `${sessionId}\n${requestId}`;
 
 interface ChoiceMessage {
   html: string;
@@ -493,7 +504,7 @@ interface ChoiceMessage {
       (preview.length > slice.length ? '\n<i>...truncated</i>' : '');
 
     const entry: ChoiceMessage = { html };
-    this.choiceMessages.set(choiceKey(sessionId, requestId), entry);
+    this.choiceMessages.set(permissionKey(sessionId, requestId), entry);
     const rows = choices.map((c) => {
       const token = randomUUID().replace(/-/g, '').slice(0, 16);
       this.choiceTokens.set(token, { sessionId, requestId, choiceId: c.id, label: c.label });
@@ -509,7 +520,7 @@ interface ChoiceMessage {
 
   async resolveChoiceRequest(sessionId: string, requestId: string, state: 'resolved' | 'expired'): Promise<void> {
     this.dropChoiceTokens(sessionId, requestId);
-    const key = choiceKey(sessionId, requestId);
+    const key = permissionKey(sessionId, requestId);
     const entry = this.choiceMessages.get(key);
     if (!entry) return;
     this.choiceMessages.delete(key);
@@ -526,7 +537,7 @@ interface ChoiceMessage {
     this.dropChoiceTokens(choice.sessionId, choice.requestId);
     this.onChoiceVerdict?.(choice.sessionId, choice.requestId, choice.choiceId);
     await this.answerCallbackQuery(query.id, `Sent: ${choice.label}`);
-    const entry = this.choiceMessages.get(choiceKey(choice.sessionId, choice.requestId));
+    const entry = this.choiceMessages.get(permissionKey(choice.sessionId, choice.requestId));
     if (entry?.messageId !== undefined && !entry.outcome) {
       await this.editMessageText(this.config.chatId, entry.messageId, `${entry.html}\n\n⏳ <b>Sent: ${this.escHtml(choice.label)}</b>`);
     }
@@ -567,7 +578,7 @@ Run: `npx tsc --noEmit` → 오류 없음
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hub/telegram.ts test/telegram-choices.test.ts
+git add src/shared/permission-key.ts src/hub/telegram.ts test/telegram-choices.test.ts
 git commit -m "feat(telegram): offer Codex approval choices as buttons and close them on resolution"
 ```
 
@@ -580,7 +591,7 @@ git commit -m "feat(telegram): offer Codex approval choices as buttons and close
 - Test: `test/hub-permission-choices.test.ts`(생성)
 
 **Interfaces:**
-- Consumes: `PermissionChoice`, 메시지 타입(Task 1), `TelegramBot.sendChoiceRequest` / `resolveChoiceRequest` / `onChoiceVerdict`(Task 2)
+- Consumes: `PermissionChoice`, 메시지 타입(Task 1), `permissionKey`(Task 2, `src/shared/permission-key.ts`), `TelegramBot.sendChoiceRequest` / `resolveChoiceRequest` / `onChoiceVerdict`(Task 2)
 - Produces (Task 4·5가 기대하는 Hub 동작):
   - 채널 → 대시보드: `permission_request`에 `choices`가 있으면 그대로 실어 방송, 텔레그램은 `sendChoiceRequest`
   - 대시보드·텔레그램 → 채널: 선택지 요청에는 선택지에 있는 `choiceId`만 `{ type, sessionId, requestId, choiceId }`로, 그 밖의 요청에는 `behavior`만 넘긴다
@@ -740,17 +751,16 @@ Expected: FAIL — `choices`가 방송에 없음(undefined), `behavior: 'allow'`
 
 `src/hub/server.ts`:
 
-타입 import에 `PermissionChoice`를 더한다:
+타입 import에 `PermissionChoice`를 더하고 `permissionKey`를 import한다:
 
 ```ts
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice } from '../shared/types.js';
+import { permissionKey } from '../shared/permission-key.js';
 ```
 
 `const MAX_WS_PAYLOAD = …;` 아래에 추가:
 
 ```ts
-const permissionKey = (sessionId: string, requestId: string) => `${sessionId}\n${requestId}`;
-
 function validChoices(choices: unknown): PermissionChoice[] | undefined {
   if (!Array.isArray(choices)) return undefined;
   const valid = choices.filter((c): c is PermissionChoice => typeof c?.id === 'string' && typeof c?.label === 'string');
