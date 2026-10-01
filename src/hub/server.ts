@@ -311,7 +311,7 @@ export class HubServer {
       return;
     }
 
-    const msg: ChannelMessage = { type: 'message_to_session', sessionId, content };
+    const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'api' };
     ws.send(JSON.stringify(msg));
     this.jsonResponse(res, 200, { ok: true });
   }
@@ -510,7 +510,7 @@ export class HubServer {
         if (msg.type === 'message_to_session') {
           const channelWs = this.channelSockets.get(msg.sessionId);
           if (channelWs?.readyState === WebSocket.OPEN) {
-            channelWs.send(JSON.stringify(msg));
+            channelWs.send(JSON.stringify({ ...msg, source: 'dashboard' }));
           }
         } else if (msg.type === 'image_upload') {
           this.handleImageUpload(msg);
@@ -612,7 +612,7 @@ export class HubServer {
     this.telegramBot.onMessageToSession = (sessionId, content) => {
       const channelWs = this.channelSockets.get(sessionId);
       if (channelWs?.readyState === WebSocket.OPEN) {
-        const msg: ChannelMessage = { type: 'message_to_session', sessionId, content };
+        const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'telegram' };
         channelWs.send(JSON.stringify(msg));
         logger.info(`Telegram message forwarded to session: ${sessionId}`);
       }
