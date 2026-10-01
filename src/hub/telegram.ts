@@ -56,7 +56,7 @@ export class TelegramBot {
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
   // Pending messages for session selection
-  private pendingMessages = new Map<number, { text?: string; photoFileId?: string; caption?: string }>(); // chatId -> pending
+  private pendingMessages = new Map<number, { text?: string; photoFileId?: string; caption?: string; sessionIds: string[] }>(); // chatId -> pending
 
   constructor(config: TelegramConfig) {
     this.config = config;
@@ -199,15 +199,14 @@ export class TelegramBot {
         const pending = this.pendingMessages.get(msg.chat.id);
         if (pending) {
           this.pendingMessages.delete(msg.chat.id);
-          const sessions = this.getSessions?.() ?? [];
-          const idx = parseInt(selectMatch[1], 10) - 1;
-          if (idx >= 0 && idx < sessions.length) {
+          const session = this.pendingSession(pending, parseInt(selectMatch[1], 10) - 1);
+          if (session) {
             if (pending.photoFileId) {
-              await this.deliverPhotoToSessionByFileId(sessions[idx].id, pending.photoFileId, pending.caption);
+              await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
             } else if (pending.text) {
-              this.deliverToSession(sessions[idx].id, pending.text);
+              this.deliverToSession(session.id, pending.text);
             }
-            this.sendMessage(`Sent to [${this.getLabel(sessions[idx])}]`);
+            this.sendMessage(`Sent to [${this.getLabel(session)}]`);
           } else {
             this.sendMessage('Invalid session number.');
           }
@@ -234,11 +233,12 @@ export class TelegramBot {
     }
 
     // Multiple sessions — ask user to pick with inline buttons
+    const sessionIds = sessions.map((s) => s.id);
     if (hasPhoto) {
       const largest = msg.photo![msg.photo!.length - 1];
-      this.pendingMessages.set(msg.chat.id, { photoFileId: largest.file_id, caption: text });
+      this.pendingMessages.set(msg.chat.id, { photoFileId: largest.file_id, caption: text, sessionIds });
     } else {
-      this.pendingMessages.set(msg.chat.id, { text });
+      this.pendingMessages.set(msg.chat.id, { text, sessionIds });
     }
     const buttons = sessions.map((s, i) => ({
       text: this.getLabel(s),
@@ -299,6 +299,12 @@ export class TelegramBot {
     } catch (err) {
       logger.warn(`Telegram photo download failed: ${(err as Error).message}`);
     }
+  }
+
+  // Buttons are numbered against the list shown when they were sent; Codex sessions come and go, so the live list may have shifted.
+  private pendingSession(pending: { sessionIds: string[] }, idx: number): SessionInfo | undefined {
+    const id = pending.sessionIds[idx];
+    return id ? this.getSessions?.().find((s) => s.id === id) : undefined;
   }
 
   private getLabel(session: SessionInfo): string {
@@ -409,25 +415,20 @@ export class TelegramBot {
     const parts = query.data!.split(':');
     if (parts.length < 3) return;
     const [, idxStr, chatIdStr] = parts;
-    const idx = parseInt(idxStr, 10);
     const chatId = parseInt(chatIdStr, 10);
 
-    const sessions = this.getSessions?.() ?? [];
-    if (idx < 0 || idx >= sessions.length) {
+    const pending = this.pendingMessages.get(chatId);
+    const session = pending ? this.pendingSession(pending, parseInt(idxStr, 10)) : undefined;
+    if (!pending || !session) {
       await this.answerCallbackQuery(query.id, 'Session not found');
       return;
     }
-
-    const session = sessions[idx];
-    const pending = this.pendingMessages.get(chatId);
     this.pendingMessages.delete(chatId);
 
-    if (pending) {
-      if (pending.photoFileId) {
-        await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
-      } else if (pending.text) {
-        this.deliverToSession(session.id, pending.text);
-      }
+    if (pending.photoFileId) {
+      await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
+    } else if (pending.text) {
+      this.deliverToSession(session.id, pending.text);
     }
 
     await this.answerCallbackQuery(query.id, `Sent to ${this.getLabel(session)}`);
