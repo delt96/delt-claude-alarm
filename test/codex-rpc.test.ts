@@ -99,3 +99,16 @@ test('non-object frames are ignored', () => {
   assert.deepEqual(seen, []);
 });
 
+test('respond answers a server request with its own id while the socket is open', () => {
+  const ws = new FakeWs();
+  const rpc = new RpcClient(ws as any);
+  rpc.respond('req-7', { decision: 'accept' });
+  rpc.respond(31, { decision: 'decline' });
+  ws.readyState = 3;
+  rpc.respond(32, { decision: 'cancel' });
+  assert.deepEqual(ws.sent, [
+    { id: 'req-7', result: { decision: 'accept' } },
+    { id: 31, result: { decision: 'decline' } },
+  ]);
+});
+

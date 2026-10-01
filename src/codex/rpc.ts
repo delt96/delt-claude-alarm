@@ -51,6 +51,11 @@ export class RpcClient extends EventEmitter {
     this.ws.send(JSON.stringify(params === undefined ? { method } : { method, params }));
   }
 
+  respond(id: RpcId, result: unknown): void {
+    if (this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ id, result }));
+  }
+
   // ws stops reading the socket for good if a 'message' listener throws.
   private guarded(method: string, fn: () => void): void {
     try {

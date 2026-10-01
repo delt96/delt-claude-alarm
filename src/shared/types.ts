@@ -5,6 +5,11 @@ export type AgentKind = 'claude' | 'codex';
 
 export type MessageSource = 'dashboard' | 'telegram' | 'api';
 
+export interface PermissionChoice {
+  id: string;
+  label: string;
+}
+
 /** Session info tracked by the hub */
 export interface SessionInfo {
   id: string;
@@ -37,8 +42,9 @@ export type ChannelMessage =
   | { type: 'session_updated'; session: SessionInfo }
   | { type: 'notification'; sessionId: string; title: string; message: string; level?: NotifyLevel; timestamp: number }
   | { type: 'reply_from_session'; sessionId: string; content: string; timestamp: number }
-  | { type: 'permission_request'; sessionId: string; requestId: string; toolName: string; description: string; inputPreview: string; timestamp: number }
-  | { type: 'permission_response'; sessionId: string; requestId: string; behavior: 'allow' | 'deny' }
+  | { type: 'permission_request'; sessionId: string; requestId: string; toolName: string; description: string; inputPreview: string; timestamp: number; choices?: PermissionChoice[] }
+  | { type: 'permission_response'; sessionId: string; requestId: string; behavior?: 'allow' | 'deny'; choiceId?: string }
+  | { type: 'permission_resolved'; sessionId: string; requestId: string; state: 'resolved' | 'expired' }
   | { type: 'error'; message: string };
 
 export type NotifyLevel = 'info' | 'warning' | 'error' | 'success';
