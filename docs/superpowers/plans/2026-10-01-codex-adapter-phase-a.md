@@ -2687,3 +2687,178 @@ HOME="$CA_HOME" USERPROFILE="$CA_HOME" CODEX_HOME="$REAL_CODEX_HOME" node dist/c
 - [ ] **Step 4: 정리와 기록**
 
 격리 Hub를 끄고 `$CA_HOME`을 지운다. 확인한 항목과 못 한 항목(텔레그램 전달은 격리 Hub에 봇이 없어 미확인)을 Obsidian 문서에 적는다.
+
+---
+
+### Task 15: 작업 중일 때만 구독 (Task 14에서 찾은 결함 수정)
+
+Task 14 수동 검증에서 Codex 창을 닫아도 세션이 사라지지 않았다. 실측 결과 데몬은 **구독 중인 클라이언트가 하나라도 있으면 대화를 유지하고, 마지막 구독자가 떠나거나 `thread/unsubscribe`한 뒤 정확히 60초 뒤에 내린다**(`notLoaded` + `thread/closed` 방송). 어댑터가 모든 대화를 자동 구독해 계속 붙잡고 있었다. 구독하지 않은 클라이언트의 `turn/start`는 구독이 되지 않고 응답 이벤트도 받지 못한다. 판단: Jev `subscribe_while_active` 0.98.
+
+**Files:**
+- Modify: `src/codex/adapter.ts`
+- Test: `test/codex-adapter.test.ts`
+
+**Interfaces:**
+- Produces: 동작 변경만. 대화는 상태가 `active`이거나 대시보드 지시를 보낼 때만 구독하고, 턴이 끝나거나(`turn/completed`) `active`가 아닌 상태가 되면 구독을 해제한다. 구독·해제는 대화별로 순서대로 처리하고, 마지막으로 원한 상태에 맞춘다.
+
+- [ ] **Step 1: 테스트 수정·추가** — `test/codex-adapter.test.ts`
+
+`startAdapter`의 기본 핸들러에 추가(`thread/resume` 핸들러 다음 줄):
+
+```ts
+  d.handle('thread/unsubscribe', () => ({ status: 'unsubscribed' }));
+```
+
+첫 테스트를 교체:
+
+```ts
+test('loaded threads become Codex sessions; only active ones are subscribed, without overrides', async () => {
+  const d = await startAdapter([
+    thread('t1', { status: { type: 'active', activeFlags: [] } }),
+    thread('t2'),
+    thread('sub', { parentThreadId: 't1' }),
+  ]);
+  const s = await session('codex:t1');
+  assert.equal(s.agentKind, 'codex');
+  assert.equal(s.displayName, 'Thread t1');
+  assert.equal(s.cwd, 'C:\\w\\proj');
+  assert.equal(s.status, 'working');
+  assert.equal((await session('codex:t2')).status, 'idle');
+  await until(() => d.calls('thread/resume').length > 0);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(d.calls('thread/resume').map((c) => c.params), [{ threadId: 't1', excludeTurns: true }]);
+  assert.ok(!(await sessions()).some((x) => x.id === 'codex:sub'));
+});
+```
+
+`'a brand-new thread is subscribed once it has a rollout'` 테스트를 다음 두 테스트로 교체:
+
+```ts
+test('an idle thread is subscribed while a turn runs and released when it completes', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(d.calls('thread/resume').length, 0);
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
+  await until(() => d.calls('thread/resume').length === 1);
+  d.notify('turn/completed', { threadId: 't1', turn: { id: 'u9', status: 'completed', items: [], error: null } });
+  await until(() => d.calls('thread/unsubscribe').length === 1);
+  assert.deepEqual(d.calls('thread/unsubscribe')[0].params, { threadId: 't1' });
+});
+
+test('a failed subscription is retried on the next status change', async () => {
+  let ready = false;
+  const d = await startAdapter([thread('t1', { status: { type: 'active', activeFlags: [] } })], (dm) => dm.handle('thread/resume', () => {
+    if (!ready) throw new Error('no rollout found for thread id t1');
+    return {};
+  }));
+  await session('codex:t1');
+  await until(() => d.calls('thread/resume').length === 1);
+  ready = true;
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: ['waitingOnApproval'] } });
+  await until(() => d.calls('thread/resume').length === 2);
+});
+```
+
+다음 여섯 테스트의 준비 대기 줄 `await until(() => d.calls('thread/resume').length > 0);`을 `await session('codex:t1');`로 바꾼다: `final answers are relayed as replies`, `failed turns raise an error notification`, `dashboard messages start a turn with a source prefix`, `messages to a thread waiting for approval are refused, not queued`, `approval requests raise a warning that names the command`, `back-to-back messages start only one turn`. `dashboard messages start a turn with a source prefix`에는 `turn/start` 단언 다음에 추가:
+
+```ts
+    const order = d.received.map((r) => r.method);
+    assert.ok(order.indexOf('thread/resume') !== -1 && order.indexOf('thread/resume') < order.indexOf('turn/start'));
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `node --import tsx --import ./test/isolate-home.ts --test --test-timeout=30000 test/codex-adapter.test.ts`
+Expected: 새·바뀐 테스트 FAIL — 쉬는 대화도 바로 구독되고(`thread/resume` 호출 수 불일치), `thread/unsubscribe`가 호출되지 않는다.
+
+- [ ] **Step 3: 구현** — `src/codex/adapter.ts`
+
+`Tracked`의 `subscribing: boolean;`을 다음 두 필드로 바꾼다(`subscribed`는 유지):
+
+```ts
+  wantSubscribed: boolean;
+  sync: Promise<void>;
+```
+
+`upsert()`에서 새 항목 생성:
+
+```ts
+      this.threads.set(thread.id, {
+        thread,
+        hub,
+        subscribed: false,
+        wantSubscribed: false,
+        sync: Promise.resolve(),
+        pendingTurn: false,
+        turns: new Map(),
+      });
+```
+
+`upsert()` 끝의 `void this.subscribe(thread.id);`를 교체:
+
+```ts
+    void this.want(thread.id, thread.status.type === 'active');
+```
+
+`subscribe()` 메서드를 지우고 다음 두 메서드로 바꾼다:
+
+```ts
+  private want(threadId: string, subscribed: boolean): Promise<void> {
+    const t = this.threads.get(threadId);
+    if (!t) return Promise.resolve();
+    t.wantSubscribed = subscribed;
+    t.sync = t.sync.then(() => this.syncSubscription(t));
+    return t.sync;
+  }
+
+  private async syncSubscription(t: Tracked): Promise<void> {
+    const threadId = t.thread.id;
+    if (!this.rpc || this.threads.get(threadId) !== t || t.subscribed === t.wantSubscribed) return;
+    try {
+      if (t.wantSubscribed) {
+        // Only these two fields: any other resume field overrides the user's own thread settings.
+        await this.rpc.request('thread/resume', { threadId, excludeTurns: true });
+        t.subscribed = true;
+      } else {
+        // The daemon unloads a conversation 60 s after its last subscriber leaves; staying subscribed would keep closed Codex windows alive.
+        await this.rpc.request('thread/unsubscribe', { threadId });
+        t.subscribed = false;
+      }
+    } catch (err) {
+      logger.debug(`subscription sync for ${threadId} deferred: ${(err as Error).message}`);
+    }
+  }
+```
+
+`onStatus()` 끝의 `void this.subscribe(threadId);`를 교체:
+
+```ts
+    void this.want(threadId, status.type === 'active');
+```
+
+`onTurnCompleted()`에서 `t.turns.delete(turn.id);` 바로 다음 줄에 추가:
+
+```ts
+    void this.want(threadId, false);
+```
+
+`sendTurn()`의 `await this.subscribe(threadId);`를 교체:
+
+```ts
+      await this.want(threadId, true);
+```
+
+- [ ] **Step 4: 통과 확인**
+
+Run: `node --import tsx --import ./test/isolate-home.ts --test --test-timeout=30000 test/codex-adapter.test.ts` → 전부 PASS
+Run: `npm test` → 전체 PASS / `npx tsc --noEmit` → 오류 없음
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add src/codex/adapter.ts test/codex-adapter.test.ts
+git commit -m "fix(codex): subscribe only while a turn runs so closed windows unload"
+```
+
+- [ ] **Step 6: 수동 재확인** — Task 14 방식(격리 Hub 7990, `CODEX_HOME` 실제 경로)으로 다시 띄우고 사용자와 확인한다: 대시보드 지시·응답, 터미널 질문의 응답 전달이 그대로 되는지, Codex 창을 닫으면 약 60초 뒤 세션이 사라지는지.

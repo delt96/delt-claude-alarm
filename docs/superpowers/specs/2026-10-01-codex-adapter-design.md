@@ -67,9 +67,9 @@ codex?: { enabled: boolean; command?: string };
 - 연결 후 `initialize({clientInfo:{name:'claude-alarm', version}})` → `initialized`. 응답의 `userAgent`를 로그에 남긴다(버전 문제 추적용).
 - `thread/loaded/list`를 끝 페이지까지 읽고 각 ID를 `thread/read`로 보충한다. 이후 `thread/started`, `thread/status/changed`, `thread/name/updated`, `thread/closed`, `thread/archived`, `thread/deleted` 방송으로 갱신한다.
 - 대상: loaded 상태이고 `parentThreadId`가 없으며(서브에이전트 제외) `ephemeral`이 아닌 대화.
-- **대상 대화는 자동으로 구독한다**(`thread/resume({threadId, excludeTurns:true})`, 다른 필드는 넣지 않음). Codex 초안은 "사용자가 세션을 열 때 구독"을 권했지만 그 이유였던 부작용 우려가 사전 확인으로 해소됐고, 자동 구독이어야 터미널에서 시킨 작업의 완료·승인이 텔레그램으로 온다.
-- `no rollout found`로 실패한 대화는 다음 상태 방송 때 다시 시도한다.
-- `notLoaded`·closed·archived·deleted가 되면 그 대화의 Hub 연결을 닫는다(→ 대시보드에서 사라짐). 다시 loaded되면 새로 등록한다. `thread/unsubscribe`는 쓰지 않는다(영향 미검증).
+- **대화는 작업 중일 때만 구독한다**(2026-10-01 수정). 상태가 `active`가 되거나 대시보드 지시를 보낼 때 `thread/resume({threadId, excludeTurns:true})`(다른 필드는 넣지 않음)로 구독하고, 턴이 끝나거나(`turn/completed`) `active`가 아닌 상태가 되면 `thread/unsubscribe`한다. 처음 스펙은 "전부 자동 구독"이었으나, 실측 결과 데몬은 구독자가 있는 동안 대화를 유지하고 마지막 구독자가 떠난 뒤 60초 뒤에 내린다. 그래서 자동 구독은 닫힌 Codex 창의 대화를 계속 붙잡았다(세션이 사라지지 않음). 상태 변화는 구독 없이도 방송되므로, 터미널에서 시킨 작업도 시작 시점에 구독해 응답·승인을 받는다.
+- 구독이 실패하면(예: `no rollout found`) 다음 상태 방송 때 다시 시도한다.
+- `notLoaded`·closed·archived·deleted가 되면 그 대화의 Hub 연결을 닫는다(→ 대시보드에서 사라짐). 다시 loaded되면 새로 등록한다. Codex 창을 닫으면, 어댑터가 그 대화를 구독하고 있지 않은 한 약 60초 뒤 `notLoaded`가 와서 세션이 사라진다.
 
 ### 4. Hub 세션 매핑
 
