@@ -2,6 +2,7 @@
 import './isolate-home.js';
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
 import { HubServer } from '../src/hub/server.js';
 import { CodexAdapter } from '../src/codex/adapter.js';
@@ -213,4 +214,29 @@ test('back-to-back messages start only one turn', async () => {
   } finally {
     dash.ws.close();
   }
+});
+
+test('losing the daemon removes Codex sessions and reconnecting restores them', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  d.dropClient();
+  await until(async () => !(await sessions()).some((x) => x.id === 'codex:t1'));
+  await until(() => d.connections === 2, 5000);
+  await session('codex:t1');
+});
+
+test('a missing Codex binary is retried without crashing', async () => {
+  let attempts = 0;
+  adapter = new CodexAdapter({
+    command: 'codex',
+    hub: HUB,
+    reconnectMinMs: 20,
+    reconnectMaxMs: 40,
+    spawnFn: () => {
+      attempts++;
+      return spawn('claude-alarm-no-such-codex-binary', [], { stdio: 'pipe' });
+    },
+  });
+  adapter.start();
+  await until(() => attempts >= 3, 3000);
 });

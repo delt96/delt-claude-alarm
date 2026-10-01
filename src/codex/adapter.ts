@@ -44,8 +44,12 @@ export class CodexAdapter {
   private rpc?: RpcClient;
   private threads = new Map<string, Tracked>();
   private stopped = false;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private delay: number;
 
-  constructor(private opts: CodexAdapterOptions) {}
+  constructor(private opts: CodexAdapterOptions) {
+    this.delay = opts.reconnectMinMs ?? 2000;
+  }
 
   start(): void {
     this.stopped = false;
@@ -54,6 +58,8 @@ export class CodexAdapter {
 
   stop(): void {
     this.stopped = true;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
     this.conn?.close();
   }
@@ -80,6 +86,7 @@ export class CodexAdapter {
       });
       live.notify('initialized');
       logger.info(`Connected to Codex daemon (${init.userAgent ?? 'unknown version'})`);
+      this.delay = this.opts.reconnectMinMs ?? 2000;
       await this.discover();
     } catch (err) {
       logger.warn(`Codex daemon connection failed: ${(err as Error).message}`);
@@ -88,6 +95,7 @@ export class CodexAdapter {
         this.conn?.close();
         this.conn = undefined;
       }
+      this.scheduleRetry();
     }
   }
 
@@ -95,6 +103,17 @@ export class CodexAdapter {
     this.rpc = undefined;
     this.conn = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
+    if (!this.stopped) logger.warn('Codex daemon connection lost');
+    this.scheduleRetry();
+  }
+
+  private scheduleRetry(): void {
+    if (this.stopped || this.retryTimer) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.connect();
+    }, this.delay);
+    this.delay = Math.min(this.delay * 2, this.opts.reconnectMaxMs ?? 60_000);
   }
 
   private async discover(): Promise<void> {
