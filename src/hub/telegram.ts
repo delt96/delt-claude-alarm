@@ -3,10 +3,18 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../shared/logger.js';
 import { UPLOADS_DIR } from '../shared/constants.js';
-import type { TelegramConfig, SessionInfo } from '../shared/types.js';
+import type { TelegramConfig, SessionInfo, PermissionChoice } from '../shared/types.js';
 import { sessionLabel } from '../shared/session-label.js';
+import { permissionKey } from '../shared/permission-key.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
+const MAX_CHOICE_MESSAGES = 200;
+
+interface ChoiceMessage {
+  html: string;
+  messageId?: number;
+  outcome?: string;
+}
 
 interface TelegramPhotoSize {
   file_id: string;
@@ -53,6 +61,11 @@ export class TelegramBot {
   public onImageToSession?: (sessionId: string, imagePath: string, mimeType: string, caption?: string) => void;
   // Callback: when a permission verdict arrives from Telegram
   public onPermissionVerdict?: (sessionId: string, requestId: string, behavior: 'allow' | 'deny') => void;
+  // Callback: when a Codex approval choice arrives from Telegram
+  public onChoiceVerdict?: (sessionId: string, requestId: string, choiceId: string) => void;
+  // Telegram caps callback_data at 64 bytes, so buttons carry a short token instead of the ids.
+  private choiceTokens = new Map<string, { sessionId: string; requestId: string; choiceId: string; label: string }>();
+  private choiceMessages = new Map<string, ChoiceMessage>();
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
   // Pending messages for session selection
@@ -379,12 +392,95 @@ export class TelegramBot {
     await this.sendMessage(text, undefined, replyMarkup);
   }
 
+  async sendChoiceRequest(
+    sessionId: string,
+    sessionLabel: string,
+    requestId: string,
+    toolName: string,
+    description: string,
+    inputPreview: string,
+    choices: PermissionChoice[],
+  ): Promise<void> {
+    let preview = inputPreview;
+    try {
+      const p = JSON.parse(inputPreview);
+      if (typeof p.command === 'string') preview = `$ ${p.command}`;
+      else if (typeof p.content === 'string') preview = p.content;
+    } catch {}
+    const slice = preview.slice(0, 3000);
+    const html =
+      `⚠️ <b>Permission Request</b> — ${this.escHtml(sessionLabel)}\n\n` +
+      `🔧 <b>${this.escHtml(toolName)}</b>` +
+      (description ? `\n${this.escHtml(description)}` : '') +
+      (slice ? `\n<pre>${this.escHtml(slice)}</pre>` : '') +
+      (preview.length > slice.length ? '\n<i>...truncated</i>' : '');
+
+    const entry: ChoiceMessage = { html };
+    this.choiceMessages.set(permissionKey(sessionId, requestId), entry);
+    const rows = choices.map((c) => {
+      const token = randomUUID().replace(/-/g, '').slice(0, 16);
+      this.choiceTokens.set(token, { sessionId, requestId, choiceId: c.id, label: c.label });
+      return [{ text: c.label, callback_data: `pc:${token}` }];
+    });
+    this.trimChoiceMessages();
+
+    const sent = await this.sendMessage(html, undefined, { inline_keyboard: rows });
+    if (!sent) return;
+    entry.messageId = sent.message_id;
+    if (entry.outcome) await this.editMessageText(this.config.chatId, sent.message_id, html + entry.outcome);
+  }
+
+  async resolveChoiceRequest(sessionId: string, requestId: string, state: 'resolved' | 'expired'): Promise<void> {
+    this.dropChoiceTokens(sessionId, requestId);
+    const key = permissionKey(sessionId, requestId);
+    const entry = this.choiceMessages.get(key);
+    if (!entry) return;
+    this.choiceMessages.delete(key);
+    entry.outcome = state === 'resolved' ? '\n\n✅ <b>Resolved</b>' : '\n\n⌛ <b>Expired</b>';
+    if (entry.messageId !== undefined) await this.editMessageText(this.config.chatId, entry.messageId, entry.html + entry.outcome);
+  }
+
+  private async handleChoiceCallback(query: TelegramCallbackQuery): Promise<void> {
+    const choice = this.choiceTokens.get(query.data!.slice('pc:'.length));
+    if (!choice) {
+      await this.answerCallbackQuery(query.id, 'Expired');
+      return;
+    }
+    this.dropChoiceTokens(choice.sessionId, choice.requestId);
+    this.onChoiceVerdict?.(choice.sessionId, choice.requestId, choice.choiceId);
+    await this.answerCallbackQuery(query.id, `Sent: ${choice.label}`);
+    const entry = this.choiceMessages.get(permissionKey(choice.sessionId, choice.requestId));
+    if (entry?.messageId !== undefined && !entry.outcome) {
+      await this.editMessageText(this.config.chatId, entry.messageId, `${entry.html}\n\n⏳ <b>Sent: ${this.escHtml(choice.label)}</b>`);
+    }
+  }
+
+  private dropChoiceTokens(sessionId: string, requestId: string): void {
+    for (const [token, c] of this.choiceTokens) {
+      if (c.sessionId === sessionId && c.requestId === requestId) this.choiceTokens.delete(token);
+    }
+  }
+
+  private trimChoiceMessages(): void {
+    while (this.choiceMessages.size > MAX_CHOICE_MESSAGES) {
+      const oldest = this.choiceMessages.keys().next().value as string;
+      this.choiceMessages.delete(oldest);
+      const [sessionId, requestId] = oldest.split('\n');
+      this.dropChoiceTokens(sessionId, requestId);
+    }
+  }
+
   private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
     if (!query.data) return;
     if (String(query.message?.chat.id) !== String(this.config.chatId)) return;
 
     if (query.data.startsWith('sess:')) {
       await this.handleSessionSelectCallback(query);
+      return;
+    }
+
+    if (query.data.startsWith('pc:')) {
+      await this.handleChoiceCallback(query);
       return;
     }
 
@@ -450,7 +546,7 @@ export class TelegramBot {
     }
   }
 
-  private async editMessageText(chatId: number, messageId: number, text: string): Promise<void> {
+  private async editMessageText(chatId: number | string, messageId: number, text: string): Promise<void> {
     try {
       await fetch(`${this.apiUrl}/editMessageText`, {
         method: 'POST',
