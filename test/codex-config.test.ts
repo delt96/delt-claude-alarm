@@ -2,7 +2,7 @@
 import './isolate-home.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadConfig, saveConfig, setCodexEnabled } from '../src/shared/config.js';
+import { loadConfig, saveConfig, setCodexEnabled, shouldOfferCodex } from '../src/shared/config.js';
 
 test('setCodexEnabled toggles the flag and keeps the command', () => {
   const config = loadConfig();
@@ -20,4 +20,14 @@ test('setCodexEnabled works without an existing codex section', () => {
   saveConfig(config);
   setCodexEnabled(true);
   assert.equal(loadConfig().codex?.enabled, true);
+});
+
+test('init offers Codex only when it is installed and was never configured', () => {
+  const config = loadConfig();
+  delete config.codex;
+  saveConfig(config);
+  assert.equal(shouldOfferCodex(loadConfig(), false), false);
+  assert.equal(shouldOfferCodex(loadConfig(), true), true);
+  setCodexEnabled(false);
+  assert.equal(shouldOfferCodex(loadConfig(), true), false);
 });

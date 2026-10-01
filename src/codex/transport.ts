@@ -19,14 +19,23 @@ export function resolveCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; shell: boolean } {
   if (platform !== 'win32' || /[\\/]/.test(command) || path.extname(command)) return { file: command, shell: false };
+  const file = findOnPath(command, platform, env);
+  return file ? { file, shell: file.endsWith('.cmd') } : { file: command, shell: false };
+}
+
+export function findOnPath(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
   const dirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
-  for (const ext of ['.exe', '.cmd']) {
+  for (const ext of platform === 'win32' ? ['.exe', '.cmd'] : ['']) {
     for (const dir of dirs) {
       const file = path.join(dir, command + ext);
-      if (fs.existsSync(file)) return { file, shell: ext === '.cmd' };
+      if (fs.existsSync(file)) return file;
     }
   }
-  return { file: command, shell: false };
+  return undefined;
 }
 
 export const defaultSpawn: SpawnFn = (command, args) => {

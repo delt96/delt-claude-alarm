@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { connectProxy, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
+import { connectProxy, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
 import { FakeDaemon } from './helpers/fake-codex-daemon.js';
 
 test('connectProxy speaks WebSocket over the proxy stdio', async () => {
@@ -37,6 +37,14 @@ test('resolveCommand prefers codex.exe and falls back to the npm codex.cmd shim'
   assert.deepEqual(resolveCommand('codex', 'win32', { PATH: dir }), { file: path.join(dir, 'codex.cmd'), shell: true });
   fs.writeFileSync(path.join(dir, 'codex.exe'), '');
   assert.deepEqual(resolveCommand('codex', 'win32', { PATH: dir }), { file: path.join(dir, 'codex.exe'), shell: false });
+});
+
+test('findOnPath tells whether codex is installed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-bin-'));
+  const name = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  assert.equal(findOnPath('codex', process.platform, { PATH: dir }), undefined);
+  fs.writeFileSync(path.join(dir, name), '');
+  assert.equal(findOnPath('codex', process.platform, { PATH: dir }), path.join(dir, name));
 });
 
 test('resolveCommand leaves explicit paths and other platforms alone', () => {

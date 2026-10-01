@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled } from './shared/config.js';
+import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex } from './shared/config.js';
+import { findOnPath } from './codex/transport.js';
 import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
@@ -299,6 +300,12 @@ async function init() {
       console.log(`  claude-alarm hub start`);
     }
     console.log(`  Dashboard: http://${displayHost}:${port}`);
+
+    if (shouldOfferCodex(config, findOnPath('codex') !== undefined)) {
+      const answer = await ask('\nCodex is installed. Show Codex conversations on the dashboard too? (y/N): ');
+      if (answer.toLowerCase() === 'y') codexEnable(true);
+      else setCodexEnabled(false);
+    }
   }
 
   console.log(`\nNext step:`);

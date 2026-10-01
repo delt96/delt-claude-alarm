@@ -64,6 +64,10 @@ export function setCodexEnabled(enabled: boolean): AppConfig {
   return config;
 }
 
+export function shouldOfferCodex(config: AppConfig, installed: boolean): boolean {
+  return installed && config.codex === undefined;
+}
+
 /**
  * Add claude-alarm as an MCP channel server to .mcp.json
  */

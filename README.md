@@ -177,13 +177,18 @@ claude-alarm can show OpenAI Codex conversations on the dashboard and in Telegra
 
 ```bash
 claude-alarm codex enable
-claude-alarm hub stop && claude-alarm hub start
+claude-alarm hub stop
+claude-alarm hub start
 ```
 
+`claude-alarm init` also offers this once when it finds `codex` on `PATH`. Your answer is saved, and `codex enable` / `codex disable` change it later.
+
 - Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). Set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json` if `codex` is not on `PATH`.
+- If the hub console keeps printing `Codex daemon connection failed: spawn codex ENOENT`, the hub's terminal cannot find `codex`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal or set `codex.command`.
 - Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval waits are relayed to the dashboard and Telegram.
 - Messages you send reach the conversation only while Codex is idle, and show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`.
 - Approvals still have to be answered in Codex; claude-alarm only tells you one is waiting.
+- A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window.
 - If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub.
 
 ## Permission Relay
@@ -288,6 +293,7 @@ In the dashboard input, type `@<session name>` to have the selected session send
 
 - Node.js >= 18
 - Claude Code with MCP Channels support
+- Optional, for Codex sessions: OpenAI Codex CLI with the app-server daemon (tested with 0.159.3)
 
 ## License
 
