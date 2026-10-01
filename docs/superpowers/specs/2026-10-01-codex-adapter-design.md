@@ -102,10 +102,10 @@ title?: string;   // Codex 대화 제목
 ### 6. 지시 보내기
 
 - `message_to_session`에 `source?: 'dashboard' | 'telegram' | 'api'`를 추가한다. Hub가 채운다(대시보드 소켓, 텔레그램 콜백, `/api/send`). 기존 Claude 채널은 이 필드를 무시한다.
-- 어댑터는 대화가 `idle`이면 `turn/start({threadId, input:[{type:'text', text}]})`로 보낸다. **text 앞에 출처를 붙인다**: `[claude-alarm · 대시보드]`, `[claude-alarm · 텔레그램]`, `[claude-alarm · API]` — 터미널에서 외부 지시를 구분할 수 있게 하기 위한 사용자 결정이다.
-- 대화가 실행 중이거나 승인 대기면 보내지 않고 `notify`(level `warning`, "Codex가 작업 중이라 전달하지 않았습니다. 작업이 끝난 뒤 다시 보내 주세요")를 돌려준다. 실행 중 추가 지시는 단계 C.
+- 어댑터는 대화가 `idle`이면 `turn/start({threadId, input:[{type:'text', text}]})`로 보낸다. **text 앞에 출처를 붙인다**: `[claude-alarm · Dashboard]`, `[claude-alarm · Telegram]`, `[claude-alarm · API]` — 터미널에서 외부 지시를 구분할 수 있게 하기 위한 사용자 결정이다. 문구는 기존 UI와 같이 영어로 쓴다.
+- 대화가 실행 중이거나 승인 대기면 보내지 않고 `notify`(level `warning`, "Codex is busy, so the message was not delivered. Send it again when the task finishes.")를 돌려준다. 실행 중 추가 지시는 단계 C.
 - `turn/start` 실패도 `notify`(warning)로 알린다. 자동 재전송은 하지 않는다.
-- `image_to_session`이 Codex 세션으로 오면 단계 A에서는 "Codex 세션은 아직 이미지를 지원하지 않습니다" `notify`.
+- `image_to_session`이 Codex 세션으로 오면 단계 A에서는 "Codex sessions do not accept images yet." `notify`.
 - 대시보드 `@멘션` 라우팅 줄(`[claude-alarm] @X = SendMessage …`, `index.html:1206`)은 대상 세션이 Codex면 붙이지 않는다. Codex 세션은 멘션 대상 목록에도 나오지 않는다(`peerName` 없음, `index.html:1157`).
 - 텔레그램 세션 선택 버튼(`telegram.ts:244`, `410`)은 지금 현재 목록의 순번으로 해석된다. Codex 세션은 수시로 늘고 줄므로, 선택 메시지를 보낼 때의 세션 ID 목록을 메시지 ID별로 메모리에 보관하고 콜백은 그 목록으로 해석한다.
 
@@ -125,9 +125,9 @@ title?: string;   // Codex 대화 제목
 | `item/fileChange/requestApproval` | `accept`·`acceptForSession`·`decline`·`cancel` | `{decision}` |
 | `mcpServer/elicitation/request`(`_meta.codex_approval_kind === 'mcp_tool_call'`만) | 허용·거절·취소 | `{action:'accept', content:{}}` / `{action:'decline'}` / `{action:'cancel'}` |
 
-그 밖의 서버 요청(`item/tool/requestUserInput`, `item/permissions/requestApproval`, 일반 MCP 입력 요청 등)에는 응답하지 않는다. 세션은 `waiting_input`으로 보이고 "Codex에서 직접 처리해 주세요" `notify`를 보낸다.
+그 밖의 서버 요청(`item/tool/requestUserInput`, `item/permissions/requestApproval`, 일반 MCP 입력 요청 등)에는 응답하지 않는다. 세션은 `waiting_input`으로 보이고 "Handle it in Codex." `notify`를 보낸다.
 
-선택지 라벨: `accept` 이번만 허용 / `acceptForSession` 이 세션 동안 허용 / `acceptWithExecpolicyAmendment` 이 명령 계속 허용 / `applyNetworkPolicyAmendment` 네트워크 규칙: `<host>` `<allow|deny>` / `decline` 거절 / `cancel` 취소(작업 중단).
+선택지 라벨(영어 UI): `accept` Allow once / `acceptForSession` Allow for this session / `acceptWithExecpolicyAmendment` Always allow this command / `applyNetworkPolicyAmendment` Network rule: `<host>` `<allow|deny>` / `decline` Decline / `cancel` Cancel task.
 
 ```ts
 // permission_request 확장: choices가 있으면 선택지 모드
@@ -147,7 +147,7 @@ choiceId?: string;
 
 ### 9. 실행 중 추가 지시와 이미지 (단계 C)
 
-- 실행 중 지시: `thread/turns/list({threadId, limit:1, sortDirection:'desc'})`로 `inProgress` 턴 ID를 얻어 `turn/steer({threadId, expectedTurnId, input})`. 접수되면 "진행 중인 응답이 끝난 뒤 반영됩니다" `notify`(info).
+- 실행 중 지시: `thread/turns/list({threadId, limit:1, sortDirection:'desc'})`로 `inProgress` 턴 ID를 얻어 `turn/steer({threadId, expectedTurnId, input})`. 접수되면 "Queued: Codex will read it after the current reply." `notify`(info).
 - 이미지: Hub가 이미 가진 base64로 `{type:'image', url:'data:…'}`를 먼저 검증한다. 안 되면 `localImage` + 어댑터 임시 파일(턴 종료까지 보관)로 간다. 지금 업로드 파일은 5분 뒤 지워진다(`server.ts:591-593`).
 
 ### 10. 오류와 재연결
@@ -158,7 +158,7 @@ choiceId?: string;
 | 데몬 미실행 | `proxy`의 동작 확인 필요(미검증). 연결 실패면 백오프 재시도 |
 | proxy 종료·데몬 단절 | 모든 Codex 세션의 Hub 연결을 닫고, 대기 승인은 `expired`, 백오프 후 처음부터 다시 발견 |
 | Hub 단절 | 대화별 연결이 기존 규칙대로 재연결하고 `register`를 다시 보낸다 |
-| 로그아웃·인증 오류 | `notify`(error) "Codex 로그인이 필요합니다", 지시 전송 거절 |
+| 로그아웃·인증 오류 | `notify`(error) "Codex needs you to sign in.", 지시 전송 거절 |
 | 알 수 없는 서버 요청·메서드 | 응답하지 않고 로그만 남긴다 |
 
 로그에 토큰, 승인 입력 원문, 대화 전문을 남기지 않는다.
