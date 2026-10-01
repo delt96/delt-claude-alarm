@@ -9,6 +9,7 @@ export class HubClient {
   private messageHandlers: Array<(msg: ChannelMessage) => void> = [];
   private queue: ChannelMessage[] = [];
   private connected = false;
+  private closed = false;
 
   constructor(
     private sessionId: string,
@@ -17,9 +18,11 @@ export class HubClient {
     private hubPort = DEFAULT_HUB_PORT,
     private token?: string,
     private getPeerName: () => string | undefined = () => undefined,
+    private getRegistration: () => Partial<SessionInfo> = () => ({}),
   ) {}
 
   connect(): void {
+    this.closed = false;
     const tokenQuery = this.token ? `?token=${encodeURIComponent(this.token)}` : '';
     const url = `ws://${this.hubHost}:${this.hubPort}${WS_PATH_CHANNEL}${tokenQuery}`;
     logger.debug(`Connecting to hub at ${url}`);
@@ -31,21 +34,7 @@ export class HubClient {
         logger.info('Connected to hub');
         this.connected = true;
 
-        // Register this session
-        const registration: ChannelMessage = {
-          type: 'register',
-          session: {
-            id: this.sessionId,
-            name: this.sessionName,
-            status: 'idle',
-            connectedAt: Date.now(),
-            lastActivity: Date.now(),
-            cwd: process.cwd(),
-            channelEnabled: true,
-            peerName: this.getPeerName(),
-          },
-        };
-        this.ws!.send(JSON.stringify(registration));
+        this.ws!.send(JSON.stringify(this.registration()));
 
         // Flush queued messages
         for (const msg of this.queue) {
@@ -68,7 +57,7 @@ export class HubClient {
       this.ws.on('close', () => {
         logger.info('Disconnected from hub');
         this.connected = false;
-        this.scheduleReconnect();
+        if (!this.closed) this.scheduleReconnect();
       });
 
       this.ws.on('error', (err) => {
@@ -97,6 +86,7 @@ export class HubClient {
   }
 
   disconnect(): void {
+    this.closed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -108,8 +98,31 @@ export class HubClient {
     this.connected = false;
   }
 
+  reregister(): void {
+    if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(this.registration()));
+    }
+  }
+
+  private registration(): ChannelMessage {
+    return {
+      type: 'register',
+      session: {
+        id: this.sessionId,
+        name: this.sessionName,
+        status: 'idle',
+        connectedAt: Date.now(),
+        lastActivity: Date.now(),
+        cwd: process.cwd(),
+        channelEnabled: true,
+        peerName: this.getPeerName(),
+        ...this.getRegistration(),
+      },
+    };
+  }
+
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.reconnectTimer || this.closed) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
