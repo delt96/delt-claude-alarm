@@ -576,6 +576,7 @@ export class HubServer {
       out = { type: 'permission_response', sessionId: msg.sessionId, requestId: msg.requestId, choiceId: msg.choiceId };
     } else {
       if ((msg.behavior !== 'allow' && msg.behavior !== 'deny') || msg.choiceId !== undefined) return false;
+      if (this.sessions.get(msg.sessionId)?.agentKind === 'codex') return false;
       out = { type: 'permission_response', sessionId: msg.sessionId, requestId: msg.requestId, behavior: msg.behavior };
     }
     const channelWs = this.channelSockets.get(msg.sessionId);

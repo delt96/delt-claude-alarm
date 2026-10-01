@@ -27,8 +27,8 @@ function open(path: string): Promise<{ ws: WebSocket; inbox: any[] }> {
   });
 }
 
-function register(ws: WebSocket, id: string) {
-  ws.send(JSON.stringify({ type: 'register', session: { id, name: id, status: 'idle', connectedAt: 0, lastActivity: 0, cwd: `/w/${id}`, channelEnabled: true } }));
+function register(ws: WebSocket, id: string, extra: object = {}) {
+  ws.send(JSON.stringify({ type: 'register', session: { id, name: id, status: 'idle', connectedAt: 0, lastActivity: 0, cwd: `/w/${id}`, channelEnabled: true, ...extra } }));
 }
 
 const choices = [{ id: '0', label: 'Allow once' }, { id: '1', label: 'Cancel task' }];
@@ -135,4 +135,21 @@ test('another connection cannot resolve a session it does not own', async () => 
   dash.ws.close();
   ch.ws.close();
   other.ws.close();
+});
+
+test('Codex sessions never take allow or deny, even after a choice request resolved', async () => {
+  const ch = await open('/ws/channel');
+  register(ch.ws, 'codex:c5', { agentKind: 'codex' });
+  await settle();
+  const dash = await open('/ws/dashboard');
+  request(ch.ws, 'codex:c5', 'r6');
+  await settle();
+  ch.ws.send(JSON.stringify({ type: 'permission_resolved', sessionId: 'codex:c5', requestId: 'r6', state: 'resolved' }));
+  await settle();
+  answer(dash.ws, { sessionId: 'codex:c5', requestId: 'r6', behavior: 'allow' });
+  answer(dash.ws, { sessionId: 'codex:c5', requestId: 'r7', behavior: 'deny' });
+  await settle();
+  assert.deepEqual(responses(ch.inbox), []);
+  dash.ws.close();
+  ch.ws.close();
 });
