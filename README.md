@@ -187,10 +187,11 @@ claude-alarm hub start
 - If the hub console keeps printing `Codex daemon connection failed: spawn codex ENOENT`, the hub's terminal cannot find `codex`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal or set `codex.command`.
 - Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval requests are relayed to the dashboard and Telegram.
 - Messages you send reach the conversation only while Codex is idle, and show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`.
-- Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Requests that were pending when the hub or the adapter restarted show **Expired**; answer those in Codex.
+- Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Buttons from before a hub or adapter restart show **Expired**; if Codex is still waiting, a new request appears.
+- After updating claude-alarm, reload open dashboard tabs so they pick up the new approval buttons.
 - Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
 - A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window.
-- If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub.
+- If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
 
 ## Permission Relay
 
