@@ -15,6 +15,9 @@ function isRunning(pid: number): boolean {
 }
 
 installCrashGuard('codex adapter');
+// Once the hub is gone its pipes break; without listeners every log line would become an uncaught EPIPE.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
 const config = loadConfig();
 
 const existing = fs.existsSync(CODEX_PID_FILE) ? parseInt(fs.readFileSync(CODEX_PID_FILE, 'utf-8').trim(), 10) : NaN;

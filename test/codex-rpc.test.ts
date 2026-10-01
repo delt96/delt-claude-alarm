@@ -69,3 +69,33 @@ test('request rejects immediately when the socket is not open', async () => {
   ws.readyState = 3;
   await assert.rejects(new RpcClient(ws as any).request('initialize', {}), /closed/);
 });
+
+test('a throwing notification listener does not stop later messages', () => {
+  const ws = new FakeWs();
+  const rpc = new RpcClient(ws as any);
+  const seen: unknown[] = [];
+  rpc.on('notification', (method) => {
+    seen.push(method);
+    if (method === 'first') throw new Error('boom');
+  });
+  assert.doesNotThrow(() => ws.emit('message', JSON.stringify({ method: 'first', params: {} })));
+  ws.emit('message', JSON.stringify({ method: 'second', params: {} }));
+  assert.deepEqual(seen, ['first', 'second']);
+});
+
+test('a throwing request listener does not escape', () => {
+  const ws = new FakeWs();
+  const rpc = new RpcClient(ws as any);
+  rpc.on('request', () => { throw new Error('boom'); });
+  assert.doesNotThrow(() => ws.emit('message', JSON.stringify({ id: 1, method: 'x', params: {} })));
+});
+
+test('non-object frames are ignored', () => {
+  const ws = new FakeWs();
+  const rpc = new RpcClient(ws as any);
+  const seen: unknown[] = [];
+  rpc.on('notification', (m) => seen.push(m));
+  for (const frame of ['1', 'null', '"x"']) assert.doesNotThrow(() => ws.emit('message', frame));
+  assert.deepEqual(seen, []);
+});
+

@@ -23,6 +23,7 @@ export class CodexSupervisor {
     private spawnFn: SupervisorSpawn = spawn,
     private minDelayMs = 2000,
     private maxDelayMs = 60_000,
+    private stopGraceMs = 3000,
   ) {
     this.delay = minDelayMs;
   }
@@ -36,18 +37,27 @@ export class CodexSupervisor {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    this.child?.stdin?.end();
-    this.child?.kill();
+    const child = this.child;
     this.child = undefined;
+    if (!child) return;
+    child.stdin?.end();
+    const force = setTimeout(() => child.kill(), this.stopGraceMs);
+    force.unref();
+    child.once('exit', () => clearTimeout(force));
   }
 
   private launch(): void {
     const startedAt = Date.now();
+    // Detached: on Windows a non-detached child shares the hub's kill-on-close job and dies before it can remove codex.pid. Piped: a detached child cannot write to the hub's console (EBADF).
     const child = this.spawnFn(process.execPath, [this.script, '--watch-stdin'], {
-      stdio: ['pipe', 'inherit', 'inherit'],
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
     this.child = child;
+    child.stdout?.on('data', (d) => process.stdout.write(d));
+    child.stderr?.on('data', (d) => process.stderr.write(d));
+    child.stdin?.on('error', () => {});
     child.on('error', (err) => logger.warn(`Codex adapter failed to start: ${err.message}`));
     child.on('exit', (code, signal) => {
       if (this.child === child) this.child = undefined;

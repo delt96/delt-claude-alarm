@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type WebSocket from 'ws';
+import { logger } from '../shared/logger.js';
 
 export type RpcId = number | string;
 
@@ -50,6 +51,15 @@ export class RpcClient extends EventEmitter {
     this.ws.send(JSON.stringify(params === undefined ? { method } : { method, params }));
   }
 
+  // ws stops reading the socket for good if a 'message' listener throws.
+  private guarded(method: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      logger.warn(`Codex ${method} handling failed: ${(err as Error).message}`);
+    }
+  }
+
   private onMessage(text: string): void {
     let msg: any;
     try {
@@ -57,6 +67,7 @@ export class RpcClient extends EventEmitter {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     if (msg.method === undefined && msg.id !== undefined) {
       const p = this.pending.get(msg.id);
       if (!p) return;
@@ -65,9 +76,9 @@ export class RpcClient extends EventEmitter {
       if (msg.error) p.reject(new RpcError(msg.error.code, msg.error.message));
       else p.resolve(msg.result);
     } else if (msg.method !== undefined && msg.id !== undefined) {
-      this.emit('request', msg.id, msg.method, msg.params);
+      this.guarded(msg.method, () => this.emit('request', msg.id, msg.method, msg.params));
     } else if (msg.method !== undefined) {
-      this.emit('notification', msg.method, msg.params);
+      this.guarded(msg.method, () => this.emit('notification', msg.method, msg.params));
     }
   }
 }

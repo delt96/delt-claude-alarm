@@ -111,13 +111,14 @@ test('renamed and newly started threads are picked up, closed ones dropped', asy
 });
 
 test('an idle thread is subscribed while a turn runs and released when it completes', async () => {
-  const d = await startAdapter([thread('t1')]);
+  const d = await startAdapter([thread('t1')], undefined, 50);
   await session('codex:t1');
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(d.calls('thread/resume').length, 0);
   d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
   await until(() => d.calls('thread/resume').length === 1);
   d.notify('turn/completed', { threadId: 't1', turn: { id: 'u9', status: 'completed', items: [], error: null } });
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
   await until(() => d.calls('thread/unsubscribe').length === 1);
   assert.deepEqual(d.calls('thread/unsubscribe')[0].params, { threadId: 't1' });
 });
@@ -381,3 +382,31 @@ test('a subscription that keeps failing raises one "Reply not relayed" warning',
     dash.ws.close();
   }
 });
+
+test('a malformed notification does not stop the connection', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  d.notify('turn/completed', { threadId: 't1' });
+  d.notify('thread/started', { thread: thread('t2') });
+  await session('codex:t2');
+});
+
+test('turn/completed while the thread is still active does not release it', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], undefined, 150);
+  await session('codex:t1');
+  await until(() => d.calls('thread/resume').length === 1);
+  const dash = await openDashboard();
+  try {
+    d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'All done', phase: 'final_answer' } });
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+    const reply = await until(() => dash.inbox.find((m) => m.type === 'reply_from_session' && m.sessionId === 'codex:t1'));
+    assert.equal(reply.content, 'All done');
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(d.calls('thread/unsubscribe').length, 0);
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    await until(() => d.calls('thread/unsubscribe').length === 1);
+  } finally {
+    dash.ws.close();
+  }
+});
+

@@ -106,6 +106,7 @@ export class CodexAdapter {
 
   private onDaemonLost(): void {
     this.rpc = undefined;
+    this.conn?.close();
     this.conn = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
     if (!this.stopped) logger.warn('Codex daemon connection lost');
@@ -299,7 +300,7 @@ export class CodexAdapter {
     if (!t) return;
     const collected = t.turns.get(turn.id) ?? [];
     t.turns.delete(turn.id);
-    void this.want(threadId, false);
+    if (t.thread.status.type !== 'active') void this.want(threadId, false);
     if (turn.status === 'failed' || turn.error) {
       this.notify(threadId, 'Codex task failed', turn.error?.message ?? 'The task ended with an error.', 'error');
       return;
