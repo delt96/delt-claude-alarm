@@ -211,3 +211,17 @@ test('a remote selected session has no targets', () => {
   const h = loadHelpers(sessions, names, 'e');
   assert.equal(h.mentionTargets().length, 0);
 });
+
+test('messages to a Codex session pass through without routing lines', () => {
+  const withCodex = { ...sessions, x: { id: 'x', name: 'proj', displayName: 'Fix bug', agentKind: 'codex', isLocal: true } };
+  const h = loadHelpers(withCodex, names, 'x');
+  assert.deepEqual({ ...h.buildRouting('@front please check') }, { ok: true, content: '@front please check' });
+  assert.equal(h.mentionTargets().length, 0);
+});
+
+test('agentName names the session agent', () => {
+  const h = loadHelpers(sessions, names);
+  assert.equal(h.agentName({ agentKind: 'codex' }), 'Codex');
+  assert.equal(h.agentName(sessions.a), 'Claude');
+  assert.equal(h.agentName(undefined), 'Claude');
+});

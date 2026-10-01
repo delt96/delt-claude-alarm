@@ -209,6 +209,14 @@
     justify-content: center;
     padding: 0 5px;
   }
+  .agent-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--green);
+    color: var(--green);
+  }
   .session-status {
     display: inline-block;
     font-size: 11px;
@@ -1130,6 +1138,10 @@
     return state.sessionMeta.names[s.id] || s.displayName || s.name;
   }
 
+  function agentName(s) {
+    return s && s.agentKind === 'codex' ? 'Codex' : 'Claude';
+  }
+
   function normName(s) {
     return String(s).normalize('NFC').trim().toLowerCase();
   }
@@ -1153,7 +1165,7 @@
   // Built-in SendMessage only reaches sessions on the hub's own machine.
   function mentionTargets() {
     const selected = state.sessions[state.selectedSession];
-    if (!selected || !selected.isLocal) return [];
+    if (!selected || !selected.isLocal || selected.agentKind === 'codex') return [];
     return Object.values(state.sessions).filter(s => s.id !== selected.id && s.isLocal && s.peerName);
   }
 
@@ -1190,6 +1202,8 @@
   // The routing line is the contract with the channel instructions in
   // src/channel/server.ts (ROUTING) — change both together.
   function buildRouting(text) {
+    const target = state.sessions[state.selectedSession];
+    if (target && target.agentKind === 'codex') return { ok: true, content: text };
     const mentions = extractMentions(text);
     if (!mentions.length) return { ok: true, content: text };
     const unknown = [];
@@ -1433,7 +1447,7 @@
       return `<div class="session-card${active}" data-id="${id}">
         <span class="drag-handle" title="Drag to reorder">&#10303;</span>
         <div class="session-body">
-          <div class="session-name" title="Double-click to rename">${esc(dispName)}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
+          <div class="session-name" title="Double-click to rename">${esc(dispName)}${s.agentKind === 'codex' ? '<span class="agent-badge">Codex</span>' : ''}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
           ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
           <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
         </div>
@@ -1580,7 +1594,7 @@
 
   function updateImageUI() {
     const s = state.selectedSession ? state.sessions[state.selectedSession] : null;
-    const canImage = s && s.isLocal;
+    const canImage = s && s.isLocal && s.agentKind !== 'codex';
     $('#attachBtn').disabled = !canImage;
   }
 
@@ -1616,7 +1630,7 @@
         content = m.from === 'session' ? renderMarkdown(m.content) : esc(m.content).replace(/\n/g, '<br>');
       }
       return `<div class="message ${cls}">
-        <div class="message-meta">${m.from === 'session' ? 'Claude' : 'You'} &middot; ${timeStr}</div>
+        <div class="message-meta">${m.from === 'session' ? agentName(s) : 'You'} &middot; ${timeStr}</div>
         <div class="message-body">${content}</div>
       </div>`;
     }).join('');
