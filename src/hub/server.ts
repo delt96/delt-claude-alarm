@@ -20,7 +20,7 @@ import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
 import {
   isAuthorized,
@@ -62,7 +62,7 @@ export class HubServer {
   private channelAlive = new Map<string, boolean>(); // sessionId -> alive flag
   private socketOwners = new WeakMap<WebSocket, string>();
   // Codex approvals carry their own choices; a response is forwarded only in the mode of the request it answers.
-  private choiceRequests = new Map<string, { sessionId: string; requestId: string; choiceIds: Set<string> }>();
+  private choiceRequests = new Map<string, { request: PendingChoiceRequest; choiceIds: Set<string> }>();
 
   private host: string;
   private port: number;
@@ -487,8 +487,15 @@ export class HubServer {
         logger.info(`Permission request [${msg.requestId}] from ${msg.sessionId}: ${msg.toolName}`);
         if (choices) {
           this.choiceRequests.set(permissionKey(msg.sessionId, msg.requestId), {
-            sessionId: msg.sessionId,
-            requestId: msg.requestId,
+            request: {
+              sessionId: msg.sessionId,
+              requestId: msg.requestId,
+              toolName: msg.toolName,
+              description: msg.description,
+              inputPreview: msg.inputPreview,
+              timestamp: msg.timestamp,
+              choices,
+            },
             choiceIds: new Set(choices.map((c) => c.id)),
           });
         }
@@ -540,7 +547,7 @@ export class HubServer {
     ws.send(JSON.stringify(sessionsMsg));
     const pendingMsg: ChannelMessage = {
       type: 'permission_pending',
-      requests: [...this.choiceRequests.values()].map(({ sessionId, requestId }) => ({ sessionId, requestId })),
+      requests: [...this.choiceRequests.values()].map((c) => c.request),
     };
     ws.send(JSON.stringify(pendingMsg));
 
@@ -598,7 +605,7 @@ export class HubServer {
 
   private expireChoices(sessionId: string): void {
     for (const pending of [...this.choiceRequests.values()]) {
-      if (pending.sessionId === sessionId) this.resolveChoice(sessionId, pending.requestId, 'expired');
+      if (pending.request.sessionId === sessionId) this.resolveChoice(sessionId, pending.request.requestId, 'expired');
     }
   }
 

@@ -81,3 +81,16 @@ test('applyPendingChoices expires unlisted choice requests and re-arms listed on
   assert.equal(claude.resolved, false);
   assert.equal((claude as any).outcome, undefined);
 });
+
+test('pending choice requests the dashboard does not have are returned to be added', () => {
+  const h = loadPermissionHelpers();
+  const known = { ...choiceReq, requestId: 'r1' };
+  const permissionRequests = { 'codex:t1': [known] };
+  const listed = [
+    { sessionId: 'codex:t1', requestId: 'r1', toolName: 'Command', description: 'Allow?', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+    { sessionId: 'codex:t1', requestId: 'r9', toolName: 'Command', description: 'Again?', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+    { sessionId: 'codex:t2', requestId: 'r7', toolName: 'File change', description: 'Files', inputPreview: '{}', timestamp: 0, choices: choiceReq.choices },
+  ];
+  const missing = h.applyPendingChoices(permissionRequests, listed);
+  assert.deepEqual(missing.map((m: any) => m.requestId), ['r9', 'r7']);
+});

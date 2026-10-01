@@ -1442,7 +1442,9 @@
         }
         break;
       case 'permission_pending':
-        applyPendingChoices(state.permissionRequests, msg.requests || []);
+        for (const m of applyPendingChoices(state.permissionRequests, msg.requests || [])) {
+          handleMessage({ type: 'permission_request', ...m });
+        }
         renderPermissionBar();
         renderNotifications();
         break;
@@ -2037,6 +2039,7 @@
 
   // After a reconnect the hub lists the choice requests still waiting; any other unresolved one died with the old connection.
   function applyPendingChoices(permissionRequests, pending) {
+    const missing = pending.filter(p => !(permissionRequests[p.sessionId] || []).some(r => r.requestId === p.requestId));
     const live = new Set(pending.map(p => p.sessionId + '\n' + p.requestId));
     for (const [sid, reqs] of Object.entries(permissionRequests)) {
       for (const r of reqs) {
@@ -2045,6 +2048,7 @@
         else r.sent = null;
       }
     }
+    return missing;
   }
 
   function sendPermissionChoice(sessionId, requestId, choiceId) {

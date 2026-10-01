@@ -165,9 +165,29 @@ test('a dashboard that connects while a choice request is pending is told which 
   await settle();
   const types = late.inbox.map((m) => m.type);
   assert.equal(types.indexOf('permission_pending'), types.indexOf('sessions_list') + 1);
-  assert.deepEqual(late.inbox.find((m) => m.type === 'permission_pending'), {
-    type: 'permission_pending',
-    requests: [{ sessionId: 'codex:c6', requestId: 'r8' }],
+  const pending = late.inbox.find((m) => m.type === 'permission_pending');
+  assert.deepEqual(pending.requests.map((r: any) => [r.sessionId, r.requestId]), [['codex:c6', 'r8']]);
+  late.ws.close();
+  ch.ws.close();
+});
+
+test('pending choice requests carry the full request so a reconnecting dashboard can restore them', async () => {
+  const ch = await open('/ws/channel');
+  register(ch.ws, 'codex:c8');
+  await settle();
+  request(ch.ws, 'codex:c8', 'r11');
+  await settle();
+  const late = await open('/ws/dashboard');
+  await settle();
+  const pending = late.inbox.find((m) => m.type === 'permission_pending');
+  assert.deepEqual(pending.requests[0], {
+    sessionId: 'codex:c8',
+    requestId: 'r11',
+    toolName: 'Command',
+    description: 'Allow?',
+    inputPreview: '{"command":"ls"}',
+    timestamp: 0,
+    choices,
   });
   late.ws.close();
   ch.ws.close();
