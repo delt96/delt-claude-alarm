@@ -295,7 +295,7 @@ In the dashboard input, type `@<session name>` to have the selected session send
 
 - Node.js >= 18
 - Claude Code with MCP Channels support
-- Optional, for Codex sessions: OpenAI Codex CLI with the app-server daemon (tested with 0.159.3)
+- Optional, for Codex sessions: OpenAI Codex CLI with the app-server daemon (tested with 0.159.3; approvals also with app-server 0.160.0)
 
 ## License
 
