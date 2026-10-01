@@ -186,9 +186,10 @@ claude-alarm hub start
 - Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). Set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json` if `codex` is not on `PATH`.
 - If the hub console keeps printing `Codex daemon connection failed: spawn codex ENOENT`, the hub's terminal cannot find `codex`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal or set `codex.command`.
 - Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval requests are relayed to the dashboard and Telegram.
-- Messages you send reach the conversation only while Codex is idle, and show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`.
+- Messages you send show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`. If Codex is idle they start a new task; if it is working they join the current task and Codex reads them after its current step (you get a **Queued** notice). While Codex waits for an approval or for your answer, messages are not delivered; answer that first.
+- Images work the same way: paste, drag & drop or 📎 on the dashboard, or send a photo to the Telegram bot. The Codex adapter must run on the same PC as the hub to read them.
 - Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Buttons from before a hub or adapter restart show **Expired**; if Codex is still waiting, a new request appears.
-- After updating claude-alarm, reload open dashboard tabs so they pick up the new approval buttons.
+- After updating claude-alarm, reload open dashboard tabs so they pick up the changes.
 - Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
 - A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window.
 - If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
@@ -278,7 +279,7 @@ In the dashboard input, type `@<session name>` to have the selected session send
 - Images + text sent together as one message
 
 **Telegram:**
-- Send photos to the bot → forwarded to Claude session
+- Send photos to the bot → forwarded to the Claude or Codex session
 - Photo captions included as text
 
 > Dashboard images are only available for local sessions (same machine as Hub). Max 10MB, auto-deleted after 5 minutes.

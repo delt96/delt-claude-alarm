@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
-import type { ChannelMessage, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
+import type { ChannelMessage, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
+import { imageInput, textInput, type UserInput } from './inputs.js';
 import { RpcClient, type RpcId } from './rpc.js';
 import { approvalView, fileChanges, type ApprovalChoice, type ApprovalView, type FileChange } from './approvals.js';
 import {
@@ -12,7 +13,6 @@ import {
   hubStatus,
   isTrackable,
   threadTitle,
-  withSourcePrefix,
   type AgentMessage,
   type CodexThread,
   type CodexThreadStatus,
@@ -34,6 +34,7 @@ interface Tracked {
   wantSubscribed: boolean;
   sync: Promise<void>;
   pendingTurn: boolean;
+  sending: Promise<void>;
   turns: Map<string, AgentMessage[]>;
   releaseTimer?: ReturnType<typeof setTimeout>;
   unrelayed: boolean;
@@ -175,6 +176,7 @@ export class CodexAdapter {
         wantSubscribed: false,
         sync: Promise.resolve(),
         pendingTurn: false,
+        sending: Promise.resolve(),
         turns: new Map(),
         unrelayed: false,
         files: new Map(),
@@ -341,33 +343,73 @@ export class CodexAdapter {
 
   private onHubMessage(threadId: string, msg: ChannelMessage): void {
     if (msg.type === 'message_to_session') {
-      void this.sendTurn(threadId, msg.content, msg.source);
+      this.enqueue(threadId, async () => textInput(msg.content, msg.source));
     } else if (msg.type === 'image_to_session') {
-      this.notify(threadId, 'Not delivered', 'Codex sessions do not accept images yet.', 'warning');
+      this.enqueue(threadId, () => imageInput(msg.imagePath, msg.mimeType, msg.content, msg.source));
     } else if (msg.type === 'permission_response') {
       this.answer(threadId, msg.requestId, msg.choiceId);
     }
   }
 
-  private async sendTurn(threadId: string, content: string, source?: MessageSource): Promise<void> {
+  // One message at a time per conversation, so a message right behind another sees the turn the first one started.
+  private enqueue(threadId: string, build: () => Promise<UserInput[]>): void {
     const t = this.threads.get(threadId);
     if (!t) return;
-    if (t.thread.status.type !== 'idle' || t.pendingTurn) {
-      this.notify(threadId, 'Not delivered', 'Codex is busy, so the message was not delivered. Send it again when the task finishes.', 'warning');
+    t.sending = t.sending
+      .then(() => this.deliver(t, build))
+      .catch((err) => logger.warn(`Codex delivery for ${threadId} failed: ${(err as Error).message}`));
+  }
+
+  private async deliver(t: Tracked, build: () => Promise<UserInput[]>): Promise<void> {
+    const threadId = t.thread.id;
+    if (this.threads.get(threadId) !== t) return;
+    // A steer is accepted while an approval is pending but read only after it is answered, which reads like an answer.
+    if (hubStatus(t.thread.status) === 'waiting_input') {
+      this.notify(threadId, 'Not delivered', 'Codex is waiting for an approval or input. Answer it first, then send the message again.', 'warning');
+      return;
+    }
+    let input: UserInput[];
+    try {
+      input = await build();
+    } catch (err) {
+      logger.debug(`Codex input for ${threadId} could not be built: ${(err as Error).message}`);
+      this.notify(threadId, 'Not delivered', 'The image could not be read here, so it was not delivered. Codex may be running on another PC.', 'warning');
       return;
     }
     t.pendingTurn = true;
     try {
       if (!this.rpc) throw new Error('not connected to the Codex daemon');
       await this.want(threadId, true);
+      const running = await this.runningTurn(threadId);
+      if (running) {
+        await this.rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
+        this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info');
+        return;
+      }
       // A new conversation cannot be subscribed before its first turn (no rollout found); the active broadcast retries it.
       t.unrelayed = !t.subscribed;
-      await this.rpc.request('turn/start', { threadId, input: [{ type: 'text', text: withSourcePrefix(content, source) }] });
+      await this.rpc.request('turn/start', { threadId, input });
     } catch (err) {
       t.pendingTurn = false;
       t.unrelayed = false;
       this.releaseLater(t);
       this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
+    }
+  }
+
+  // The list is unavailable before a new conversation's first turn; starting a turn is safe then, since turn/start steers a running turn.
+  private async runningTurn(threadId: string): Promise<string | undefined> {
+    try {
+      const page = await this.rpc!.request<{ data: Array<{ id: string; status: string }> }>('thread/turns/list', {
+        threadId,
+        limit: 1,
+        sortDirection: 'desc',
+      });
+      const turn = page.data?.[0];
+      return turn?.status === 'inProgress' ? turn.id : undefined;
+    } catch (err) {
+      logger.debug(`thread/turns/list ${threadId} failed: ${(err as Error).message}`);
+      return undefined;
     }
   }
 

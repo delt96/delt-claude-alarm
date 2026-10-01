@@ -3,6 +3,8 @@ import './isolate-home.js';
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import WebSocket from 'ws';
 import { HubServer } from '../src/hub/server.js';
 import { CodexAdapter } from '../src/codex/adapter.js';
@@ -53,6 +55,8 @@ async function startAdapter(threads: any[], setup?: (d: FakeDaemon) => void, idl
   d.handle('thread/resume', () => ({}));
   d.handle('thread/unsubscribe', () => ({ status: 'unsubscribed' }));
   d.handle('turn/start', () => ({ turn: { id: 'turn-new', status: 'inProgress', items: [] } }));
+  d.handle('thread/turns/list', () => ({ data: [], nextCursor: null }));
+  d.handle('turn/steer', (p) => ({ turnId: p.expectedTurnId }));
   setup?.(d);
   adapter = new CodexAdapter({ command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200, idleReleaseMs });
   adapter.start();
@@ -193,26 +197,41 @@ test('messages to a thread waiting for approval are refused, not queued', async 
     dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'hello?' }));
     const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
     assert.equal(n.level, 'warning');
-    assert.match(n.message, /busy/);
+    assert.equal(n.message, 'Codex is waiting for an approval or input. Answer it first, then send the message again.');
     d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
     await session('codex:t1', (s) => s.status === 'idle');
     assert.equal(d.calls('turn/start').length, 0);
+    assert.equal(d.calls('turn/steer').length, 0);
   } finally {
     dash.ws.close();
   }
 });
 
-test('back-to-back messages start only one turn', async () => {
-  const d = await startAdapter([thread('t1')]);
+test('a second message right after the first is steered into the turn the first one started', async () => {
+  let running: string | undefined;
+  const d = await startAdapter([thread('t1')], (dm) => {
+    dm.handle('turn/start', () => {
+      running = 'turn-new';
+      return { turn: { id: 'turn-new', status: 'inProgress', items: [] } };
+    });
+    dm.handle('thread/turns/list', () => ({ data: running ? [{ id: running, status: 'inProgress', items: [] }] : [], nextCursor: null }));
+  });
   await session('codex:t1');
   const dash = await openDashboard();
   try {
     dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'first' }));
     dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'second' }));
-    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
-    assert.match(n.message, /busy/);
+    await until(() => d.calls('turn/steer').length === 1);
     assert.equal(d.calls('turn/start').length, 1);
     assert.equal(d.calls('turn/start')[0].params.input[0].text, '[claude-alarm · Dashboard] first');
+    assert.deepEqual(d.calls('turn/steer')[0].params, {
+      threadId: 't1',
+      expectedTurnId: 'turn-new',
+      input: [{ type: 'text', text: '[claude-alarm · Dashboard] second' }],
+    });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'info');
+    assert.equal(n.message, 'Queued: Codex will read it after its current step.');
   } finally {
     dash.ws.close();
   }
@@ -591,6 +610,123 @@ test('a malformed approval request falls back to the Codex warning', async () =>
     assert.equal(n.level, 'warning');
     assert.ok(!dash.inbox.some((m) => m.type === 'permission_request'));
     assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a message to a running thread is steered into the turn in progress', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/turns/list', () => ({ data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null }));
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'also update the README' }));
+    await until(() => d.calls('turn/steer').length === 1);
+    assert.deepEqual(d.calls('thread/turns/list')[0].params, { threadId: 't1', limit: 1, sortDirection: 'desc' });
+    assert.deepEqual(d.calls('turn/steer')[0].params, {
+      threadId: 't1',
+      expectedTurnId: 'u9',
+      input: [{ type: 'text', text: '[claude-alarm · Dashboard] also update the README' }],
+    });
+    assert.equal(d.calls('turn/start').length, 0);
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Queued');
+    assert.equal(n.level, 'info');
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a conversation with no turn list yet still gets its first message as a new turn', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => dm.handle('thread/turns/list', () => {
+    throw new Error('thread t1 is not materialized yet; thread/turns/list is unavailable before first user message');
+  }));
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'hello' }));
+    await until(() => d.calls('turn/start').length === 1);
+    assert.equal(d.calls('turn/steer').length, 0);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!dash.inbox.some((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a steer the daemon rejects is reported and not retried', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/turns/list', () => ({ data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null }));
+    dm.handle('turn/steer', () => {
+      throw new Error('no active turn to steer');
+    });
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'one more thing' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'warning');
+    assert.equal(n.message, 'Codex rejected the message: no active turn to steer');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.calls('turn/steer').length, 1);
+    assert.equal(d.calls('turn/start').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a dashboard image starts a turn with the picture as a data URL', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const imageData = Buffer.from('png bytes').toString('base64');
+    dash.ws.send(JSON.stringify({ type: 'image_upload', sessionId: 'codex:t1', imageData, mimeType: 'image/png', content: 'what is wrong here?' }));
+    await until(() => d.calls('turn/start').length === 1);
+    assert.deepEqual(d.calls('turn/start')[0].params.input, [
+      { type: 'text', text: '[claude-alarm · Dashboard] what is wrong here?' },
+      { type: 'image', url: `data:image/png;base64,${imageData}` },
+    ]);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('an image sent while Codex works is steered into the running turn', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/turns/list', () => ({ data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null }));
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    const imageData = Buffer.from('jpeg bytes').toString('base64');
+    dash.ws.send(JSON.stringify({ type: 'image_upload', sessionId: 'codex:t1', imageData, mimeType: 'image/jpeg' }));
+    await until(() => d.calls('turn/steer').length === 1);
+    assert.deepEqual(d.calls('turn/steer')[0].params.input, [
+      { type: 'text', text: '[claude-alarm · Dashboard] (image)' },
+      { type: 'image', url: `data:image/jpeg;base64,${imageData}` },
+    ]);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('an image that cannot be read is reported and later messages still go through', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const missing = path.join(os.tmpdir(), 'claude-alarm-missing-image.png');
+    (adapter as any).onHubMessage('t1', { type: 'image_to_session', sessionId: 'codex:t1', imagePath: missing, mimeType: 'image/png', source: 'telegram' });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'warning');
+    assert.equal(n.message, 'The image could not be read here, so it was not delivered. Codex may be running on another PC.');
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'text still works' }));
+    await until(() => d.calls('turn/start').length === 1);
+    assert.equal(d.calls('turn/start')[0].params.input[0].text, '[claude-alarm · Dashboard] text still works');
   } finally {
     dash.ws.close();
   }
