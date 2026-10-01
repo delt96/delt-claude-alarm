@@ -40,9 +40,9 @@ claude-alarm은 Claude Code 세션만 대시보드·텔레그램으로 보고 �
 - 어댑터는 **별도 Node 프로세스**(`dist/codex/adapter.js`)다. 포트를 열지 않고 데몬과 Hub 양쪽의 클라이언트로만 동작한다. Hub 내부 모듈로 넣지 않는 이유: Codex 쪽 장애·업데이트가 Hub 수명에 묶이지 않게 하기 위해서다.
 - **Hub가 띄우는 경우(같은 PC, 기본 경로)**: `config.codex.enabled`가 `true`이면 Hub가 `start()`에서 어댑터를 자식 프로세스로 띄운다. 자식이 죽으면 2초부터 60초까지 간격을 늘려 다시 띄우고, `hub.stop()`에서 끈다. 자식의 stdin은 파이프로 연결해 두고 어댑터는 stdin이 닫히면 종료한다 — Windows에서 `hub stop`(`process.kill(pid,'SIGTERM')`)은 Hub의 종료 처리기를 실행하지 않으므로 이 방법으로 고아 프로세스를 막는다.
 - **직접 띄우는 경우(Codex가 다른 PC)**: `claude-alarm codex start|stop|status`. Hub처럼 분리 실행하고 `~/.claude-alarm/codex.pid`를 쓴다. 접속할 Hub는 기존 설정(`hub.host`, `hub.port`, `hub.token`)을 쓴다.
-- 한 PC에서는 어댑터 하나만 돈다. 두 경로 모두 `~/.claude-alarm/codex.lock`(pid)으로 중복 실행을 막는다.
+- 한 PC에서는 어댑터 하나만 돈다. 어댑터가 시작할 때 `~/.claude-alarm/codex.pid`를 확인하고 살아 있는 다른 어댑터가 있으면 종료 코드 0으로 끝낸다(Hub는 종료 코드 0이면 다시 띄우지 않는다). 두 실행 경로가 같은 pid 파일을 쓴다.
 - `claude-alarm codex enable|disable`로 `config.codex.enabled`를 바꾼다. 기본값은 꺼짐이다 — 켜지 않은 사용자의 Codex 대화가 대시보드·텔레그램에 나타나면 안 된다.
-- Codex 실행 파일은 `config.codex.command`(기본 `codex`)이고, `spawn(command, ['app-server', 'proxy'], { shell: false, windowsHide: true })`로 띄운다. 사용자 입력을 명령줄에 넣지 않는다.
+- Codex 실행 파일은 `config.codex.command`(기본 `codex`)이고, `spawn(command, ['app-server', 'proxy'], { shell: false, windowsHide: true })`로 띄운다. 예외: Windows에서 npm으로 설치한 Codex는 `codex.cmd` 셈이라 셸로만 실행되므로, PATH에서 `codex.exe`가 없고 `codex.cmd`만 있으면 셸로 실행한다. 어느 경우든 명령줄에는 고정 인자만 넣고 사용자 입력을 넣지 않는다.
 
 ```ts
 // AppConfig 확장
@@ -53,13 +53,14 @@ codex?: { enabled: boolean; command?: string };
 
 | 모듈 | 책임 |
 |---|---|
-| `src/codex/transport.ts` | proxy 자식 프로세스, stdio Duplex, WebSocket(`ws`의 `createConnection`) |
+| `src/codex/transport.ts` | proxy 자식 프로세스, stdio Duplex, WebSocket(`ws`의 `createConnection`), Windows 명령 해석 |
 | `src/codex/rpc.ts` | 요청 ID·응답 매칭, 서버 요청·알림 분배, 타임아웃 |
-| `src/codex/registry.ts` | 대화 발견, 메타데이터, 상태 변환, 구독 |
-| `src/codex/bridge.ts` | 대화별 Hub 연결·등록·재연결 |
-| `src/codex/turns.ts` | 지시 전달, 응답 수집, 완료·오류 알림 |
+| `src/codex/mapping.ts` | 대화→세션 변환 순수 함수(제목, 상태, 출처 표시, 최종 답) |
+| `src/codex/adapter.ts` | 발견·구독·대화별 Hub 연결·응답·지시·재연결 |
+| `src/codex/main.ts` | 실행 진입점, pid 파일, stdin 감시 |
 | `src/codex/approvals.ts` | 승인 요청 → 선택지, 응답, 해결 동기화 (단계 B) |
-| `src/codex/adapter.ts` | 진입점, 조립, 종료 처리, stdin 감시 |
+
+대화별 Hub 연결은 기존 `HubClient`(`src/channel/hub-client.ts`)에 등록 정보 확장·재등록·끊은 뒤 재연결 금지를 더해 재사용한다.
 
 ### 3. 대화 발견과 구독
 
@@ -158,7 +159,7 @@ choiceId?: string;
 | 데몬 미실행 | `proxy`의 동작 확인 필요(미검증). 연결 실패면 백오프 재시도 |
 | proxy 종료·데몬 단절 | 모든 Codex 세션의 Hub 연결을 닫고, 대기 승인은 `expired`, 백오프 후 처음부터 다시 발견 |
 | Hub 단절 | 대화별 연결이 기존 규칙대로 재연결하고 `register`를 다시 보낸다 |
-| 로그아웃·인증 오류 | `notify`(error) "Codex needs you to sign in.", 지시 전송 거절 |
+| 로그아웃·인증 오류 | 미검증 — 데몬이 로그아웃을 어떤 신호로 알리는지 확인한 뒤 처리한다(단계 A 범위 밖). 그때까지는 `turn/start` 실패 경고로 드러난다 |
 | 알 수 없는 서버 요청·메서드 | 응답하지 않고 로그만 남긴다 |
 
 로그에 토큰, 승인 입력 원문, 대화 전문을 남기지 않는다.
