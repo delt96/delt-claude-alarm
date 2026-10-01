@@ -1,0 +1,53 @@
+import fs from 'node:fs';
+import { loadConfig } from '../shared/config.js';
+import { CODEX_PID_FILE, DEFAULT_HUB_HOST } from '../shared/constants.js';
+import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
+import { logger } from '../shared/logger.js';
+import { CodexAdapter } from './adapter.js';
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+installCrashGuard('codex adapter');
+const config = loadConfig();
+
+const existing = fs.existsSync(CODEX_PID_FILE) ? parseInt(fs.readFileSync(CODEX_PID_FILE, 'utf-8').trim(), 10) : NaN;
+if (!Number.isNaN(existing) && existing !== process.pid && isRunning(existing)) {
+  logger.info(`Codex adapter already running (PID: ${existing})`);
+  process.exit(0);
+}
+fs.writeFileSync(CODEX_PID_FILE, String(process.pid), 'utf-8');
+logStartup('Codex adapter');
+
+const host = process.env.CLAUDE_ALARM_HUB_HOST ?? (config.hub.host === '0.0.0.0' ? DEFAULT_HUB_HOST : config.hub.host);
+const port = process.env.CLAUDE_ALARM_HUB_PORT ? parseInt(process.env.CLAUDE_ALARM_HUB_PORT, 10) : config.hub.port;
+const token = process.env.CLAUDE_ALARM_HUB_TOKEN ?? config.hub.token;
+
+const adapter = new CodexAdapter({ command: config.codex?.command ?? 'codex', hub: { host, port, token } });
+adapter.start();
+
+let exiting = false;
+const shutdown = () => {
+  if (exiting) return;
+  exiting = true;
+  adapter.stop();
+  try {
+    if (fs.readFileSync(CODEX_PID_FILE, 'utf-8').trim() === String(process.pid)) fs.unlinkSync(CODEX_PID_FILE);
+  } catch {}
+  process.exit(0);
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// On Windows `hub stop` kills the hub without running its exit handlers, so stdin EOF is the only sign the parent is gone.
+if (process.argv.includes('--watch-stdin')) {
+  process.stdin.on('end', shutdown);
+  process.stdin.on('close', shutdown);
+  process.stdin.resume();
+}

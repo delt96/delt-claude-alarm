@@ -16,6 +16,7 @@ import {
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
 import { TelegramBot } from './telegram.js';
+import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
@@ -57,11 +58,14 @@ export class HubServer {
   private host: string;
   private port: number;
   private token?: string;
+  private codexEnabled: boolean;
+  private codexSupervisor?: CodexSupervisor;
 
   constructor(config?: Partial<AppConfig>) {
     this.host = config?.hub?.host ?? DEFAULT_HUB_HOST;
     this.port = config?.hub?.port ?? DEFAULT_HUB_PORT;
     this.token = config?.hub?.token;
+    this.codexEnabled = config?.codex?.enabled === true;
 
     if (config?.notifications) {
       this.notifier.configure({
@@ -137,6 +141,7 @@ export class HubServer {
         this.httpServer.on('error', (err) => logger.error(`HTTP server error: ${err.message}`));
         const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
         logger.info(`Hub server listening on http://${displayHost}:${this.port}`);
+        this.startCodexAdapter();
         resolve();
       });
     });
@@ -144,6 +149,8 @@ export class HubServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      this.codexSupervisor?.stop();
+      this.codexSupervisor = undefined;
       // Stop heartbeat
       if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
 
@@ -745,6 +752,18 @@ export class HubServer {
     } catch (err) {
       this.jsonResponse(res, 500, { error: (err as Error).message });
     }
+  }
+
+  private startCodexAdapter(): void {
+    if (!this.codexEnabled) return;
+    const script = resolveAdapterScript(__dirname);
+    if (!script) {
+      logger.warn('Codex adapter is enabled but codex/main.js was not found next to the hub');
+      return;
+    }
+    this.codexSupervisor = new CodexSupervisor(script);
+    this.codexSupervisor.start();
+    logger.info('Codex adapter started');
   }
 
   private startHeartbeat(): void {

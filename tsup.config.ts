@@ -35,6 +35,7 @@ export default defineConfig([
   {
     entry: {
       'hub/server': 'src/hub/server.ts',
+      'codex/main': 'src/codex/main.ts',
     },
     format: ['esm'],
     target: 'node18',
