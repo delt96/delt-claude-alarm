@@ -86,8 +86,8 @@ export class CodexAdapter {
       });
       live.notify('initialized');
       logger.info(`Connected to Codex daemon (${init.userAgent ?? 'unknown version'})`);
-      this.delay = this.opts.reconnectMinMs ?? 2000;
       await this.discover();
+      this.delay = this.opts.reconnectMinMs ?? 2000;
     } catch (err) {
       logger.warn(`Codex daemon connection failed: ${(err as Error).message}`);
       if (rpc && this.rpc === rpc) {
@@ -95,6 +95,7 @@ export class CodexAdapter {
         this.conn?.close();
         this.conn = undefined;
       }
+      for (const id of [...this.threads.keys()]) this.drop(id);
       this.scheduleRetry();
     }
   }

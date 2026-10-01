@@ -240,3 +240,21 @@ test('a missing Codex binary is retried without crashing', async () => {
   adapter.start();
   await until(() => attempts >= 3, 3000);
 });
+
+test('a failing discovery does not leave sessions behind', async () => {
+  let fail = true;
+  const d = await startAdapter([thread('t1')], (dm) => {
+    dm.handle('thread/loaded/list', () => {
+      if (fail) {
+        dm.notify('thread/started', { thread: thread('early') });
+        throw new Error('list failed');
+      }
+      return { data: ['t1'], nextCursor: null };
+    });
+  });
+  await until(() => d.calls('thread/loaded/list').length >= 1);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(!(await sessions()).some((x) => x.id === 'codex:early'));
+  fail = false;
+  await session('codex:t1');
+});
