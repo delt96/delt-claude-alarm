@@ -18,7 +18,7 @@ export function resolveCommand(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; shell: boolean } {
-  if (platform !== 'win32' || /[\/]/.test(command) || path.extname(command)) return { file: command, shell: false };
+  if (platform !== 'win32' || /[\\/]/.test(command) || path.extname(command)) return { file: command, shell: false };
   const dirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
   for (const ext of ['.exe', '.cmd']) {
     for (const dir of dirs) {
