@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
 import type { ChannelMessage, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
-import { RpcClient } from './rpc.js';
+import { RpcClient, type RpcId } from './rpc.js';
+import { approvalView, fileChanges, type ApprovalChoice, type FileChange } from './approvals.js';
 import {
   codexSessionId,
   finalAnswer,
@@ -35,18 +37,24 @@ interface Tracked {
   turns: Map<string, AgentMessage[]>;
   releaseTimer?: ReturnType<typeof setTimeout>;
   unrelayed: boolean;
+  files: Map<string, FileChange[]>;
 }
 
-const APPROVAL_REQUESTS = new Set([
-  'item/commandExecution/requestApproval',
-  'item/fileChange/requestApproval',
-  'mcpServer/elicitation/request',
-]);
+// Requests a person must answer that claude-alarm cannot relay; the user is pointed back to Codex.
+const USER_REQUESTS = new Set(['item/tool/requestUserInput', 'item/permissions/requestApproval', 'mcpServer/elicitation/request']);
+
+interface PendingApproval {
+  threadId: string;
+  rpcId: RpcId;
+  choices: ApprovalChoice[];
+  answered: boolean;
+}
 
 export class CodexAdapter {
   private conn?: ProxyConnection;
   private rpc?: RpcClient;
   private threads = new Map<string, Tracked>();
+  private approvals = new Map<string, PendingApproval>();
   private stopped = false;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private delay: number;
@@ -79,7 +87,7 @@ export class CodexAdapter {
       const live = new RpcClient(conn.ws);
       rpc = live;
       live.on('notification', (method: string, params: any) => this.onNotification(method, params));
-      live.on('request', (_id: unknown, method: string, params: any) => this.onServerRequest(method, params));
+      live.on('request', (id: RpcId, method: string, params: any) => this.onServerRequest(id, method, params));
       live.on('close', () => {
         if (this.rpc === live) this.onDaemonLost();
       });
@@ -168,6 +176,7 @@ export class CodexAdapter {
         pendingTurn: false,
         turns: new Map(),
         unrelayed: false,
+        files: new Map(),
       });
       hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
@@ -222,6 +231,9 @@ export class CodexAdapter {
   private drop(threadId: string): void {
     const t = this.threads.get(threadId);
     if (!t) return;
+    for (const [requestId, a] of this.approvals) {
+      if (a.threadId === threadId) this.finishApproval(requestId, 'expired');
+    }
     this.threads.delete(threadId);
     clearTimeout(t.releaseTimer);
     t.releaseTimer = undefined;
@@ -249,8 +261,15 @@ export class CodexAdapter {
       case 'thread/deleted':
         this.drop(params.threadId);
         break;
+      case 'item/started':
+        if (params.item?.type === 'fileChange') this.threads.get(params.threadId)?.files.set(params.item.id, fileChanges(params.item));
+        break;
       case 'item/completed':
         if (params.item?.type === 'agentMessage') this.collect(params.threadId, params.turnId, params.item);
+        if (params.item?.type === 'fileChange') this.threads.get(params.threadId)?.files.delete(params.item.id);
+        break;
+      case 'serverRequest/resolved':
+        this.onResolved(params.threadId, params.requestId);
         break;
       case 'turn/completed':
         this.onTurnCompleted(params.threadId, params.turn);
@@ -300,6 +319,7 @@ export class CodexAdapter {
     if (!t) return;
     const collected = t.turns.get(turn.id) ?? [];
     t.turns.delete(turn.id);
+    t.files.clear();
     if (t.thread.status.type !== 'active') void this.want(threadId, false);
     if (turn.status === 'failed' || turn.error) {
       this.notify(threadId, 'Codex task failed', turn.error?.message ?? 'The task ended with an error.', 'error');
@@ -320,6 +340,8 @@ export class CodexAdapter {
       void this.sendTurn(threadId, msg.content, msg.source);
     } else if (msg.type === 'image_to_session') {
       this.notify(threadId, 'Not delivered', 'Codex sessions do not accept images yet.', 'warning');
+    } else if (msg.type === 'permission_response') {
+      this.answer(threadId, msg.requestId, msg.choiceId);
     }
   }
 
@@ -345,13 +367,55 @@ export class CodexAdapter {
     }
   }
 
-  private onServerRequest(method: string, params: any): void {
-    if (!APPROVAL_REQUESTS.has(method) || !params?.threadId) {
-      logger.debug(`Ignoring Codex server request ${method}`);
+  private onServerRequest(rpcId: RpcId, method: string, params: any): void {
+    const t = params?.threadId ? this.threads.get(params.threadId) : undefined;
+    const view = t ? approvalView(method, params, t.files.get(params.itemId)) : null;
+    if (!t || !view) {
+      if (t && USER_REQUESTS.has(method)) {
+        this.notify(t.thread.id, 'Codex is waiting', 'Codex asked for input that claude-alarm cannot relay. Handle it in Codex.', 'warning');
+      } else {
+        logger.debug(`Ignoring Codex server request ${method}`);
+      }
       return;
     }
-    const detail = params.commandActions?.[0]?.command ?? params.command ?? params.reason ?? params.message ?? method;
-    this.notify(params.threadId, 'Codex approval needed', `Approve or decline in Codex: ${String(detail).slice(0, 300)}`, 'warning');
+    // The daemon re-sends a pending request to every new subscriber, so a resubscribe can deliver it twice.
+    for (const a of this.approvals.values()) {
+      if (a.threadId === t.thread.id && a.rpcId === rpcId) return;
+    }
+    const requestId = randomUUID();
+    this.approvals.set(requestId, { threadId: t.thread.id, rpcId, choices: view.choices, answered: false });
+    t.hub.send({
+      type: 'permission_request',
+      sessionId: codexSessionId(t.thread.id),
+      requestId,
+      toolName: view.toolName,
+      description: view.description,
+      inputPreview: view.inputPreview,
+      timestamp: Date.now(),
+      choices: view.choices.map((c, i) => ({ id: String(i), label: c.label })),
+    });
+  }
+
+  private answer(threadId: string, requestId: string, choiceId?: string): void {
+    const a = this.approvals.get(requestId);
+    if (!a || a.threadId !== threadId || a.answered || !this.rpc || !choiceId || !/^\d+$/.test(choiceId)) return;
+    const choice = a.choices[Number(choiceId)];
+    if (!choice) return;
+    a.answered = true;
+    this.rpc.respond(a.rpcId, choice.response);
+  }
+
+  private onResolved(threadId: string, rpcId: RpcId): void {
+    for (const [requestId, a] of this.approvals) {
+      if (a.threadId === threadId && a.rpcId === rpcId) this.finishApproval(requestId, 'resolved');
+    }
+  }
+
+  private finishApproval(requestId: string, state: 'resolved' | 'expired'): void {
+    const a = this.approvals.get(requestId);
+    if (!a) return;
+    this.approvals.delete(requestId);
+    this.threads.get(a.threadId)?.hub.send({ type: 'permission_resolved', sessionId: codexSessionId(a.threadId), requestId, state });
   }
 
   private notify(threadId: string, title: string, message: string, level: NotifyLevel): void {

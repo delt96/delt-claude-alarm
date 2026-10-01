@@ -10,6 +10,7 @@ export interface Received { method: string; params: any; id?: number | string }
 
 export class FakeDaemon {
   readonly received: Received[] = [];
+  readonly responses: Array<{ id: number | string; result?: any; error?: any }> = [];
   connections = 0;
   private handlers = new Map<string, Handler>();
   private wss?: WebSocketServer;
@@ -65,7 +66,10 @@ export class FakeDaemon {
   }
 
   private onMessage(ws: WebSocket, m: any): void {
-    if (m.method === undefined) return;
+    if (m.method === undefined) {
+      if (m.id !== undefined) this.responses.push(m.error ? { id: m.id, error: m.error } : { id: m.id, result: m.result });
+      return;
+    }
     this.received.push({ method: m.method, params: m.params, id: m.id });
     if (m.id === undefined) return;
     const reply = (body: object) => ws.send(JSON.stringify({ id: m.id, ...body }));

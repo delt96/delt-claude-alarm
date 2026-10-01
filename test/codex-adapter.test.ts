@@ -202,26 +202,6 @@ test('messages to a thread waiting for approval are refused, not queued', async 
   }
 });
 
-test('approval requests raise a warning that names the command', async () => {
-  const d = await startAdapter([thread('t1')]);
-  await session('codex:t1');
-  const dash = await openDashboard();
-  try {
-    d.serverRequest(90, 'item/commandExecution/requestApproval', {
-      threadId: 't1',
-      turnId: 'u3',
-      itemId: 'i1',
-      command: '"powershell.exe" -Command \'curl.exe https://example.com\'',
-      commandActions: [{ type: 'unknown', command: 'curl.exe https://example.com' }],
-    });
-    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
-    assert.equal(n.title, 'Codex approval needed');
-    assert.match(n.message, /curl\.exe https:\/\/example\.com/);
-  } finally {
-    dash.ws.close();
-  }
-});
-
 test('back-to-back messages start only one turn', async () => {
   const d = await startAdapter([thread('t1')]);
   await session('codex:t1');
@@ -410,3 +390,173 @@ test('turn/completed while the thread is still active does not release it', asyn
   }
 });
 
+const approvalParams = {
+  threadId: 't1',
+  turnId: 'u3',
+  itemId: 'i1',
+  reason: 'Allow creating x?',
+  command: 'New-Item x',
+  availableDecisions: ['accept', { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['New-Item', 'x'] } }, 'cancel'],
+};
+
+async function approvalOnDashboard(
+  d: FakeDaemon,
+  dash: { inbox: any[] },
+  id: number,
+  method = 'item/commandExecution/requestApproval',
+  params: any = approvalParams,
+) {
+  const before = dash.inbox.filter((m) => m.type === 'permission_request').length;
+  d.serverRequest(id, method, params);
+  return until(() => dash.inbox.filter((m) => m.type === 'permission_request')[before]);
+}
+
+const choose = (dash: { ws: WebSocket }, requestId: string, choiceId: string) =>
+  dash.ws.send(JSON.stringify({ type: 'permission_response', sessionId: 'codex:t1', requestId, choiceId }));
+
+test('command approvals reach the dashboard with the choices Codex offered', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 90);
+    assert.equal(req.sessionId, 'codex:t1');
+    assert.equal(req.toolName, 'Command');
+    assert.equal(req.description, 'Allow creating x?');
+    assert.deepEqual(JSON.parse(req.inputPreview), { command: 'New-Item x' });
+    assert.deepEqual(req.choices, [
+      { id: '0', label: 'Allow once' },
+      { id: '1', label: 'Always allow this command' },
+      { id: '2', label: 'Cancel task' },
+    ]);
+    assert.ok(!dash.inbox.some((m) => m.type === 'notification' && m.title === 'Codex approval needed'));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('the chosen decision is sent to Codex once', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 90);
+    choose(dash, req.requestId, '1');
+    await until(() => d.responses.length === 1);
+    assert.deepEqual(d.responses[0], { id: 90, result: { decision: approvalParams.availableDecisions[1] } });
+    choose(dash, req.requestId, '0');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.responses.length, 1);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a request answered elsewhere closes on the dashboard and takes no late answer', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 91);
+    d.notify('serverRequest/resolved', { threadId: 't1', requestId: 91 });
+    const resolved = await until(() => dash.inbox.find((m) => m.type === 'permission_resolved'));
+    assert.deepEqual(resolved, { type: 'permission_resolved', sessionId: 'codex:t1', requestId: req.requestId, state: 'resolved' });
+    choose(dash, req.requestId, '0');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('file change approvals list the files from the started item', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    d.notify('item/started', {
+      threadId: 't1',
+      turnId: 'u3',
+      startedAtMs: 0,
+      item: { type: 'fileChange', id: 'p1', status: 'inProgress', changes: [{ path: 'C:\\w\\proj\\a.txt', kind: { type: 'add' }, diff: 'hi' }] },
+    });
+    const req = await approvalOnDashboard(d, dash, 92, 'item/fileChange/requestApproval', {
+      threadId: 't1', turnId: 'u3', itemId: 'p1', reason: null, grantRoot: null,
+    });
+    assert.equal(req.toolName, 'File change');
+    assert.equal(JSON.parse(req.inputPreview).content, 'C:\\w\\proj\\a.txt\nhi');
+    assert.deepEqual(req.choices.map((c: any) => c.label), ['Allow once', 'Allow for this session', 'Decline', 'Cancel task']);
+    choose(dash, req.requestId, '2');
+    await until(() => d.responses.length === 1);
+    assert.deepEqual(d.responses[0], { id: 92, result: { decision: 'decline' } });
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('MCP tool approvals answer with an elicitation action', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 93, 'mcpServer/elicitation/request', {
+      threadId: 't1',
+      turnId: 'u3',
+      serverName: 'claude-alarm',
+      mode: 'form',
+      message: 'Allow notify?',
+      requestedSchema: { type: 'object', properties: {} },
+      _meta: { codex_approval_kind: 'mcp_tool_call' },
+    });
+    assert.equal(req.toolName, 'MCP tool');
+    choose(dash, req.requestId, '0');
+    await until(() => d.responses.length === 1);
+    assert.deepEqual(d.responses[0], { id: 93, result: { action: 'accept', content: {} } });
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('requests claude-alarm cannot relay point the user to Codex', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    d.serverRequest(94, 'item/tool/requestUserInput', { threadId: 't1', turnId: 'u3', itemId: 'q1', questions: [] });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'warning');
+    assert.match(n.message, /Handle it in Codex/);
+    assert.ok(!dash.inbox.some((m) => m.type === 'permission_request'));
+    assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a request re-sent to a new subscription is shown once', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    await approvalOnDashboard(d, dash, 95);
+    d.serverRequest(95, 'item/commandExecution/requestApproval', approvalParams);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(dash.inbox.filter((m) => m.type === 'permission_request').length, 1);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('losing the daemon expires pending approvals', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 96);
+    d.dropClient();
+    const gone = await until(() => dash.inbox.find((m) => m.type === 'permission_resolved'));
+    assert.deepEqual(gone, { type: 'permission_resolved', sessionId: 'codex:t1', requestId: req.requestId, state: 'expired' });
+  } finally {
+    dash.ws.close();
+  }
+});
