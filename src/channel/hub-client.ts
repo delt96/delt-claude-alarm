@@ -28,9 +28,11 @@ export class HubClient {
     logger.debug(`Connecting to hub at ${url}`);
 
     try {
-      this.ws = new WebSocket(url);
+      const ws = new WebSocket(url);
+      this.ws = ws;
 
-      this.ws.on('open', () => {
+      ws.on('open', () => {
+        if (this.ws !== ws) return;
         logger.info('Connected to hub');
         this.connected = true;
 
@@ -43,7 +45,8 @@ export class HubClient {
         this.queue = [];
       });
 
-      this.ws.on('message', (data) => {
+      ws.on('message', (data) => {
+        if (this.ws !== ws) return;
         try {
           const msg = JSON.parse(data.toString()) as ChannelMessage;
           for (const handler of this.messageHandlers) {
@@ -54,13 +57,15 @@ export class HubClient {
         }
       });
 
-      this.ws.on('close', () => {
+      ws.on('close', () => {
+        if (this.ws !== ws) return;
         logger.info('Disconnected from hub');
         this.connected = false;
         if (!this.closed) this.scheduleReconnect();
       });
 
-      this.ws.on('error', (err) => {
+      ws.on('error', (err) => {
+        if (this.ws !== ws) return;
         logger.debug(`Hub connection error: ${err.message}`);
         this.connected = false;
       });

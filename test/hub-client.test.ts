@@ -15,23 +15,23 @@ before(async () => { hub = new HubServer(config); await hub.start(); });
 after(async () => { await hub.stop(); });
 
 async function sessions(): Promise<any[]> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-    return ((await res.json()) as any).sessions;
-  } catch {
-    return [];
-  }
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  return ((await res.json()) as any).sessions;
+}
+
+async function sessionsOrEmpty(): Promise<any[]> {
+  try { return await sessions(); } catch { return []; }
 }
 
 test('registration extras are sent and can be refreshed', async () => {
   let title = 'First';
-  const client = new HubClient('x1', 'x1', '127.0.0.1', PORT, TOKEN, () => undefined, () => ({ agentKind: 'codex', title, cwd: 'C:\w\proj', status: 'working' }));
+  const client = new HubClient('x1', 'x1', '127.0.0.1', PORT, TOKEN, () => undefined, () => ({ agentKind: 'codex', title, cwd: 'C:\\w\\proj', status: 'working' }));
   client.connect();
   try {
     const first = await until(async () => (await sessions()).find((s) => s.id === 'x1'));
     assert.equal(first.agentKind, 'codex');
     assert.equal(first.displayName, 'First');
-    assert.equal(first.cwd, 'C:\w\proj');
+    assert.equal(first.cwd, 'C:\\w\\proj');
     assert.equal(first.status, 'working');
     title = 'Second';
     client.reregister();
@@ -59,8 +59,24 @@ test('a hub restart re-registers the session with its extras', async () => {
     await hub.stop();
     hub = new HubServer(config);
     await hub.start();
-    const back = await until(async () => (await sessions()).find((s) => s.id === 'x3'), 9000);
+    const back = await until(async () => (await sessionsOrEmpty()).find((s) => s.id === 'x3'), 9000);
     assert.equal(back.displayName, 'Kept');
+  } finally {
+    client.disconnect();
+  }
+});
+
+test('reconnecting right after disconnect leaves no stale reconnect', async () => {
+  const client = new HubClient('x4', 'x4', '127.0.0.1', PORT, TOKEN);
+  client.connect();
+  try {
+    await until(async () => (await sessions()).find((s) => s.id === 'x4'));
+    client.disconnect();
+    client.connect();
+    await until(async () => (await sessions()).find((s) => s.id === 'x4'));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((client as any).reconnectTimer, null);
+    assert.equal((client as any).connected, true);
   } finally {
     client.disconnect();
   }
