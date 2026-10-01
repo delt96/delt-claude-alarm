@@ -43,3 +43,24 @@ test('setPeerName ignores an unsafe value', () => {
   sm.setPeerName('a', 'bad"name');
   assert.equal(sm.get('a')?.peerName, undefined);
 });
+
+test('register uses title as the display name when present', () => {
+  const sm = new SessionManager();
+  sm.register({ ...makeSession('c1'), title: 'Fix login bug', agentKind: 'codex' as const });
+  assert.equal(sm.get('c1')?.displayName, 'Fix login bug');
+});
+
+test('sessions sharing a title are numbered', () => {
+  const sm = new SessionManager();
+  sm.register({ ...makeSession('c1'), title: 'Same' });
+  sm.register({ ...makeSession('c2'), title: 'Same' });
+  assert.equal(sm.get('c1')?.displayName, 'Same (1)');
+  assert.equal(sm.get('c2')?.displayName, 'Same (2)');
+});
+
+test('re-registering with a new title renames the session', () => {
+  const sm = new SessionManager();
+  sm.register({ ...makeSession('c1'), title: 'Old' });
+  sm.register({ ...makeSession('c1'), title: 'New' });
+  assert.equal(sm.get('c1')?.displayName, 'New');
+});

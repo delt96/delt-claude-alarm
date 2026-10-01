@@ -1,6 +1,10 @@
 /** Session status */
 export type SessionStatus = 'idle' | 'working' | 'waiting_input';
 
+export type AgentKind = 'claude' | 'codex';
+
+export type MessageSource = 'dashboard' | 'telegram' | 'api';
+
 /** Session info tracked by the hub */
 export interface SessionInfo {
   id: string;
@@ -13,6 +17,8 @@ export interface SessionInfo {
   channelEnabled?: boolean;
   isLocal?: boolean;
   peerName?: string;
+  agentKind?: AgentKind;
+  title?: string;
 }
 
 /** Messages sent between channel server and hub */
@@ -22,7 +28,7 @@ export type ChannelMessage =
   | { type: 'peer_name'; sessionId: string; peerName?: string }
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel }
   | { type: 'reply'; sessionId: string; content: string }
-  | { type: 'message_to_session'; sessionId: string; content: string }
+  | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }
   | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string; content?: string }
   | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string; content?: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
@@ -51,6 +57,12 @@ export interface TelegramConfig {
   enabled: boolean;
 }
 
+/** Codex adapter configuration */
+export interface CodexConfig {
+  enabled: boolean;
+  command?: string;
+}
+
 /** App configuration stored in ~/.claude-alarm/config.json */
 export interface AppConfig {
   hub: {
@@ -64,6 +76,7 @@ export interface AppConfig {
   };
   webhooks: WebhookConfig[];
   telegram?: TelegramConfig;
+  codex?: CodexConfig;
 }
 
 /** Hub status response */

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../shared/logger.js';
 import { UPLOADS_DIR } from '../shared/constants.js';
 import type { TelegramConfig, SessionInfo } from '../shared/types.js';
+import { sessionLabel } from '../shared/session-label.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
@@ -301,7 +302,7 @@ export class TelegramBot {
   }
 
   private getLabel(session: SessionInfo): string {
-    return session.displayName || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+    return sessionLabel(session);
   }
 
   /** Send a permission request with inline buttons */

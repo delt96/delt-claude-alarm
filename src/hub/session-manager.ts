@@ -6,9 +6,9 @@ export class SessionManager {
 
   register(session: SessionInfo): void {
     // Auto-number duplicate names
-    const baseName = session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+    const baseName = this.baseName(session);
     const existing = Array.from(this.sessions.values()).filter(
-      s => s.id !== session.id && (s.cwd?.replace(/^.*[/\\]/, '') || s.name) === baseName,
+      s => s.id !== session.id && this.baseName(s) === baseName,
     );
     if (existing.length > 0) {
       // Number this one
@@ -70,5 +70,9 @@ export class SessionManager {
 
   count(): number {
     return this.sessions.size;
+  }
+
+  private baseName(session: SessionInfo): string {
+    return session.title || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
   }
 }

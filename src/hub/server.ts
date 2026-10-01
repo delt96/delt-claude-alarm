@@ -17,6 +17,7 @@ import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
 import { TelegramBot } from './telegram.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
+import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig } from '../shared/types.js';
 import {
@@ -774,8 +775,7 @@ export class HubServer {
   }
 
   private getSessionLabel(session?: SessionInfo): string {
-    if (!session) return 'unknown';
-    return session.displayName || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
+    return session ? sessionLabel(session) : 'unknown';
   }
 
   private jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {
