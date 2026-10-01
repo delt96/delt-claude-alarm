@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken } from './shared/config.js';
-import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT } from './shared/constants.js';
+import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled } from './shared/config.js';
+import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 
@@ -30,6 +30,11 @@ Usage:
   claude-alarm setup [dir]      Add claude-alarm to .mcp.json
   claude-alarm test             Send a test notification
   claude-alarm token            Show current auth token
+  claude-alarm codex enable     Start the Codex adapter together with the hub
+  claude-alarm codex disable    Stop starting the Codex adapter with the hub
+  claude-alarm codex start      Run the Codex adapter on its own (e.g. Codex on another PC)
+  claude-alarm codex stop       Stop a running Codex adapter
+  claude-alarm codex status     Show Codex adapter status
   claude-alarm help             Show this help
 
 Quick start:
@@ -318,6 +323,58 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+function readCodexPid(): number | undefined {
+  if (!fs.existsSync(CODEX_PID_FILE)) return undefined;
+  const pid = parseInt(fs.readFileSync(CODEX_PID_FILE, 'utf-8').trim(), 10);
+  return Number.isNaN(pid) ? undefined : pid;
+}
+
+function codexEnable(enabled: boolean) {
+  setCodexEnabled(enabled);
+  console.log(enabled
+    ? 'Codex adapter enabled. Restart the hub to apply: claude-alarm hub stop, then claude-alarm hub start'
+    : 'Codex adapter disabled. Restart the hub to apply.');
+}
+
+function codexStart() {
+  const pid = readCodexPid();
+  if (pid !== undefined && isProcessRunning(pid)) {
+    console.log(`Codex adapter is already running (PID: ${pid})`);
+    return;
+  }
+  ensureConfigDir();
+  const logFd = fs.openSync(CODEX_LOG_FILE, 'a');
+  const child = spawn(process.execPath, [path.join(__dirname, 'codex', 'main.js')], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: { ...process.env },
+  });
+  child.unref();
+  console.log(`Codex adapter started (PID: ${child.pid}). Logs: ${CODEX_LOG_FILE}`);
+}
+
+function codexStop() {
+  const pid = readCodexPid();
+  if (pid === undefined) {
+    console.log('Codex adapter is not running');
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+    console.log(`Codex adapter stopped (PID: ${pid})`);
+  } catch {
+    console.log('Codex adapter process not found (may have already stopped)');
+  }
+  try { fs.unlinkSync(CODEX_PID_FILE); } catch {}
+}
+
+function codexStatus() {
+  const pid = readCodexPid();
+  const state = pid === undefined ? 'not running' : isProcessRunning(pid) ? `running (PID: ${pid})` : 'not running (stale PID file)';
+  console.log(`Codex adapter: ${state}`);
+  console.log(`Start with hub: ${loadConfig().codex?.enabled ? 'enabled' : 'disabled'}`);
+}
+
 // --- Main CLI ---
 async function main() {
   const args = process.argv.slice(2);
@@ -350,6 +407,20 @@ async function main() {
       await hubStatus();
     } else {
       console.error(`Unknown hub command: ${sub}`);
+      printUsage();
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'codex') {
+    if (sub === 'enable') codexEnable(true);
+    else if (sub === 'disable') codexEnable(false);
+    else if (sub === 'start') codexStart();
+    else if (sub === 'stop') codexStop();
+    else if (sub === 'status') codexStatus();
+    else {
+      console.error(`Unknown codex command: ${sub}`);
       printUsage();
       process.exit(1);
     }

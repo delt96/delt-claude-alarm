@@ -21,6 +21,7 @@ Monitor and interact with multiple Claude Code sessions from a web dashboard. Ge
 - **Dark / Light Mode** — Theme toggle with persistence
 - **Permission Relay** — Approve/deny tool calls from dashboard or phone
 - **Multi-Machine** — Remote hub access support
+- **Codex Sessions** — See and message OpenAI Codex conversations next to Claude sessions
 
 ## Quick Start
 
@@ -75,6 +76,8 @@ Open `http://127.0.0.1:7900` in your browser.
 | `claude-alarm hub status` | Show hub status |
 | `claude-alarm token` | Show auth token |
 | `claude-alarm test` | Send test notification |
+| `claude-alarm codex enable` / `disable` | Start (or stop starting) the Codex adapter with the hub |
+| `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC |
 
 ## Tools Available to Claude
 
@@ -167,6 +170,21 @@ Two-way messaging with Claude sessions via Telegram — text and images.
   }
 }
 ```
+
+## Codex Sessions
+
+claude-alarm can show OpenAI Codex conversations on the dashboard and in Telegram, next to your Claude sessions.
+
+```bash
+claude-alarm codex enable
+claude-alarm hub stop && claude-alarm hub start
+```
+
+- Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). Set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json` if `codex` is not on `PATH`.
+- Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval waits are relayed to the dashboard and Telegram.
+- Messages you send reach the conversation only while Codex is idle, and show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`.
+- Approvals still have to be answered in Codex; claude-alarm only tells you one is waiting.
+- If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub.
 
 ## Permission Relay
 

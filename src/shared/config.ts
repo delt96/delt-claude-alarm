@@ -57,6 +57,13 @@ export function saveConfig(config: AppConfig): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
 }
 
+export function setCodexEnabled(enabled: boolean): AppConfig {
+  const config = loadConfig();
+  config.codex = { ...config.codex, enabled };
+  saveConfig(config);
+  return config;
+}
+
 /**
  * Add claude-alarm as an MCP channel server to .mcp.json
  */
