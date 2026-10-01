@@ -28,7 +28,8 @@ interface Tracked {
   thread: CodexThread;
   hub: HubClient;
   subscribed: boolean;
-  subscribing: boolean;
+  wantSubscribed: boolean;
+  sync: Promise<void>;
   pendingTurn: boolean;
   turns: Map<string, AgentMessage[]>;
 }
@@ -154,11 +155,19 @@ export class CodexAdapter {
       const hub = new HubClient(codexSessionId(thread.id), threadTitle(thread), host, port, token, () => undefined, () =>
         this.registration(thread.id),
       );
-      this.threads.set(thread.id, { thread, hub, subscribed: false, subscribing: false, pendingTurn: false, turns: new Map() });
+      this.threads.set(thread.id, {
+        thread,
+        hub,
+        subscribed: false,
+        wantSubscribed: false,
+        sync: Promise.resolve(),
+        pendingTurn: false,
+        turns: new Map(),
+      });
       hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
     }
-    void this.subscribe(thread.id);
+    void this.want(thread.id, thread.status.type === 'active');
   }
 
   private registration(threadId: string): Partial<SessionInfo> {
@@ -168,18 +177,29 @@ export class CodexAdapter {
     return { name: title, title, cwd: t.thread.cwd, agentKind: 'codex', status: hubStatus(t.thread.status) };
   }
 
-  private async subscribe(threadId: string): Promise<void> {
+  private want(threadId: string, subscribed: boolean): Promise<void> {
     const t = this.threads.get(threadId);
-    if (!t || t.subscribed || t.subscribing || !this.rpc) return;
-    t.subscribing = true;
+    if (!t) return Promise.resolve();
+    t.wantSubscribed = subscribed;
+    t.sync = t.sync.then(() => this.syncSubscription(t));
+    return t.sync;
+  }
+
+  private async syncSubscription(t: Tracked): Promise<void> {
+    const threadId = t.thread.id;
+    if (!this.rpc || this.threads.get(threadId) !== t || t.subscribed === t.wantSubscribed) return;
     try {
-      // Only these two fields: any other resume field overrides the user's own thread settings.
-      await this.rpc.request('thread/resume', { threadId, excludeTurns: true });
-      t.subscribed = true;
+      if (t.wantSubscribed) {
+        // Only these two fields: any other resume field overrides the user's own thread settings.
+        await this.rpc.request('thread/resume', { threadId, excludeTurns: true });
+        t.subscribed = true;
+      } else {
+        // The daemon unloads a conversation 60 s after its last subscriber leaves; staying subscribed would keep closed Codex windows alive.
+        await this.rpc.request('thread/unsubscribe', { threadId });
+        t.subscribed = false;
+      }
     } catch (err) {
-      logger.debug(`thread/resume ${threadId} deferred: ${(err as Error).message}`);
-    } finally {
-      t.subscribing = false;
+      logger.debug(`subscription sync for ${threadId} deferred: ${(err as Error).message}`);
     }
   }
 
@@ -234,7 +254,7 @@ export class CodexAdapter {
     t.pendingTurn = false;
     t.hub.send({ type: 'status', sessionId: codexSessionId(threadId), status: hubStatus(status) });
     if (status.type === 'systemError') this.notify(threadId, 'Codex error', 'The Codex conversation hit a system error.', 'error');
-    void this.subscribe(threadId);
+    void this.want(threadId, status.type === 'active');
   }
 
   private collect(threadId: string, turnId: string, item: AgentMessage): void {
@@ -253,6 +273,7 @@ export class CodexAdapter {
     if (!t) return;
     const collected = t.turns.get(turn.id) ?? [];
     t.turns.delete(turn.id);
+    void this.want(threadId, false);
     if (turn.status === 'failed' || turn.error) {
       this.notify(threadId, 'Codex task failed', turn.error?.message ?? 'The task ended with an error.', 'error');
       return;
@@ -285,7 +306,7 @@ export class CodexAdapter {
     t.pendingTurn = true;
     try {
       if (!this.rpc) throw new Error('not connected to the Codex daemon');
-      await this.subscribe(threadId);
+      await this.want(threadId, true);
       await this.rpc.request('turn/start', { threadId, input: [{ type: 'text', text: withSourcePrefix(content, source) }] });
     } catch (err) {
       t.pendingTurn = false;

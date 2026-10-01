@@ -51,6 +51,7 @@ async function startAdapter(threads: any[], setup?: (d: FakeDaemon) => void): Pr
     return { thread: t };
   });
   d.handle('thread/resume', () => ({}));
+  d.handle('thread/unsubscribe', () => ({ status: 'unsubscribed' }));
   d.handle('turn/start', () => ({ turn: { id: 'turn-new', status: 'inProgress', items: [] } }));
   setup?.(d);
   adapter = new CodexAdapter({ command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200 });
@@ -68,14 +69,20 @@ function openDashboard(): Promise<{ ws: WebSocket; inbox: any[] }> {
   });
 }
 
-test('loaded threads become Codex sessions and are subscribed without overrides', async () => {
-  const d = await startAdapter([thread('t1'), thread('sub', { parentThreadId: 't1' })]);
+test('loaded threads become Codex sessions; only active ones are subscribed, without overrides', async () => {
+  const d = await startAdapter([
+    thread('t1', { status: { type: 'active', activeFlags: [] } }),
+    thread('t2'),
+    thread('sub', { parentThreadId: 't1' }),
+  ]);
   const s = await session('codex:t1');
   assert.equal(s.agentKind, 'codex');
   assert.equal(s.displayName, 'Thread t1');
   assert.equal(s.cwd, 'C:\\w\\proj');
-  assert.equal(s.status, 'idle');
+  assert.equal(s.status, 'working');
+  assert.equal((await session('codex:t2')).status, 'idle');
   await until(() => d.calls('thread/resume').length > 0);
+  await new Promise((r) => setTimeout(r, 200));
   assert.deepEqual(d.calls('thread/resume').map((c) => c.params), [{ threadId: 't1', excludeTurns: true }]);
   assert.ok(!(await sessions()).some((x) => x.id === 'codex:sub'));
 });
@@ -103,22 +110,34 @@ test('renamed and newly started threads are picked up, closed ones dropped', asy
   await until(async () => !(await sessions()).some((x) => x.id === 'codex:t2'));
 });
 
-test('a brand-new thread is subscribed once it has a rollout', async () => {
+test('an idle thread is subscribed while a turn runs and released when it completes', async () => {
+  const d = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(d.calls('thread/resume').length, 0);
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
+  await until(() => d.calls('thread/resume').length === 1);
+  d.notify('turn/completed', { threadId: 't1', turn: { id: 'u9', status: 'completed', items: [], error: null } });
+  await until(() => d.calls('thread/unsubscribe').length === 1);
+  assert.deepEqual(d.calls('thread/unsubscribe')[0].params, { threadId: 't1' });
+});
+
+test('a failed subscription is retried on the next status change', async () => {
   let ready = false;
-  const d = await startAdapter([thread('t1')], (dm) => dm.handle('thread/resume', () => {
+  const d = await startAdapter([thread('t1', { status: { type: 'active', activeFlags: [] } })], (dm) => dm.handle('thread/resume', () => {
     if (!ready) throw new Error('no rollout found for thread id t1');
     return {};
   }));
   await session('codex:t1');
   await until(() => d.calls('thread/resume').length === 1);
   ready = true;
-  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: ['waitingOnApproval'] } });
   await until(() => d.calls('thread/resume').length === 2);
 });
 
 test('final answers are relayed as replies', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'Looking into it', phase: 'commentary' } });
@@ -133,7 +152,7 @@ test('final answers are relayed as replies', async () => {
 
 test('failed turns raise an error notification', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     d.notify('turn/completed', { threadId: 't1', turn: { id: 'u2', status: 'failed', items: [], error: { message: 'usage limit reached' } } });
@@ -147,7 +166,7 @@ test('failed turns raise an error notification', async () => {
 
 test('dashboard messages start a turn with a source prefix', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'run the tests' }));
@@ -156,6 +175,8 @@ test('dashboard messages start a turn with a source prefix', async () => {
       threadId: 't1',
       input: [{ type: 'text', text: '[claude-alarm · Dashboard] run the tests' }],
     });
+    const order = d.received.map((r) => r.method);
+    assert.ok(order.indexOf('thread/resume') !== -1 && order.indexOf('thread/resume') < order.indexOf('turn/start'));
   } finally {
     dash.ws.close();
   }
@@ -163,7 +184,7 @@ test('dashboard messages start a turn with a source prefix', async () => {
 
 test('messages to a thread waiting for approval are refused, not queued', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     d.notify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: ['waitingOnApproval'] } });
@@ -182,7 +203,7 @@ test('messages to a thread waiting for approval are refused, not queued', async 
 
 test('approval requests raise a warning that names the command', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     d.serverRequest(90, 'item/commandExecution/requestApproval', {
@@ -202,7 +223,7 @@ test('approval requests raise a warning that names the command', async () => {
 
 test('back-to-back messages start only one turn', async () => {
   const d = await startAdapter([thread('t1')]);
-  await until(() => d.calls('thread/resume').length > 0);
+  await session('codex:t1');
   const dash = await openDashboard();
   try {
     dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'first' }));
