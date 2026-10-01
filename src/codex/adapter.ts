@@ -5,7 +5,7 @@ import { logger } from '../shared/logger.js';
 import type { ChannelMessage, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { RpcClient, type RpcId } from './rpc.js';
-import { approvalView, fileChanges, type ApprovalChoice, type FileChange } from './approvals.js';
+import { approvalView, fileChanges, type ApprovalChoice, type ApprovalView, type FileChange } from './approvals.js';
 import {
   codexSessionId,
   finalAnswer,
@@ -46,6 +46,7 @@ const USER_REQUESTS = new Set(['item/tool/requestUserInput', 'item/permissions/r
 interface PendingApproval {
   threadId: string;
   rpcId: RpcId;
+  turnId?: string;
   choices: ApprovalChoice[];
   answered: boolean;
 }
@@ -315,6 +316,9 @@ export class CodexAdapter {
     threadId: string,
     turn: { id: string; status: string; error?: { message: string } | null; items?: Array<{ type: string } & AgentMessage> },
   ): void {
+    for (const [requestId, a] of this.approvals) {
+      if (a.threadId === threadId && a.turnId === turn.id) this.finishApproval(requestId, 'resolved');
+    }
     const t = this.threads.get(threadId);
     if (!t) return;
     const collected = t.turns.get(turn.id) ?? [];
@@ -369,9 +373,18 @@ export class CodexAdapter {
 
   private onServerRequest(rpcId: RpcId, method: string, params: any): void {
     const t = params?.threadId ? this.threads.get(params.threadId) : undefined;
-    const view = t ? approvalView(method, params, t.files.get(params.itemId)) : null;
+    let view: ApprovalView | null = null;
+    let broken = false;
+    if (t) {
+      try {
+        view = approvalView(method, params, t.files.get(params.itemId));
+      } catch (err) {
+        broken = true;
+        logger.warn(`Codex ${method} could not be shown: ${(err as Error).message}`);
+      }
+    }
     if (!t || !view) {
-      if (t && USER_REQUESTS.has(method)) {
+      if (t && (broken || USER_REQUESTS.has(method))) {
         this.notify(t.thread.id, 'Codex is waiting', 'Codex asked for input that claude-alarm cannot relay. Handle it in Codex.', 'warning');
       } else {
         logger.debug(`Ignoring Codex server request ${method}`);
@@ -383,7 +396,7 @@ export class CodexAdapter {
       if (a.threadId === t.thread.id && a.rpcId === rpcId) return;
     }
     const requestId = randomUUID();
-    this.approvals.set(requestId, { threadId: t.thread.id, rpcId, choices: view.choices, answered: false });
+    this.approvals.set(requestId, { threadId: t.thread.id, rpcId, turnId: params.turnId, choices: view.choices, answered: false });
     t.hub.send({
       type: 'permission_request',
       sessionId: codexSessionId(t.thread.id),

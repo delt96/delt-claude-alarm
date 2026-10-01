@@ -560,3 +560,38 @@ test('losing the daemon expires pending approvals', async () => {
     dash.ws.close();
   }
 });
+
+test('an approval whose turn ends without serverRequest/resolved is closed', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 97);
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u4', status: 'completed', items: [], error: null } });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!dash.inbox.some((m) => m.type === 'permission_resolved'));
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u3', status: 'completed', items: [], error: null } });
+    const resolved = await until(() => dash.inbox.find((m) => m.type === 'permission_resolved'));
+    assert.deepEqual(resolved, { type: 'permission_resolved', sessionId: 'codex:t1', requestId: req.requestId, state: 'resolved' });
+    choose(dash, req.requestId, '0');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a malformed approval request falls back to the Codex warning', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    d.serverRequest(98, 'item/commandExecution/requestApproval', { threadId: 't1', turnId: 'u3', itemId: 'i9', commandActions: [null] });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Codex is waiting'));
+    assert.equal(n.level, 'warning');
+    assert.ok(!dash.inbox.some((m) => m.type === 'permission_request'));
+    assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
