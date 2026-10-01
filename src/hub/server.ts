@@ -20,7 +20,8 @@ import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice } from '../shared/types.js';
+import { permissionKey } from '../shared/permission-key.js';
 import {
   isAuthorized,
   isCrossOrigin,
@@ -34,6 +35,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 10MB images arrive base64-encoded (~13.4MB) over the dashboard socket.
 const MAX_WS_PAYLOAD = 16 * 1024 * 1024;
+
+function validChoices(choices: unknown): PermissionChoice[] | undefined {
+  if (!Array.isArray(choices)) return undefined;
+  const valid = choices.filter((c): c is PermissionChoice => typeof c?.id === 'string' && typeof c?.label === 'string');
+  return valid.length ? valid : undefined;
+}
 
 export class HubServer {
   private httpServer: http.Server;
@@ -54,6 +61,8 @@ export class HubServer {
   private heartbeatInterval?: ReturnType<typeof setInterval>;
   private channelAlive = new Map<string, boolean>(); // sessionId -> alive flag
   private socketOwners = new WeakMap<WebSocket, string>();
+  // Codex approvals carry their own choices; a response is forwarded only in the mode of the request it answers.
+  private choiceRequests = new Map<string, { sessionId: string; requestId: string; choiceIds: Set<string> }>();
 
   private host: string;
   private port: number;
@@ -223,6 +232,7 @@ export class HubServer {
       this.channelSockets.delete(sessionId);
       this.localChannels.delete(sessionId);
       this.channelAlive.delete(sessionId);
+      this.expireChoices(sessionId);
       if (session) {
         this.broadcastToDashboards({ type: 'session_disconnected', sessionId });
         this.jsonResponse(res, 200, { ok: true });
@@ -375,6 +385,7 @@ export class HubServer {
           this.channelSockets.delete(sessionId);
           this.localChannels.delete(sessionId);
           this.channelAlive.delete(sessionId);
+          this.expireChoices(sessionId);
           logger.info(`Channel disconnected: ${sessionId}`);
           this.broadcastToDashboards({
             type: 'session_disconnected',
@@ -472,7 +483,15 @@ export class HubServer {
 
       case 'permission_request': {
         this.sessions.updateActivity(msg.sessionId);
+        const choices = validChoices(msg.choices);
         logger.info(`Permission request [${msg.requestId}] from ${msg.sessionId}: ${msg.toolName}`);
+        if (choices) {
+          this.choiceRequests.set(permissionKey(msg.sessionId, msg.requestId), {
+            sessionId: msg.sessionId,
+            requestId: msg.requestId,
+            choiceIds: new Set(choices.map((c) => c.id)),
+          });
+        }
         this.broadcastToDashboards({
           type: 'permission_request',
           sessionId: msg.sessionId,
@@ -481,13 +500,22 @@ export class HubServer {
           description: msg.description,
           inputPreview: msg.inputPreview,
           timestamp: msg.timestamp,
+          ...(choices ? { choices } : {}),
         });
         // Forward to Telegram
         if (this.telegramBot) {
-          const session = this.sessions.get(msg.sessionId);
-          const label = this.getSessionLabel(session);
-          this.telegramBot.sendPermissionRequest(msg.sessionId, label, msg.requestId, msg.toolName, msg.description, msg.inputPreview);
+          const label = this.getSessionLabel(this.sessions.get(msg.sessionId));
+          if (choices) {
+            void this.telegramBot.sendChoiceRequest(msg.sessionId, label, msg.requestId, msg.toolName, msg.description, msg.inputPreview, choices);
+          } else {
+            this.telegramBot.sendPermissionRequest(msg.sessionId, label, msg.requestId, msg.toolName, msg.description, msg.inputPreview);
+          }
         }
+        break;
+      }
+
+      case 'permission_resolved': {
+        this.resolveChoice(msg.sessionId, msg.requestId, msg.state === 'expired' ? 'expired' : 'resolved');
         break;
       }
     }
@@ -522,10 +550,9 @@ export class HubServer {
         } else if (msg.type === 'image_upload') {
           this.handleImageUpload(msg);
         } else if (msg.type === 'permission_response') {
-          const channelWs = this.channelSockets.get(msg.sessionId);
-          if (channelWs?.readyState === WebSocket.OPEN) {
-            channelWs.send(JSON.stringify(msg));
-            logger.info(`Permission verdict [${msg.requestId}]: ${msg.behavior} -> session ${msg.sessionId}`);
+          if (this.forwardPermissionResponse(msg)) {
+            const verdict = msg.choiceId !== undefined ? `choice ${msg.choiceId}` : msg.behavior;
+            logger.info(`Permission verdict [${msg.requestId}]: ${verdict} -> session ${msg.sessionId}`);
           }
         }
       } catch {
@@ -540,6 +567,34 @@ export class HubServer {
   }
 
   // --- Helpers ---
+
+  private forwardPermissionResponse(msg: { sessionId: string; requestId: string; behavior?: unknown; choiceId?: unknown }): boolean {
+    const pending = this.choiceRequests.get(permissionKey(msg.sessionId, msg.requestId));
+    let out: ChannelMessage;
+    if (pending) {
+      if (typeof msg.choiceId !== 'string' || !pending.choiceIds.has(msg.choiceId)) return false;
+      out = { type: 'permission_response', sessionId: msg.sessionId, requestId: msg.requestId, choiceId: msg.choiceId };
+    } else {
+      if ((msg.behavior !== 'allow' && msg.behavior !== 'deny') || msg.choiceId !== undefined) return false;
+      out = { type: 'permission_response', sessionId: msg.sessionId, requestId: msg.requestId, behavior: msg.behavior };
+    }
+    const channelWs = this.channelSockets.get(msg.sessionId);
+    if (channelWs?.readyState !== WebSocket.OPEN) return false;
+    channelWs.send(JSON.stringify(out));
+    return true;
+  }
+
+  private resolveChoice(sessionId: string, requestId: string, state: 'resolved' | 'expired'): void {
+    if (!this.choiceRequests.delete(permissionKey(sessionId, requestId))) return;
+    this.broadcastToDashboards({ type: 'permission_resolved', sessionId, requestId, state });
+    void this.telegramBot?.resolveChoiceRequest(sessionId, requestId, state);
+  }
+
+  private expireChoices(sessionId: string): void {
+    for (const pending of [...this.choiceRequests.values()]) {
+      if (pending.sessionId === sessionId) this.resolveChoice(sessionId, pending.requestId, 'expired');
+    }
+  }
 
   private broadcastToDashboards(msg: ChannelMessage): void {
     const payload = JSON.stringify(msg);
@@ -633,14 +688,16 @@ export class HubServer {
       }
     };
     this.telegramBot.onPermissionVerdict = (sessionId, requestId, behavior) => {
-      const channelWs = this.channelSockets.get(sessionId);
-      if (channelWs?.readyState === WebSocket.OPEN) {
-        const msg: ChannelMessage = { type: 'permission_response', sessionId, requestId, behavior };
-        channelWs.send(JSON.stringify(msg));
+      if (this.forwardPermissionResponse({ sessionId, requestId, behavior })) {
         logger.info(`Telegram permission verdict [${requestId}]: ${behavior} -> session ${sessionId}`);
       }
       // Also notify dashboards so they can dismiss the permission bar
       this.broadcastToDashboards({ type: 'permission_response', sessionId, requestId, behavior });
+    };
+    this.telegramBot.onChoiceVerdict = (sessionId, requestId, choiceId) => {
+      if (this.forwardPermissionResponse({ sessionId, requestId, choiceId })) {
+        logger.info(`Telegram choice [${requestId}]: ${choiceId} -> session ${sessionId}`);
+      }
     };
     this.notifier.configure({ telegramBot: this.telegramBot });
     this.telegramBot.startPolling();
