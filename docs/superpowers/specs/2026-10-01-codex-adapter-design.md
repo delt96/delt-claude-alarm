@@ -36,6 +36,13 @@ claude-alarm은 Claude Code 세션만 대시보드·텔레그램으로 보고 �
 | 이미 해결된 요청에 다시 답하면 데몬은 오류 없이 무시한다 | 단계 B 사전 실측 |
 | 파일 변경 승인 요청(`item/fileChange/requestApproval`)에는 `threadId`·`turnId`·`itemId`·`reason`(null 가능)·`grantRoot`만 있고 파일 목록이 없다. 파일 목록은 같은 `itemId`의 `item/started`(`type:'fileChange'`, `changes[].path`·`diff`)에 먼저 온다 | 단계 B 사전 실측 |
 | 승인 대기 중 상태는 `active` + `activeFlags:['waitingOnApproval']`이고, 해결되면 `serverRequest/resolved` 뒤 플래그가 빠진다 | 단계 B 사전 실측 |
+| `turn/steer`는 즉시 `{turnId}`로 접수되고, 지금 진행 중인 단계(예: 12초 명령)가 끝난 뒤 같은 턴에서 읽혀 그 턴의 최종 답에 반영된다 | 단계 C 사전 실측(app-server 0.160.0) |
+| 진행 중인 턴이 없으면(첫 턴 전, 턴 종료 직후) `turn/steer`는 `no active turn to steer`, 턴 ID가 다르면 ``expected active turn id `X` but found `Y` ``로 실패한다 | 단계 C 사전 실측 |
+| 승인 대기 중에도 `turn/steer`는 접수되지만, 승인이 해결된 뒤에야 읽힌다. steer가 승인에 답하지는 않는다 | 단계 C 사전 실측 |
+| `{type:'image', url:'data:image/png;base64,…'}`는 `turn/start`와 `turn/steer` 모두에서 동작한다 | 단계 C 사전 실측 |
+| `{type:'localImage', path}`는 파일을 턴 시작 시점이 아니라 나중에 읽는다. `turn/start` 응답 직후 파일을 지우면 모델이 이미지를 보지 못했다 | 단계 C 사전 실측 |
+| 첫 턴 전의 새 대화에는 `thread/turns/list`가 `… is not materialized yet; thread/turns/list is unavailable before first user message`로 실패한다 | 단계 C 사전 실측 |
+| 실행 중인 대화에 `turn/start`를 보내면 새 턴을 만들지 않고 진행 중인 턴에 steer된다(같은 턴 ID를 돌려주고 최종 답에 반영) | 단계 C 사전 실측 |
 
 ## 설계
 
@@ -108,9 +115,9 @@ title?: string;   // Codex 대화 제목
 
 - `message_to_session`에 `source?: 'dashboard' | 'telegram' | 'api'`를 추가한다. Hub가 채운다(대시보드 소켓, 텔레그램 콜백, `/api/send`). 기존 Claude 채널은 이 필드를 무시한다.
 - 어댑터는 대화가 `idle`이면 `turn/start({threadId, input:[{type:'text', text}]})`로 보낸다. **text 앞에 출처를 붙인다**: `[claude-alarm · Dashboard]`, `[claude-alarm · Telegram]`, `[claude-alarm · API]` — 터미널에서 외부 지시를 구분할 수 있게 하기 위한 사용자 결정이다. 문구는 기존 UI와 같이 영어로 쓴다.
-- 대화가 실행 중이거나 승인 대기면 보내지 않고 `notify`(level `warning`, "Codex is busy, so the message was not delivered. Send it again when the task finishes.")를 돌려준다. 실행 중 추가 지시는 단계 C.
+- 대화가 실행 중이거나 승인 대기면 보내지 않고 `notify`(level `warning`, "Codex is busy, so the message was not delivered. Send it again when the task finishes.")를 돌려준다. 실행 중 추가 지시는 단계 C(§9에서 이 규칙을 바꾼다).
 - `turn/start` 실패도 `notify`(warning)로 알린다. 자동 재전송은 하지 않는다.
-- `image_to_session`이 Codex 세션으로 오면 단계 A에서는 "Codex sessions do not accept images yet." `notify`.
+- `image_to_session`이 Codex 세션으로 오면 단계 A에서는 "Codex sessions do not accept images yet." `notify`(단계 C에서 §9로 바뀐다).
 - 대시보드 `@멘션` 라우팅 줄(`[claude-alarm] @X = SendMessage …`, `index.html:1206`)은 대상 세션이 Codex면 붙이지 않는다. Codex 세션은 멘션 대상 목록에도 나오지 않는다(`peerName` 없음, `index.html:1157`).
 - 텔레그램 세션 선택 버튼(`telegram.ts:244`, `410`)은 지금 현재 목록의 순번으로 해석된다. Codex 세션은 수시로 늘고 줄므로, 선택 메시지를 보낼 때의 세션 ID 목록을 메시지 ID별로 메모리에 보관하고 콜백은 그 목록으로 해석한다.
 
@@ -159,8 +166,24 @@ choiceId?: string;
 
 ### 9. 실행 중 추가 지시와 이미지 (단계 C)
 
-- 실행 중 지시: `thread/turns/list({threadId, limit:1, sortDirection:'desc'})`로 `inProgress` 턴 ID를 얻어 `turn/steer({threadId, expectedTurnId, input})`. 접수되면 "Queued: Codex will read it after the current reply." `notify`(info).
-- 이미지: Hub가 이미 가진 base64로 `{type:'image', url:'data:…'}`를 먼저 검증한다. 안 되면 `localImage` + 어댑터 임시 파일(턴 종료까지 보관)로 간다. 지금 업로드 파일은 5분 뒤 지워진다(`server.ts:591-593`).
+**보내는 순서 (지시·이미지 공통)** — §6의 "busy" 거절을 대신한다.
+
+1. 대화별로 한 번에 하나씩 처리한다(직렬화). 앞 메시지의 `turn/start`·`turn/steer`가 끝난 뒤 다음 메시지를 처리하므로, 연달아 보낸 두 번째 메시지는 첫 메시지가 시작한 턴에 steer된다.
+2. 대화가 승인·입력 대기(`activeFlags`에 `waitingOnApproval` 또는 `waitingOnUserInput`)면 보내지 않고 `notify`(warning, "Codex is waiting for an approval or input. Answer it first, then send the message again."). steer는 접수되지만 승인이 해결될 때까지 읽히지 않고 승인에 답하지도 않아, 메시지로 승인한 줄 오해하기 쉽다.
+3. 그 밖에는 구독을 요청한 뒤 `thread/turns/list({threadId, limit:1, sortDirection:'desc'})`로 진행 중 턴을 확인한다.
+   - 첫 항목이 `inProgress`면 `turn/steer({threadId, expectedTurnId: 그 ID, input})`. 접수되면 `notify`(info, "Queued: Codex will read it after its current step.").
+   - 아니면(목록이 비어 있거나 조회가 실패해도) 지금처럼 `turn/start`. 첫 턴 전의 새 대화는 목록 조회가 실패하고, 조회 직후 턴이 시작됐더라도 `turn/start`는 그 턴에 steer되므로 안전하다.
+   - 로컬 상태 대신 목록을 보는 이유: 자기 `turn/start` 직후에는 `active` 상태 알림이 아직 안 왔을 수 있다.
+4. steer·start가 실패하면 지금처럼 `notify`(warning, "Codex rejected the message: …")를 보낸다. 확인 직후 턴이 끝난 경우도 같다. 자동 재전송은 하지 않는다(§6).
+
+**이미지**
+
+- `image_to_session`에 `source?`를 더한다. Hub가 대시보드 업로드는 `dashboard`, 텔레그램 사진은 `telegram`으로 채운다. Claude 채널은 무시한다.
+- 어댑터는 `imagePath` 파일을 읽어 `data:<mimeType>;base64,…`로 만들고, 입력을 `[{type:'text', text: 출처 접두어 + 캡션}, {type:'image', url}]`로 보낸다. 캡션이 없으면 `(image)`를 쓴다. 보내는 순서는 위와 같다(유휴면 start, 실행 중이면 steer).
+- `localImage`는 쓰지 않는다. Codex가 파일을 나중에 읽는데 Hub는 업로드 파일을 5분 뒤 지우므로(`handleImageUpload`, 텔레그램 `deliverPhotoToSessionByFileId`), 긴 턴에 steer한 이미지는 읽기 전에 사라질 수 있다.
+- MIME이 `image/png`·`image/jpeg`·`image/gif`·`image/webp`가 아니거나 파일을 읽지 못하면(어댑터가 다른 PC에서 도는 경우 등) 보내지 않고 `notify`(warning, "The image could not be read here, so it was not delivered. Codex may be running on another PC.").
+- 대시보드: 로컬 Codex 세션에서도 첨부 버튼을 켠다. 원격 세션은 지금처럼 꺼 둔다(Hub가 원격 세션 업로드를 거절한다).
+- 크기: Hub 업로드 상한은 10MB(base64로 약 13.4MB)다. 데몬·모델 쪽 상한은 미검증이며, 넘으면 `turn/start` 실패 경고나 턴 실패 알림으로 드러난다.
 
 ### 10. 오류와 재연결
 
@@ -200,3 +223,4 @@ choiceId?: string;
 - 이미 해결된 승인에 뒤늦게 답하면 무시되는 것은 확인했다(1.5초 간격). 거의 같은 순간에 두 곳에서 답할 때와 데몬이 꺼져 있을 때 `proxy`의 동작은 미검증이다.
 - 터미널에서 시킨 모든 턴의 결과가 텔레그램으로 간다. 너무 잦으면 운영해 보고 필터를 따로 정한다.
 - Codex 세션 원격 제어 권한은 Hub 토큰에 묶인다(Claude 세션과 같음). 기능은 기본 꺼짐이다.
+- (단계 C) 큰 이미지(수 MB)의 데몬·모델 상한은 미검증이다.
