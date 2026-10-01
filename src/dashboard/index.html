@@ -731,6 +731,18 @@
     margin-left: 2px;
     font-weight: 400;
   }
+  .perm-actions.choices {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .perm-actions .perm-choice {
+    padding: 7px 16px;
+    font-size: 13px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .perm-actions .perm-choice:hover { border-color: var(--yellow); }
   /* Permission in notification panel */
   .notif-perm-actions {
     display: flex;
@@ -1405,6 +1417,9 @@
           timestamp: msg.timestamp,
           resolved: false,
           behavior: null,
+          choices: msg.choices || null,
+          sent: null,
+          outcome: null,
         });
         // Auto-select session if none selected
         if (!state.selectedSession && state.sessions[msg.sessionId]) selectSession(msg.sessionId);
@@ -1426,6 +1441,16 @@
           renderNotifications();
         }
         break;
+      case 'permission_resolved': {
+        const req = (state.permissionRequests[msg.sessionId] || []).find(r => r.requestId === msg.requestId);
+        if (req && !req.resolved) {
+          req.resolved = true;
+          req.outcome = msg.state;
+          renderPermissionBar();
+          renderNotifications();
+        }
+        break;
+      }
     }
   }
 
@@ -1664,7 +1689,10 @@
       if (n.permRequestId) {
         const reqs = state.permissionRequests[n.sessionId] || [];
         const req = reqs.find(r => r.requestId === n.permRequestId);
-        if (req && !req.resolved) {
+        if (req && req.choices) {
+          if (req.resolved) permButtons = `<div class="perm-resolved-label">${req.outcome === 'expired' ? 'Expired' : 'Resolved'}</div>`;
+          else if (req.sent != null) permButtons = '<div class="perm-resolved-label">Sent</div>';
+        } else if (req && !req.resolved) {
           permButtons = `<div class="notif-perm-actions">
             <button class="notif-perm-allow" data-req-id="${esc(n.permRequestId)}" data-session-id="${esc(n.sessionId)}">Allow</button>
             <button class="notif-perm-deny" data-req-id="${esc(n.permRequestId)}" data-session-id="${esc(n.sessionId)}">Deny</button>
@@ -1951,6 +1979,7 @@
     let kind = 'code';
     let lang = '';
     switch (toolName) {
+      case 'Command':
       case 'Bash':
         text = p.command ? '$ ' + p.command : raw; lang = 'bash'; break;
       case 'Write':
@@ -2001,6 +2030,33 @@
     renderNotifications();
   }
 
+  function sendPermissionChoice(sessionId, requestId, choiceId) {
+    if (!state.ws) return;
+    state.ws.send(JSON.stringify({ type: 'permission_response', sessionId, requestId, choiceId }));
+    const req = (state.permissionRequests[sessionId] || []).find(r => r.requestId === requestId);
+    if (req) req.sent = choiceId;
+    renderPermissionBar();
+    renderNotifications();
+  }
+
+  function permissionActions(r, sid) {
+    const ids = `data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}"`;
+    if (!r.choices) {
+      return `<button class="perm-allow" ${ids}>Allow <span class="perm-kbd">(Enter)</span></button>
+          <button class="perm-deny" ${ids}>Deny <span class="perm-kbd">(Esc)</span></button>`;
+    }
+    if (r.sent != null) {
+      const chosen = r.choices.find(c => c.id === r.sent);
+      return `<div class="perm-resolved-label">Sent: ${esc(chosen ? chosen.label : r.sent)}</div>`;
+    }
+    return r.choices.map(c => `<button class="perm-choice" ${ids} data-choice-id="${esc(c.id)}">${esc(c.label)}</button>`).join('');
+  }
+
+  // Codex choices have no safe default, so Enter/Esc stay with the message box for them.
+  function shortcutRequest(reqs) {
+    return reqs.find(r => !r.resolved && !r.choices);
+  }
+
   function renderPermissionBar() {
     const bar = $('#permissionBar');
     const sid = state.selectedSession;
@@ -2017,12 +2073,10 @@
           <div class="perm-header">
             <span class="perm-tool">${esc(displayName)}</span>
           </div>
+          ${r.choices && r.description ? `<div class="perm-desc">${esc(r.description)}</div>` : ''}
           ${previewText ? renderPermPreview(previewText, previewKind, previewLang) : ''}
         </div>
-        <div class="perm-actions">
-          <button class="perm-allow" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Allow <span class="perm-kbd">(Enter)</span></button>
-          <button class="perm-deny" data-req-id="${esc(r.requestId)}" data-session-id="${esc(sid)}">Deny <span class="perm-kbd">(Esc)</span></button>
-        </div>
+        <div class="perm-actions${r.choices ? ' choices' : ''}">${permissionActions(r, sid)}</div>
       </div>`;
     }).join('');
     bindPermissionButtons(bar);
@@ -2035,6 +2089,9 @@
     (container || document).querySelectorAll('.perm-deny, .notif-perm-deny').forEach(btn => {
       btn.addEventListener('click', (e) => { e.stopPropagation(); sendPermissionVerdict(btn.dataset.sessionId, btn.dataset.reqId, 'deny'); });
     });
+    (container || document).querySelectorAll('.perm-choice').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); sendPermissionChoice(btn.dataset.sessionId, btn.dataset.reqId, btn.dataset.choiceId); });
+    });
   }
 
   // Keyboard shortcuts: Enter=allow, Esc=deny — works even in textarea when permission is pending
@@ -2044,7 +2101,7 @@
     const sid = state.selectedSession;
     if (!sid) return;
     const reqs = state.permissionRequests[sid] || [];
-    const pending = reqs.find(r => !r.resolved);
+    const pending = shortcutRequest(reqs);
     if (!pending) return;
     // Permission pending: intercept Enter/Esc everywhere (even in textarea)
     // Shift+Enter in textarea still inserts newline
