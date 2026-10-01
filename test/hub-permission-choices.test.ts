@@ -153,3 +153,39 @@ test('Codex sessions never take allow or deny, even after a choice request resol
   dash.ws.close();
   ch.ws.close();
 });
+
+test('a dashboard that connects while a choice request is pending is told which ones are still waiting', async () => {
+  const ch = await open('/ws/channel');
+  register(ch.ws, 'codex:c6');
+  await settle();
+  request(ch.ws, 'codex:c6', 'r8');
+  request(ch.ws, 'claude-pending', 'r9', false);
+  await settle();
+  const late = await open('/ws/dashboard');
+  await settle();
+  const types = late.inbox.map((m) => m.type);
+  assert.equal(types.indexOf('permission_pending'), types.indexOf('sessions_list') + 1);
+  assert.deepEqual(late.inbox.find((m) => m.type === 'permission_pending'), {
+    type: 'permission_pending',
+    requests: [{ sessionId: 'codex:c6', requestId: 'r8' }],
+  });
+  late.ws.close();
+  ch.ws.close();
+});
+
+test('a resolved choice request is no longer listed for new dashboards', async () => {
+  const ch = await open('/ws/channel');
+  register(ch.ws, 'codex:c7');
+  await settle();
+  request(ch.ws, 'codex:c7', 'r10');
+  await settle();
+  ch.ws.send(JSON.stringify({ type: 'permission_resolved', sessionId: 'codex:c7', requestId: 'r10', state: 'resolved' }));
+  await settle();
+  const late = await open('/ws/dashboard');
+  await settle();
+  const pending = late.inbox.find((m) => m.type === 'permission_pending');
+  assert.ok(pending);
+  assert.ok(!pending.requests.some((r: any) => r.requestId === 'r10'));
+  late.ws.close();
+  ch.ws.close();
+});

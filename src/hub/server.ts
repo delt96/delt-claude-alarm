@@ -538,6 +538,11 @@ export class HubServer {
       sessions: this.sessions.getAll(),
     };
     ws.send(JSON.stringify(sessionsMsg));
+    const pendingMsg: ChannelMessage = {
+      type: 'permission_pending',
+      requests: [...this.choiceRequests.values()].map(({ sessionId, requestId }) => ({ sessionId, requestId })),
+    };
+    ws.send(JSON.stringify(pendingMsg));
 
     ws.on('message', (data) => {
       try {

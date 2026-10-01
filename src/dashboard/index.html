@@ -1441,6 +1441,11 @@
           renderNotifications();
         }
         break;
+      case 'permission_pending':
+        applyPendingChoices(state.permissionRequests, msg.requests || []);
+        renderPermissionBar();
+        renderNotifications();
+        break;
       case 'permission_resolved': {
         const req = (state.permissionRequests[msg.sessionId] || []).find(r => r.requestId === msg.requestId);
         if (req && !req.resolved) {
@@ -2030,8 +2035,20 @@
     renderNotifications();
   }
 
+  // After a reconnect the hub lists the choice requests still waiting; any other unresolved one died with the old connection.
+  function applyPendingChoices(permissionRequests, pending) {
+    const live = new Set(pending.map(p => p.sessionId + '\n' + p.requestId));
+    for (const [sid, reqs] of Object.entries(permissionRequests)) {
+      for (const r of reqs) {
+        if (!r.choices || r.resolved) continue;
+        if (!live.has(sid + '\n' + r.requestId)) { r.resolved = true; r.outcome = 'expired'; }
+        else r.sent = null;
+      }
+    }
+  }
+
   function sendPermissionChoice(sessionId, requestId, choiceId) {
-    if (!state.ws) return;
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
     state.ws.send(JSON.stringify({ type: 'permission_response', sessionId, requestId, choiceId }));
     const req = (state.permissionRequests[sessionId] || []).find(r => r.requestId === requestId);
     if (req) req.sent = choiceId;

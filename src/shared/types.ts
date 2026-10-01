@@ -45,6 +45,7 @@ export type ChannelMessage =
   | { type: 'permission_request'; sessionId: string; requestId: string; toolName: string; description: string; inputPreview: string; timestamp: number; choices?: PermissionChoice[] }
   | { type: 'permission_response'; sessionId: string; requestId: string; behavior?: 'allow' | 'deny'; choiceId?: string }
   | { type: 'permission_resolved'; sessionId: string; requestId: string; state: 'resolved' | 'expired' }
+  | { type: 'permission_pending'; requests: { sessionId: string; requestId: string }[] }
   | { type: 'error'; message: string };
 
 export type NotifyLevel = 'info' | 'warning' | 'error' | 'success';

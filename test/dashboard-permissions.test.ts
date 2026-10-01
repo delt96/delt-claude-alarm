@@ -64,3 +64,20 @@ test('Codex commands preview like shell commands', () => {
   const h = loadPermissionHelpers();
   assert.equal(h.formatPermPreview('Command', '{"command":"New-Item x"}').text, '$ New-Item x');
 });
+
+test('applyPendingChoices expires unlisted choice requests and re-arms listed ones', () => {
+  const h = loadPermissionHelpers();
+  const listed = { ...choiceReq, requestId: 'a', sent: '0' };
+  const unlisted = { ...choiceReq, requestId: 'b', sent: '1' };
+  const done = { ...choiceReq, requestId: 'c', resolved: true, outcome: 'resolved' };
+  const claude = { ...claudeReq };
+  const reqs = { 'codex:t1': [listed, unlisted, done], 'claude-1': [claude] };
+  h.applyPendingChoices(reqs, [{ sessionId: 'codex:t1', requestId: 'a' }]);
+  assert.equal(listed.sent, null);
+  assert.equal(listed.resolved, false);
+  assert.equal(unlisted.resolved, true);
+  assert.equal(unlisted.outcome, 'expired');
+  assert.equal(done.outcome, 'resolved');
+  assert.equal(claude.resolved, false);
+  assert.equal((claude as any).outcome, undefined);
+});
