@@ -40,7 +40,7 @@ async function sessions(): Promise<any[]> {
 const session = (id: string, pred: (s: any) => boolean = () => true) =>
   until(async () => (await sessions()).find((s) => s.id === id && pred(s)));
 
-async function startAdapter(threads: any[], setup?: (d: FakeDaemon) => void): Promise<FakeDaemon> {
+async function startAdapter(threads: any[], setup?: (d: FakeDaemon) => void, idleReleaseMs?: number): Promise<FakeDaemon> {
   const d = new FakeDaemon();
   daemon = d;
   await d.start();
@@ -54,7 +54,7 @@ async function startAdapter(threads: any[], setup?: (d: FakeDaemon) => void): Pr
   d.handle('thread/unsubscribe', () => ({ status: 'unsubscribed' }));
   d.handle('turn/start', () => ({ turn: { id: 'turn-new', status: 'inProgress', items: [] } }));
   setup?.(d);
-  adapter = new CodexAdapter({ command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200 });
+  adapter = new CodexAdapter({ command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200, idleReleaseMs });
   adapter.start();
   return d;
 }
@@ -278,4 +278,106 @@ test('a failing discovery does not leave sessions behind', async () => {
   assert.ok(!(await sessions()).some((x) => x.id === 'codex:early'));
   fail = false;
   await session('codex:t1');
+});
+
+const active = { type: 'active', activeFlags: [] };
+
+test('idle arriving before turn/completed still relays the reply, then releases', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], undefined, 150);
+  await session('codex:t1');
+  await until(() => d.calls('thread/resume').length === 1);
+  const dash = await openDashboard();
+  try {
+    d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'All done', phase: 'final_answer' } });
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+    const reply = await until(() => dash.inbox.find((m) => m.type === 'reply_from_session' && m.sessionId === 'codex:t1'));
+    assert.equal(reply.content, 'All done');
+    await until(() => d.calls('thread/unsubscribe').length >= 1);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('idle without turn/completed releases after the delay and active again cancels it', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], undefined, 400);
+  await session('codex:t1');
+  await until(() => d.calls('thread/resume').length === 1);
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+  await session('codex:t1', (s) => s.status === 'idle');
+  assert.equal(d.calls('thread/unsubscribe').length, 0);
+  await until(() => d.calls('thread/unsubscribe').length === 1);
+
+  d.notify('thread/status/changed', { threadId: 't1', status: active });
+  await until(() => d.calls('thread/resume').length === 2);
+  d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+  await session('codex:t1', (s) => s.status === 'idle');
+  d.notify('thread/status/changed', { threadId: 't1', status: active });
+  await session('codex:t1', (s) => s.status === 'working');
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(d.calls('thread/unsubscribe').length, 1);
+});
+
+test('a rejected turn/start releases the subscription', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => dm.handle('turn/start', () => {
+    throw new Error('thread is busy');
+  }), 150);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'go' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.level, 'warning');
+    assert.match(n.message, /Codex rejected the message: thread is busy/);
+    await until(() => d.calls('thread/unsubscribe').length === 1);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a new conversation is subscribed on the active broadcast and its reply is relayed without a warning', async () => {
+  let resumes = 0;
+  const d = await startAdapter([thread('t1')], (dm) => dm.handle('thread/resume', () => {
+    if (resumes++ === 0) throw new Error('no rollout found for thread id t1');
+    return {};
+  }), 150);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'start' }));
+    await until(() => d.calls('turn/start').length === 1);
+    assert.equal(d.calls('thread/resume').length, 1);
+    d.notify('thread/status/changed', { threadId: 't1', status: active });
+    await until(() => d.calls('thread/resume').length === 2);
+    d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'Fresh answer', phase: 'final_answer' } });
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    d.notify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+    const reply = await until(() => dash.inbox.find((m) => m.type === 'reply_from_session' && m.sessionId === 'codex:t1'));
+    assert.equal(reply.content, 'Fresh answer');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!dash.inbox.some((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a subscription that keeps failing raises one "Reply not relayed" warning', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => dm.handle('thread/resume', () => {
+    throw new Error('no rollout found for thread id t1');
+  }), 150);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'start' }));
+    await until(() => d.calls('turn/start').length === 1);
+    d.notify('thread/status/changed', { threadId: 't1', status: active });
+    await until(() => d.calls('thread/resume').length === 2);
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+    assert.equal(n.level, 'warning');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(dash.inbox.filter((m) => m.type === 'notification' && m.title === 'Reply not relayed').length, 1);
+  } finally {
+    dash.ws.close();
+  }
 });

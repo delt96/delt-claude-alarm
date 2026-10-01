@@ -22,6 +22,7 @@ export interface CodexAdapterOptions {
   spawnFn?: SpawnFn;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
+  idleReleaseMs?: number;
 }
 
 interface Tracked {
@@ -32,6 +33,8 @@ interface Tracked {
   sync: Promise<void>;
   pendingTurn: boolean;
   turns: Map<string, AgentMessage[]>;
+  releaseTimer?: ReturnType<typeof setTimeout>;
+  unrelayed: boolean;
 }
 
 const APPROVAL_REQUESTS = new Set([
@@ -163,6 +166,7 @@ export class CodexAdapter {
         sync: Promise.resolve(),
         pendingTurn: false,
         turns: new Map(),
+        unrelayed: false,
       });
       hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
@@ -193,6 +197,7 @@ export class CodexAdapter {
         // Only these two fields: any other resume field overrides the user's own thread settings.
         await this.rpc.request('thread/resume', { threadId, excludeTurns: true });
         t.subscribed = true;
+        t.unrelayed = false;
       } else {
         // The daemon unloads a conversation 60 s after its last subscriber leaves; staying subscribed would keep closed Codex windows alive.
         await this.rpc.request('thread/unsubscribe', { threadId });
@@ -203,10 +208,22 @@ export class CodexAdapter {
     }
   }
 
+  private releaseLater(t: Tracked): void {
+    clearTimeout(t.releaseTimer);
+    t.releaseTimer = setTimeout(() => {
+      t.releaseTimer = undefined;
+      if (this.threads.get(t.thread.id) === t && t.thread.status.type !== 'active' && !t.pendingTurn) {
+        void this.want(t.thread.id, false);
+      }
+    }, this.opts.idleReleaseMs ?? 1000);
+  }
+
   private drop(threadId: string): void {
     const t = this.threads.get(threadId);
     if (!t) return;
     this.threads.delete(threadId);
+    clearTimeout(t.releaseTimer);
+    t.releaseTimer = undefined;
     t.hub.disconnect();
   }
 
@@ -254,7 +271,16 @@ export class CodexAdapter {
     t.pendingTurn = false;
     t.hub.send({ type: 'status', sessionId: codexSessionId(threadId), status: hubStatus(status) });
     if (status.type === 'systemError') this.notify(threadId, 'Codex error', 'The Codex conversation hit a system error.', 'error');
-    void this.want(threadId, status.type === 'active');
+    if (status.type === 'active') {
+      void this.want(threadId, true);
+      return;
+    }
+    if (t.unrelayed) {
+      t.unrelayed = false;
+      this.notify(threadId, 'Reply not relayed', 'Codex finished, but its reply could not be relayed here. Check the Codex window.', 'warning');
+    }
+    // The daemon emits idle just before turn/completed; unsubscribing at once could cut off the reply.
+    this.releaseLater(t);
   }
 
   private collect(threadId: string, turnId: string, item: AgentMessage): void {
@@ -307,9 +333,13 @@ export class CodexAdapter {
     try {
       if (!this.rpc) throw new Error('not connected to the Codex daemon');
       await this.want(threadId, true);
+      // A new conversation cannot be subscribed before its first turn (no rollout found); the active broadcast retries it.
+      t.unrelayed = !t.subscribed;
       await this.rpc.request('turn/start', { threadId, input: [{ type: 'text', text: withSourcePrefix(content, source) }] });
     } catch (err) {
       t.pendingTurn = false;
+      t.unrelayed = false;
+      this.releaseLater(t);
       this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
     }
   }
