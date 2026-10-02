@@ -213,3 +213,164 @@ test('a thread/start that Codex rejects is reported', async () => {
   assert.equal(res.status, 422);
   assert.deepEqual(await res.json(), { error: 'Codex could not start the conversation: model not available' });
 });
+
+const closeSession = (id: string) => post('/api/codex/threads/close', { sessionId: id });
+
+test('closing an idle created conversation releases it and removes the session', async () => {
+  const s = await startAdapter([]);
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  assert.equal((await closeSession('codex:n1')).status, 200);
+  await gone('codex:n1');
+  assert.deepEqual(s.d.calls('thread/unsubscribe').map((c) => c.params), [{ threadId: 'n1' }]);
+});
+
+test('closing while Codex works keeps the session until the turn ends', async () => {
+  const s = await startAdapter([], undefined, { idleReleaseMs: 50 });
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  s.d.notify('thread/status/changed', { threadId: 'n1', status: { type: 'active', activeFlags: [] } });
+  await session('codex:n1', (x) => x.status === 'working');
+  assert.equal((await closeSession('codex:n1')).status, 200);
+  await session('codex:n1', (x) => x.closable === false);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(s.d.calls('thread/unsubscribe').length, 0);
+  s.d.notify('turn/completed', { threadId: 'n1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+  s.d.notify('thread/status/changed', { threadId: 'n1', status: { type: 'idle' } });
+  await until(() => s.d.calls('thread/unsubscribe').length === 1);
+  assert.ok((await sessions()).some((x) => x.id === 'codex:n1'));
+  s.d.notify('thread/closed', { threadId: 'n1' });
+  await gone('codex:n1');
+});
+
+test('a message that arrives while closing keeps the conversation and relays its reply', async () => {
+  let release!: () => void;
+  const unsubscribed = new Promise<void>((r) => { release = r; });
+  const s = await startAdapter([], (dm) => dm.handle('thread/unsubscribe', () => unsubscribed.then(() => ({ status: 'unsubscribed' }))));
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  const dash = await openDashboard();
+  try {
+    await closeSession('codex:n1');
+    await until(() => s.d.calls('thread/unsubscribe').length === 1);
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:n1', content: 'one more thing' }));
+    await new Promise((r) => setTimeout(r, 150));
+    release();
+    await until(() => s.d.calls('turn/start').length === 1);
+    s.d.notify('item/completed', { threadId: 'n1', turnId: 'u1', completedAtMs: 0, item: { type: 'agentMessage', id: 'm1', text: 'Handled', phase: 'final_answer' } });
+    s.d.notify('turn/completed', { threadId: 'n1', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+    const reply = await until(() => dash.inbox.find((m) => m.type === 'reply_from_session' && m.sessionId === 'codex:n1'));
+    assert.equal(reply.content, 'Handled');
+    assert.ok((await sessions()).some((x) => x.id === 'codex:n1' && x.closable === false));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a failed release keeps the conversation closable and says so', async () => {
+  const s = await startAdapter([], (dm) => dm.handle('thread/unsubscribe', () => {
+    throw new Error('busy');
+  }));
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  const dash = await openDashboard();
+  try {
+    await closeSession('codex:n1');
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:n1'));
+    assert.equal(n.title, 'Not closed');
+    assert.equal(n.level, 'warning');
+    assert.equal(n.message, 'Codex did not release the conversation. Try closing it again.');
+    await session('codex:n1', (x) => x.closable === true);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('archived, deleted and closed conversations lose their pin', async () => {
+  const s = await startAdapter([]);
+  for (const [i, method] of ['thread/archived', 'thread/deleted', 'thread/closed'].entries()) {
+    const id = `n${i + 1}`;
+    await create(s);
+    await session(`codex:${id}`, (x) => x.closable);
+    s.d.notify(method, { threadId: id });
+    await gone(`codex:${id}`);
+    s.d.notify('thread/started', { thread: s.threads.find((t) => t.id === id) });
+    await session(`codex:${id}`, (x) => x.closable === false);
+  }
+});
+
+test('pins survive a daemon reconnect and are subscribed again', async () => {
+  const s = await startAdapter([]);
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  s.d.dropClient();
+  await gone('codex:n1');
+  await until(() => s.d.connections === 2, 5000);
+  await session('codex:n1', (x) => x.closable === true);
+  await until(() => s.d.calls('thread/resume').some((c) => c.params.threadId === 'n1'));
+});
+
+test('pins of conversations no longer loaded are forgotten after a reconnect', async () => {
+  const s = await startAdapter([]);
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  const t = s.threads.pop();
+  s.d.dropClient();
+  await gone('codex:n1');
+  await until(() => s.d.connections === 2, 5000);
+  await adapterInfo(s.host, true);
+  s.threads.push(t);
+  s.d.notify('thread/started', { thread: t });
+  await session('codex:n1', (x) => x.closable === false);
+});
+
+test('a discovery cut off by a lost connection does not forget pins', async () => {
+  let phase = 0;
+  let cut!: () => void;
+  const s = await startAdapter([], (dm, threads) => {
+    dm.handle('thread/loaded/list', () => ({ data: phase === 1 ? ['x'] : threads.map((t) => t.id), nextCursor: null }));
+    dm.handle('thread/read', (p) => {
+      if (p.threadId === 'x') return new Promise(() => cut());
+      const t = threads.find((x) => x.id === p.threadId);
+      if (!t) throw new Error('thread not found');
+      return { thread: t };
+    });
+  });
+  await create(s);
+  await session('codex:n1', (x) => x.closable);
+  const cutOff = new Promise<void>((r) => { cut = r; });
+  phase = 1;
+  s.d.dropClient();
+  await cutOff;
+  phase = 2;
+  s.d.dropClient();
+  await until(() => s.d.connections === 3, 5000);
+  await session('codex:n1', (x) => x.closable === true);
+});
+
+test('a conversation without a name or preview is re-read after its turn for a better title', async () => {
+  const s = await startAdapter([thread('t5', { name: null, preview: '' })]);
+  await session('codex:t5', (x) => x.displayName === 'proj');
+  s.threads[0].preview = 'Fix the login bug';
+  s.d.notify('turn/completed', { threadId: 't5', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+  await session('codex:t5', (x) => x.displayName === 'Fix the login bug');
+});
+
+test('a named conversation is not re-read after its turn', async () => {
+  const s = await startAdapter([thread('t6')]);
+  await session('codex:t6');
+  const reads = s.d.calls('thread/read').length;
+  s.d.notify('turn/completed', { threadId: 't6', turn: { id: 'u1', status: 'completed', items: [], error: null } });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(s.d.calls('thread/read').length, reads);
+});
+
+test('a close for a conversation not created here is ignored', async () => {
+  const s = await startAdapter([thread('t1')]);
+  await session('codex:t1');
+  assert.equal((await closeSession('codex:t1')).status, 404);
+  (adapter as any).onHubMessage('t1', { type: 'codex_close', sessionId: 'codex:t1' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(s.d.calls('thread/unsubscribe').length, 0);
+  assert.ok((await sessions()).some((x) => x.id === 'codex:t1'));
+});

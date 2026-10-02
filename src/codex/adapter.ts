@@ -248,17 +248,19 @@ export class CodexAdapter {
   }
 
   private async discover(): Promise<void> {
+    const rpc = this.rpc!;
+    const pinned = [...this.pins];
     const ids: string[] = [];
     let cursor: string | null | undefined;
     do {
-      const page = await this.rpc!.request<{ data: string[]; nextCursor?: string | null }>(
-        'thread/loaded/list',
-        cursor ? { cursor } : {},
-      );
+      const page = await rpc.request<{ data: string[]; nextCursor?: string | null }>('thread/loaded/list', cursor ? { cursor } : {});
       ids.push(...page.data);
       cursor = page.nextCursor;
     } while (cursor);
     for (const id of ids) await this.refresh(id);
+    // A list read on a connection that has since been replaced says nothing about what the daemon holds now.
+    if (this.rpc !== rpc) return;
+    for (const id of pinned) if (!ids.includes(id)) this.pins.delete(id);
   }
 
   private async refresh(threadId: string): Promise<void> {
@@ -358,6 +360,30 @@ export class CodexAdapter {
     t.hub.disconnect();
   }
 
+  private busy(t: Tracked): boolean {
+    return t.thread.status.type === 'active' || t.pendingTurn;
+  }
+
+  private async close(threadId: string): Promise<void> {
+    const t = this.threads.get(threadId);
+    if (!t || !this.pins.delete(threadId)) return;
+    t.hub.reregister();
+    if (this.busy(t)) return;
+    // drop() before the unsubscribe finishes would skip it: syncSubscription stops once the thread is untracked.
+    await this.want(threadId, false);
+    // A message or an active broadcast may arrive while unsubscribing; the conversation then ends like a close during work.
+    if (this.threads.get(threadId) !== t || this.busy(t) || t.wantSubscribed) return;
+    if (!t.subscribed) {
+      this.drop(threadId);
+      return;
+    }
+    // syncSubscription swallows unsubscribe errors, so a still-set flag is the only sign it failed.
+    this.pins.add(threadId);
+    t.hub.reregister();
+    void this.want(threadId, true);
+    this.notify(threadId, 'Not closed', 'Codex did not release the conversation. Try closing it again.', 'warning');
+  }
+
   private onNotification(method: string, params: any): void {
     switch (method) {
       case 'thread/started':
@@ -377,6 +403,7 @@ export class CodexAdapter {
       case 'thread/closed':
       case 'thread/archived':
       case 'thread/deleted':
+        this.pins.delete(params.threadId);
         this.drop(params.threadId);
         break;
       case 'item/started':
@@ -402,6 +429,7 @@ export class CodexAdapter {
       return;
     }
     if (status.type === 'notLoaded') {
+      this.pins.delete(threadId);
       this.drop(threadId);
       return;
     }
@@ -441,6 +469,8 @@ export class CodexAdapter {
     const collected = t.turns.get(turn.id) ?? [];
     t.turns.delete(turn.id);
     t.files.clear();
+    // The daemon announces name changes but not preview changes, so a title taken from the folder is re-read once text exists.
+    if (!t.thread.name?.trim() && !t.thread.preview?.trim()) void this.refresh(threadId);
     if (t.thread.status.type !== 'active') void this.want(threadId, false);
     if (turn.status === 'failed' || turn.error) {
       this.notify(threadId, 'Codex task failed', turn.error?.message ?? 'The task ended with an error.', 'error');
@@ -463,6 +493,8 @@ export class CodexAdapter {
       this.enqueue(threadId, () => imageInput(msg.imagePath, msg.mimeType, msg.content, msg.source));
     } else if (msg.type === 'permission_response') {
       this.answer(threadId, msg.requestId, msg.choiceId);
+    } else if (msg.type === 'codex_close') {
+      void this.close(threadId);
     }
   }
 
