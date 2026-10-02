@@ -11,6 +11,7 @@ import {
   DEFAULT_HUB_PORT,
   WS_PATH_CHANNEL,
   WS_PATH_DASHBOARD,
+  WS_PATH_CODEX,
   UPLOADS_DIR,
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
@@ -20,7 +21,7 @@ import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexLinkMessage } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { isEntryScript } from '../shared/entry.js';
 import { hubUrlHost } from '../shared/hub-url.js';
@@ -71,8 +72,13 @@ export class HubServer {
   private token?: string;
   private codexEnabled: boolean;
   private codexSupervisor?: CodexSupervisor;
+  private wssCodex: WebSocketServer;
+  private codexAdapters = new Map<string, { ws: WebSocket; info: CodexAdapterInfo }>();
+  private codexAlive = new WeakMap<WebSocket, boolean>();
+  private codexCallTimeoutMs: number;
 
-  constructor(config?: Partial<AppConfig>) {
+  constructor(config?: Partial<AppConfig>, options: { codexCallTimeoutMs?: number } = {}) {
+    this.codexCallTimeoutMs = options.codexCallTimeoutMs ?? 60_000;
     this.host = config?.hub?.host ?? DEFAULT_HUB_HOST;
     this.port = config?.hub?.port ?? DEFAULT_HUB_PORT;
     this.token = config?.hub?.token;
@@ -108,6 +114,10 @@ export class HubServer {
     this.wssDashboard.on('connection', (ws) => this.handleDashboardConnection(ws));
     this.wssDashboard.on('error', (err) => logger.warn(`Dashboard WebSocket server error: ${err.message}`));
 
+    this.wssCodex = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD });
+    this.wssCodex.on('connection', (ws: WebSocket, req: http.IncomingMessage) => this.handleCodexConnection(ws, req));
+    this.wssCodex.on('error', (err) => logger.warn(`Codex WebSocket server error: ${err.message}`));
+
     // Route WebSocket upgrade requests
     this.httpServer.on('upgrade', (req, socket, head) => {
       // Once 'upgrade' has a listener the socket is ours; an unhandled 'error'
@@ -133,6 +143,10 @@ export class HubServer {
       } else if (pathname === WS_PATH_DASHBOARD) {
         this.wssDashboard.handleUpgrade(req, socket, head, (ws) => {
           this.wssDashboard.emit('connection', ws, req);
+        });
+      } else if (pathname === WS_PATH_CODEX) {
+        this.wssCodex.handleUpgrade(req, socket, head, (ws) => {
+          this.wssCodex.emit('connection', ws, req);
         });
       } else {
         socket.destroy();
@@ -171,11 +185,13 @@ export class HubServer {
       // Force-close all WebSocket connections
       for (const ws of this.channelSockets.values()) ws.terminate();
       for (const ws of this.dashboardSockets) ws.terminate();
+      for (const { ws } of this.codexAdapters.values()) ws.terminate();
       this.channelSockets.clear();
       this.dashboardSockets.clear();
 
       this.wssChannel.close();
       this.wssDashboard.close();
+      this.wssCodex.close();
       this.httpServer.close(() => {
         logger.info('Hub server stopped');
         resolve();
@@ -530,6 +546,51 @@ export class HubServer {
     }
   }
 
+  private handleCodexConnection(ws: WebSocket, req: http.IncomingMessage): void {
+    const isLocal = this.isLocalRequest(req);
+    let adapterId: string | undefined;
+    ws.on('error', (err) => {
+      logger.warn(`Codex adapter WebSocket error: ${err.message}`);
+      ws.terminate();
+    });
+    ws.on('pong', () => this.codexAlive.set(ws, true));
+    ws.on('message', (data) => {
+      let msg: CodexLinkMessage;
+      try {
+        msg = JSON.parse(data.toString()) as CodexLinkMessage;
+      } catch {
+        logger.warn('Invalid message from Codex adapter');
+        return;
+      }
+      if (msg.type === 'adapter_hello') {
+        const a = msg.adapter;
+        if (typeof a?.id !== 'string' || !a.id || typeof a.host !== 'string') return;
+        if (adapterId && adapterId !== a.id) return;
+        // An adapter that reconnects keeps its id while the hub may still hold the dead socket; the newest wins.
+        const holder = this.codexAdapters.get(a.id);
+        if (holder && holder.ws !== ws) holder.ws.terminate();
+        if (!adapterId) logger.info(`Codex adapter connected: ${a.host} (${a.id}, local: ${isLocal})`);
+        adapterId = a.id;
+        this.codexAdapters.set(a.id, { ws, info: { id: a.id, host: a.host, ready: a.ready === true, isLocal } });
+        this.broadcastCodexAdapters();
+      }
+    });
+    ws.on('close', () => {
+      if (!adapterId || this.codexAdapters.get(adapterId)?.ws !== ws) return;
+      this.codexAdapters.delete(adapterId);
+      logger.info(`Codex adapter disconnected: ${adapterId}`);
+      this.broadcastCodexAdapters();
+    });
+  }
+
+  private codexAdapterList(): CodexAdapterInfo[] {
+    return [...this.codexAdapters.values()].map((a) => a.info);
+  }
+
+  private broadcastCodexAdapters(): void {
+    this.broadcastToDashboards({ type: 'codex_adapters', adapters: this.codexAdapterList() });
+  }
+
   // --- Dashboard WebSocket ---
 
   private handleDashboardConnection(ws: WebSocket): void {
@@ -552,6 +613,7 @@ export class HubServer {
       requests: [...this.choiceRequests.values()].map((c) => c.request),
     };
     ws.send(JSON.stringify(pendingMsg));
+    ws.send(JSON.stringify({ type: 'codex_adapters', adapters: this.codexAdapterList() } satisfies ChannelMessage));
 
     ws.on('message', (data) => {
       try {
@@ -850,6 +912,14 @@ export class HubServer {
           continue;
         }
         this.channelAlive.set(sessionId, false);
+        ws.ping();
+      }
+      for (const { ws } of this.codexAdapters.values()) {
+        if (this.codexAlive.get(ws) === false) {
+          ws.terminate();
+          continue;
+        }
+        this.codexAlive.set(ws, false);
         ws.ping();
       }
     }, 30000);

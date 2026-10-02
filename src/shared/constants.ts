@@ -14,6 +14,7 @@ export const CODEX_LOG_FILE = path.join(CONFIG_DIR, 'codex.log');
 
 export const WS_PATH_CHANNEL = '/ws/channel';
 export const WS_PATH_DASHBOARD = '/ws/dashboard';
+export const WS_PATH_CODEX = '/ws/codex';
 
 export const CHANNEL_SERVER_NAME = 'claude-alarm';
 export const CHANNEL_SERVER_VERSION = '0.1.0';

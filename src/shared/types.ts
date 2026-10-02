@@ -34,6 +34,7 @@ export interface SessionInfo {
   peerName?: string;
   agentKind?: AgentKind;
   title?: string;
+  closable?: boolean;
 }
 
 /** Messages sent between channel server and hub */
@@ -56,7 +57,25 @@ export type ChannelMessage =
   | { type: 'permission_response'; sessionId: string; requestId: string; behavior?: 'allow' | 'deny'; choiceId?: string }
   | { type: 'permission_resolved'; sessionId: string; requestId: string; state: 'resolved' | 'expired' }
   | { type: 'permission_pending'; requests: PendingChoiceRequest[] }
+  | { type: 'codex_adapters'; adapters: CodexAdapterInfo[] }
+  | { type: 'codex_close'; sessionId: string }
   | { type: 'error'; message: string };
+
+export interface CodexAdapterInfo {
+  id: string;
+  host: string;
+  ready: boolean;
+  isLocal: boolean;
+}
+
+export type CodexCall = { kind: 'folders' } | { kind: 'create'; cwd: string };
+
+/** Messages on the per-adapter socket between the Codex adapter and the hub */
+export type CodexLinkMessage =
+  | { type: 'adapter_hello'; adapter: { id: string; host: string; ready: boolean } }
+  | { type: 'adapter_call'; requestId: string; call: CodexCall }
+  | { type: 'adapter_result'; requestId: string; ok: true; data: unknown }
+  | { type: 'adapter_result'; requestId: string; ok: false; error: string };
 
 export type NotifyLevel = 'info' | 'warning' | 'error' | 'success';
 
