@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import { loadConfig } from '../shared/config.js';
-import { CODEX_PID_FILE, DEFAULT_HUB_HOST } from '../shared/constants.js';
+import { CODEX_PID_FILE } from '../shared/constants.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import { logger } from '../shared/logger.js';
 import { CodexAdapter } from './adapter.js';
+import { resolveAdapterHub } from './hub-target.js';
 
 function isRunning(pid: number): boolean {
   try {
@@ -28,9 +29,7 @@ if (!Number.isNaN(existing) && existing !== process.pid && isRunning(existing)) 
 fs.writeFileSync(CODEX_PID_FILE, String(process.pid), 'utf-8');
 logStartup('Codex adapter');
 
-const host = process.env.CLAUDE_ALARM_HUB_HOST ?? (config.hub.host === '0.0.0.0' ? DEFAULT_HUB_HOST : config.hub.host);
-const port = process.env.CLAUDE_ALARM_HUB_PORT ? parseInt(process.env.CLAUDE_ALARM_HUB_PORT, 10) : config.hub.port;
-const token = process.env.CLAUDE_ALARM_HUB_TOKEN ?? config.hub.token;
+const { host, port, token } = resolveAdapterHub(config);
 
 const adapter = new CodexAdapter({ command: config.codex?.command ?? 'codex', hub: { host, port, token } });
 adapter.start();
