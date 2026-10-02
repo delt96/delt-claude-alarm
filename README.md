@@ -183,8 +183,8 @@ claude-alarm hub start
 
 `claude-alarm init` also offers this once when it finds `codex` on `PATH`. Your answer is saved, and `codex enable` / `codex disable` change it later.
 
-- Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). Set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json` if `codex` is not on `PATH`.
-- If the hub console keeps printing `Codex daemon connection failed: spawn codex ENOENT`, the hub's terminal cannot find `codex`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal or set `codex.command`.
+- Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). On Windows, when `codex` is not on `PATH`, the adapter also looks in the standard install locations (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`, then `%APPDATA%\npm\codex.cmd`). Anywhere else, set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json`.
+- If `codex` cannot be found at all, the hub sends one `Codex not found` notification (desktop and webhooks) and the console keeps printing `Codex daemon connection failed: spawn codex ENOENT`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal and restart the hub, or set `codex.command`.
 - Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval requests are relayed to the dashboard and Telegram.
 - Messages you send show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`. If Codex is idle they start a new task; if it is working they join the current task and Codex reads them after its current step (you get a **Queued** notice). While Codex waits for an approval or for your answer, messages are not delivered; answer that first.
 - Images work the same way: paste, drag & drop or 📎 on the dashboard, or send a photo to the Telegram bot (PNG, JPEG, GIF or WebP). The Codex adapter must run on the same PC as the hub to read them.

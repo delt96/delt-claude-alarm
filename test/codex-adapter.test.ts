@@ -3,6 +3,8 @@ import './isolate-home.js';
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -260,6 +262,125 @@ test('a missing Codex binary is retried without crashing', async () => {
   });
   adapter.start();
   await until(() => attempts >= 3, 3000);
+});
+
+interface Recorded { method?: string; url?: string; auth?: string; body: unknown }
+
+async function recordingHub(opts: { statuses?: number[]; delayMs?: number } = {}) {
+  const statuses = [...(opts.statuses ?? [])];
+  const requests: Recorded[] = [];
+  const server = http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => { data += c; });
+    req.on('end', () => {
+      requests.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: JSON.parse(data || 'null') });
+      const status = statuses.shift() ?? 200;
+      setTimeout(() => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      }, opts.delayMs ?? 0);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  return {
+    hub: { host: '127.0.0.1', port, token: TOKEN },
+    requests,
+    close: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }),
+  };
+}
+
+const MISSING = 'claude-alarm-no-such-codex-binary';
+const NOT_FOUND_NOTICE = {
+  title: 'Codex not found',
+  message: `The Codex adapter cannot find "${MISSING}". Open a new terminal and restart the hub, or set "codex.command" in ~/.claude-alarm/config.json.`,
+  level: 'warning',
+};
+
+function missingCodexAdapter(hub: { host: string; port: number; token?: string }, counter: { attempts: number }): CodexAdapter {
+  return new CodexAdapter({
+    command: MISSING,
+    hub,
+    reconnectMinMs: 20,
+    reconnectMaxMs: 40,
+    spawnFn: () => {
+      counter.attempts++;
+      return spawn(MISSING, [], { stdio: 'pipe' });
+    },
+  });
+}
+
+test('a missing Codex binary is reported to the hub once', async () => {
+  const rec = await recordingHub();
+  const counter = { attempts: 0 };
+  try {
+    adapter = missingCodexAdapter(rec.hub, counter);
+    adapter.start();
+    await until(() => rec.requests.length >= 1);
+    const seen = counter.attempts;
+    await until(() => counter.attempts >= seen + 3);
+    assert.equal(rec.requests.length, 1);
+    assert.deepEqual(rec.requests[0], { method: 'POST', url: '/api/notify', auth: `Bearer ${TOKEN}`, body: NOT_FOUND_NOTICE });
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
+});
+
+test('the not-found notice is retried until the hub accepts it', async () => {
+  const rec = await recordingHub({ statuses: [500, 200] });
+  const counter = { attempts: 0 };
+  try {
+    adapter = missingCodexAdapter(rec.hub, counter);
+    adapter.start();
+    await until(() => rec.requests.length >= 2);
+    const seen = counter.attempts;
+    await until(() => counter.attempts >= seen + 3);
+    assert.equal(rec.requests.length, 2);
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
+});
+
+test('no second notice is sent while the notice is still being sent', async () => {
+  const rec = await recordingHub({ delayMs: 400 });
+  const counter = { attempts: 0 };
+  try {
+    adapter = missingCodexAdapter(rec.hub, counter);
+    adapter.start();
+    await until(() => rec.requests.length >= 1);
+    const seen = counter.attempts;
+    await until(() => counter.attempts >= seen + 3);
+    assert.equal(rec.requests.length, 1);
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
+});
+
+test('other connection failures do not send the not-found notice', async () => {
+  const rec = await recordingHub();
+  let attempts = 0;
+  try {
+    adapter = new CodexAdapter({
+      command: 'codex',
+      hub: rec.hub,
+      reconnectMinMs: 20,
+      reconnectMaxMs: 40,
+      spawnFn: () => {
+        attempts++;
+        return spawn(process.execPath, ['-e', 'process.exit(3)'], { stdio: 'pipe' });
+      },
+    });
+    adapter.start();
+    await until(() => attempts >= 3, 5000);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(rec.requests.length, 0);
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
 });
 
 test('a failing discovery does not leave sessions behind', async () => {

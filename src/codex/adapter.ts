@@ -60,6 +60,7 @@ export class CodexAdapter {
   private stopped = false;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private delay: number;
+  private notFoundNotice: 'unsent' | 'sending' | 'sent' = 'unsent';
 
   constructor(private opts: CodexAdapterOptions) {
     this.delay = opts.reconnectMinMs ?? 2000;
@@ -104,6 +105,7 @@ export class CodexAdapter {
       this.delay = this.opts.reconnectMinMs ?? 2000;
     } catch (err) {
       logger.warn(`Codex daemon connection failed: ${(err as Error).message}`);
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.noticeNotFound();
       if (rpc && this.rpc === rpc) {
         this.rpc = undefined;
         this.conn?.close();
@@ -130,6 +132,30 @@ export class CodexAdapter {
       void this.connect();
     }, this.delay);
     this.delay = Math.min(this.delay * 2, this.opts.reconnectMaxMs ?? 60_000);
+  }
+
+  private noticeNotFound(): void {
+    if (this.notFoundNotice !== 'unsent') return;
+    this.notFoundNotice = 'sending';
+    const { host, port, token } = this.opts.hub;
+    fetch(`http://${host}:${port}/api/notify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({
+        title: 'Codex not found',
+        message: `The Codex adapter cannot find "${this.opts.command}". Open a new terminal and restart the hub, or set "codex.command" in ~/.claude-alarm/config.json.`,
+        level: 'warning',
+      }),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((res) => {
+        this.notFoundNotice = res.ok ? 'sent' : 'unsent';
+        if (!res.ok) logger.debug(`Codex not-found notice was refused (${res.status})`);
+      })
+      .catch((err) => {
+        this.notFoundNotice = 'unsent';
+        logger.debug(`Codex not-found notice failed: ${(err as Error).message}`);
+      });
   }
 
   private async discover(): Promise<void> {
