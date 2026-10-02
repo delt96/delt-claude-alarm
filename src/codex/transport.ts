@@ -19,7 +19,7 @@ export function resolveCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; shell: boolean } {
   if (platform !== 'win32' || /[\\/]/.test(command) || path.extname(command)) return { file: command, shell: false };
-  const file = findOnPath(command, platform, env);
+  const file = findCodex(command, platform, env);
   return file ? { file, shell: file.endsWith('.cmd') } : { file: command, shell: false };
 }
 
@@ -36,6 +36,21 @@ export function findOnPath(
     }
   }
   return undefined;
+}
+
+// A terminal opened before Codex was installed keeps its old PATH, so also look where the installers put codex.
+export function findCodex(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const onPath = findOnPath(command, platform, env);
+  if (onPath || platform !== 'win32') return onPath;
+  const candidates = [
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'OpenAI', 'Codex', 'bin', `${command}.exe`),
+    env.APPDATA && path.join(env.APPDATA, 'npm', `${command}.cmd`),
+  ];
+  return candidates.find((file): file is string => !!file && fs.existsSync(file));
 }
 
 export const defaultSpawn: SpawnFn = (command, args) => {
