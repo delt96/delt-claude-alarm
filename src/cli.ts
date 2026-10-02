@@ -8,6 +8,7 @@ import { findOnPath } from './codex/transport.js';
 import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
+import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,17 +97,35 @@ async function hubStart(daemon: boolean) {
       env: { ...process.env },
     });
 
-    if (child.pid) {
-      fs.writeFileSync(PID_FILE, String(child.pid), 'utf-8');
-      child.unref();
-      console.log(`Hub started as daemon (PID: ${child.pid})`);
-      console.log(`Dashboard: ${loginLink(displayHost, port, config.hub.token)}`);
-      console.log(`Token: ${config.hub.token}`);
-      console.log(`Logs: ${LOG_FILE}`);
-    } else {
+    const pid = child.pid;
+    if (!pid) {
       console.error('Failed to start hub daemon');
       process.exit(1);
     }
+    fs.writeFileSync(PID_FILE, String(pid), 'utf-8');
+    let exited = false;
+    child.once('exit', () => { exited = true; });
+    child.unref();
+
+    const startup = await waitForHub({
+      url: `http://${displayHost}:${port}/api/status`,
+      token: config.hub.token,
+      pid,
+      isAlive: () => !exited,
+    });
+    if (startup !== 'ready') {
+      if (!exited) child.kill();
+      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+      console.error(startup === 'exited'
+        ? `Hub exited during startup. See ${LOG_FILE}`
+        : `Hub did not answer at http://${displayHost}:${port} within ${HUB_START_TIMEOUT_MS / 1000}s and was stopped. See ${LOG_FILE}`);
+      process.exit(1);
+    }
+
+    console.log(`Hub started as daemon (PID: ${pid})`);
+    console.log(`Dashboard: ${loginLink(displayHost, port, config.hub.token)}`);
+    console.log(`Token: ${config.hub.token}`);
+    console.log(`Logs: ${LOG_FILE}`);
   } else {
     // Foreground mode - import and run directly
     console.log(`Starting hub on http://${displayHost}:${port} (press Ctrl+C to stop)`);
