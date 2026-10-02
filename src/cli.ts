@@ -5,6 +5,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex } from './shared/config.js';
 import { findOnPath } from './codex/transport.js';
+import { runFromCli } from './codex/run.js';
 import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
@@ -36,6 +37,10 @@ Usage:
   claude-alarm codex start      Run the Codex adapter on its own (e.g. Codex on another PC)
   claude-alarm codex stop       Stop a running Codex adapter
   claude-alarm codex status     Show Codex adapter status
+  claude-alarm codex run --brief <file|-> [--cwd <dir>] [--thread <id>] [--name <title>]
+                         [--output-schema <file>] [--approval-timeout <min>] [--timeout <min>] [--yolo]
+                                Hand a task to Codex through the shared daemon and print the result as JSON
+                                (--yolo: no sandbox and no approvals, like codex --yolo)
   claude-alarm help             Show this help
 
 Quick start:
@@ -382,6 +387,30 @@ function codexStatus() {
   console.log(`Start with hub: ${loadConfig().codex?.enabled ? 'enabled' : 'disabled'}`);
 }
 
+async function codexRun(argv: string[]): Promise<number> {
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  try {
+    return await runFromCli(argv, {
+      readFile: (file) => fs.promises.readFile(file, 'utf-8'),
+      readStdin: async () => {
+        let text = '';
+        for await (const chunk of process.stdin) text += chunk;
+        return text;
+      },
+      out: (text) => process.stdout.write(text),
+      err: (text) => process.stderr.write(text),
+      cwd: process.cwd(),
+      signal: abort.signal,
+    });
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+  }
+}
+
 // --- Main CLI ---
 async function main() {
   const args = process.argv.slice(2);
@@ -426,6 +455,7 @@ async function main() {
     else if (sub === 'start') codexStart();
     else if (sub === 'stop') codexStop();
     else if (sub === 'status') codexStatus();
+    else if (sub === 'run') process.exitCode = await codexRun(args.slice(2));
     else {
       console.error(`Unknown codex command: ${sub}`);
       printUsage();
