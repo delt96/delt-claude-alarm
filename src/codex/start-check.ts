@@ -62,6 +62,7 @@ export async function checkHub(hub: AdapterHub, timeoutMs = HUB_CHECK_TIMEOUT_MS
   try {
     res = await fetch(`${hubUrl(hub)}/api/status`, {
       headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {

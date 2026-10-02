@@ -128,6 +128,22 @@ test('another status is not-hub with that status', async () => {
   try { assert.deepEqual(await checkHub(s.hub), { kind: 'not-hub', status: 500 }); } finally { await s.close(); }
 });
 
+test('a redirect is not followed and counts as not-hub', async () => {
+  const s = await serve((_req, res) => { res.writeHead(302, { Location: 'http://127.0.0.1:1/api/status' }); res.end(); });
+  try {
+    assert.deepEqual(await checkHub(s.hub), { kind: 'not-hub', status: 302 });
+    assert.equal(s.seen.length, 1);
+  } finally { await s.close(); }
+});
+
+test('no Authorization header is sent without a token', async () => {
+  const s = await serve(statusOk);
+  try {
+    assert.deepEqual(await checkHub({ ...s.hub, token: undefined }), { kind: 'ok' });
+    assert.equal(s.seen[0].authorization, undefined);
+  } finally { await s.close(); }
+});
+
 test('a closed port is unreachable with the error code', async () => {
   assert.deepEqual(await checkHub(hubAt(await closedPort())), { kind: 'unreachable', reason: 'ECONNREFUSED' });
 });
