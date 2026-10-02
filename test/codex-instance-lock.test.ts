@@ -7,10 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   STALE_GUARD_MS,
+  STOP_PROOF_LABEL,
   acquireLock,
   controlEndpoint,
   queryOwner,
   requestStop,
+  stopProof,
   type Acquired,
   type Attempt,
   type LockOwner,
@@ -96,6 +98,63 @@ test('a stop with the right token is acknowledged, then the owner is told to sto
     assert.equal(o.stops, 0);
     assert.deepEqual(await requestStop(endpoint, 'secret'), { state: 'stopping', pid: 7 });
     await until(() => o.stops === 1);
+  } finally { await release(a); }
+});
+
+test('a stop carrying the token itself is unauthorized and does not stop the owner', async () => {
+  const endpoint = freshEndpoint();
+  const o = owner(7, 'secret');
+  const a = await acquireLock(endpoint, o);
+  try {
+    assert.equal(await rawRequest(endpoint, '{"type":"stop","token":"secret"}\n'), '{"type":"error","error":"unauthorized"}\n');
+    assert.equal(o.stops, 0);
+  } finally { await release(a); }
+});
+
+test('requestStop writes only the stop proof, never the token', async () => {
+  const endpoint = freshEndpoint();
+  let recorded = '';
+  const server = net.createServer((socket) => {
+    let buffer = '';
+    socket.setEncoding('utf8');
+    socket.on('error', () => {});
+    socket.on('data', (chunk: string) => {
+      buffer += chunk;
+      const end = buffer.indexOf('\n');
+      if (end < 0) return;
+      recorded = buffer.slice(0, end);
+      socket.end('{"type":"stopping","pid":1}\n');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+  try {
+    assert.deepEqual(await requestStop(endpoint, 'secret'), { state: 'stopping', pid: 1 });
+    assert.equal(recorded.includes('secret'), false);
+    assert.deepEqual(JSON.parse(recorded), { type: 'stop', proof: stopProof('secret') });
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('stopProof is a token-specific 64-character hex proof with the fixed label', () => {
+  assert.equal(STOP_PROOF_LABEL, 'claude-alarm codex stop');
+  assert.match(stopProof('secret'), /^[0-9a-f]{64}$/);
+  assert.notEqual(stopProof('secret'), stopProof('other'));
+});
+
+test('missing, non-string, wrong and different-length stop proofs are unauthorized', async () => {
+  const endpoint = freshEndpoint();
+  const o = owner(7, 'secret');
+  const a = await acquireLock(endpoint, o);
+  try {
+    for (const request of [
+      { type: 'stop' },
+      { type: 'stop', proof: 1 },
+      { type: 'stop', proof: 'x'.repeat(64) },
+      { type: 'stop', proof: 'short' },
+      { type: 'stop', proof: 'x'.repeat(65) },
+    ]) {
+      assert.equal(await rawRequest(endpoint, `${JSON.stringify(request)}\n`), '{"type":"error","error":"unauthorized"}\n');
+    }
+    assert.equal(o.stops, 0);
   } finally { await release(a); }
 });
 

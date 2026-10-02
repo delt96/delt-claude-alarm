@@ -5,9 +5,14 @@ import path from 'node:path';
 
 export const CONTROL_PROTOCOL = 1;
 export const STALE_GUARD_MS = 10_000;
+export const STOP_PROOF_LABEL = 'claude-alarm codex stop';
 const MAX_LINE_BYTES = 4096;
 const REQUEST_IDLE_MS = 2000;
 const MAX_SOCKET_PATH_BYTES = 103;
+
+export function stopProof(token: string): string {
+  return crypto.createHmac('sha256', token).update(STOP_PROOF_LABEL).digest('hex');
+}
 
 export type OwnerState =
   | { state: 'running'; pid: number }
@@ -104,7 +109,7 @@ export async function queryOwner(endpoint: string, timeoutMs = 1000): Promise<Ow
 }
 
 export async function requestStop(endpoint: string, token: string, timeoutMs = 1000): Promise<StopResult> {
-  const answer = await ask(endpoint, { type: 'stop', token }, timeoutMs);
+  const answer = await ask(endpoint, { type: 'stop', proof: stopProof(token) }, timeoutMs);
   if (!('reply' in answer)) return answer;
   const reply = answer.reply as { type?: unknown; pid?: unknown; error?: unknown } | null;
   if (reply?.type === 'stopping' && Number.isInteger(reply.pid)) return { state: 'stopping', pid: reply.pid as number };
@@ -115,6 +120,7 @@ export async function requestStop(endpoint: string, token: string, timeoutMs = 1
 const line = (message: object) => `${JSON.stringify(message)}\n`;
 
 function controlServer(owner: LockOwner): net.Server {
+  const expectedProof = Buffer.from(stopProof(owner.token));
   return net.createServer((socket) => {
     let buffer = '';
     socket.setEncoding('utf8');
@@ -130,16 +136,19 @@ function controlServer(owner: LockOwner): net.Server {
       }
       socket.off('data', onData);
       clearTimeout(idle);
-      let request: { type?: unknown; token?: unknown } | null = null;
+      let request: { type?: unknown; proof?: unknown } | null = null;
       try {
         request = JSON.parse(buffer.slice(0, end));
       } catch {}
       if (request?.type === 'status') {
         socket.end(line({ type: 'status', protocol: CONTROL_PROTOCOL, pid: owner.pid }));
-      } else if (request?.type === 'stop' && owner.token !== '' && request.token === owner.token) {
-        socket.end(line({ type: 'stopping', pid: owner.pid }), () => owner.onStop());
       } else if (request?.type === 'stop') {
-        socket.end(line({ type: 'error', error: 'unauthorized' }));
+        const proof = typeof request.proof === 'string' ? Buffer.from(request.proof) : undefined;
+        if (owner.token !== '' && proof && proof.length === expectedProof.length && crypto.timingSafeEqual(proof, expectedProof)) {
+          socket.end(line({ type: 'stopping', pid: owner.pid }), () => owner.onStop());
+        } else {
+          socket.end(line({ type: 'error', error: 'unauthorized' }));
+        }
       } else {
         socket.end(line({ type: 'error', error: 'unknown request' }));
       }
