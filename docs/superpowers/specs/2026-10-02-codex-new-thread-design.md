@@ -82,6 +82,7 @@
 
 - `/ws/codex` 연결의 `adapter_hello`로 등록·갱신. 한 연결은 하나의 어댑터 ID만 가진다(다른 ID로 다시 hello하면 무시). 같은 ID가 새 연결로 오면 새 연결이 이긴다(옛 연결 종료)
 - 연결이 끊기면 목록에서 빼고, 그 어댑터의 대기 요청을 모두 502로 끝낸다
+- 채널 소켓과 같은 30초 하트비트(ping/pong)를 `/ws/codex`에도 건다 — 다른 PC가 절전에 들어가면 죽은 소켓이 목록에 남아 요청이 60초 뒤 504가 되므로, 응답 없는 소켓을 끊어 약 1분 안에 목록에서 뺀다(계획 단계에서 추가)
 - 목록이 바뀔 때마다 대시보드에 `{ type: 'codex_adapters', adapters: [{ id, host, ready, isLocal }] }`를 방송한다. 대시보드가 접속하면 `sessions_list`·`permission_pending` 다음에 한 번 보낸다
 - 대기 요청의 시간 제한 기본 60초 — `thread/start`가 MCP 서버 기동(이 PC 설정 `startup_timeout_sec = 30`)을 기다릴 수 있다. 테스트에서 줄일 수 있게 주입 가능하게 한다. 실측 뒤 조정
 - 끝난(시간 초과·연결 끊김) `requestId`로 늦게 온 결과는 무시한다
@@ -181,7 +182,7 @@ HTTP API(기존 인증·같은 출처 검사·POST JSON Content-Type 검사를 �
   - 성공: 팝업을 닫고 새 세션을 선택하고 메시지 입력창에 포커스. 세션 등록이 응답보다 늦으면 그 세션이 등록되는 순간 선택한다(다른 세션을 먼저 고르면 취소)
   - 실패: 양식 아래에 응답의 `error`를 보이고 입력값은 둔다
 
-**닫기 버튼:** `closable` 세션에만 보인다(세션 카드·메시지 헤더 중 위치는 디자인 단계에서). 한 번 누르면 `Close?`로 바뀌고 3초 안에 다시 누르면 `POST /api/codex/threads/close`. 브라우저 `confirm` 대화상자는 쓰지 않는다. 툴팁 `Close — stays in Codex history`. 요청이 실패하면 버튼을 원래대로 돌린다.
+**닫기 버튼:** `closable` 세션에만 보인다(세션 카드·메시지 헤더 중 위치는 디자인 단계에서). 한 번 누르면 `Close?`로 바뀌고 3초 안에 다시 누르면 `POST /api/codex/threads/close`. 첫 탭 뒤 0.4초 안의 두 번째 탭은 무시한다 — 폰의 빠른 두 번 탭이 확정까지 가 버리지 않게(계획 단계에서 추가). 브라우저 `confirm` 대화상자는 쓰지 않는다. 툴팁 `Close — stays in Codex history`. 요청이 실패하면 버튼을 원래대로 돌린다.
 
 ### 5. README
 
