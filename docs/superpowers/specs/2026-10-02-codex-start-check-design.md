@@ -10,7 +10,7 @@
 
 확인한 사실:
 
-- 데몬이 없는 소켓을 가리키면 `codex app-server proxy --sock <없는 소켓>`은 약 0.1초 만에 종료 코드 1로 끝나고(`failed to connect to socket … os error 10061`) 데몬을 띄우지 않는다(2026-10-02 실측, 기본 소켓 경로는 미확인). 어댑터는 `Codex daemon connection failed: codex proxy exited (code 1)`를 남기고 2초→60초 간격으로 재시도한다(`src/codex/adapter.ts:83-136`)
+- 데몬이 없는 소켓을 가리키면 `codex app-server proxy --sock <없는 소켓>`은 약 0.1초 만에 종료 코드 1로 끝나고(`failed to connect to socket … os error 10061`) 데몬을 띄우지 않는다(2026-10-02 실측, 기본 소켓 경로는 미확인). 어댑터는 `Codex daemon connection failed: <오류>`를 남기고 2초→60초 간격으로 재시도한다. 오류 문구는 proxy 종료(`codex proxy exited (code N)`)와 소켓 끊김 중 먼저 온 쪽이며, Windows에서는 `socket hang up`이 먼저 오기도 한다(2026-10-02 테스트)(`src/codex/adapter.ts:83-136`)
 - 어댑터는 Codex 대화마다 Hub에 연결한다(`adapter.ts:186-216`). 열린 대화가 없으면 Hub에 접속하지 않으므로 Hub 주소·토큰이 틀려도 드러나지 않는다
 - Hub `/api/status`는 토큰을 검사한다. 틀리면 401(`src/hub/server.ts:213-228`). 정상 응답 본문은 `{ running: true, pid, port, sessions, uptime }`
 - `RpcClient` 요청은 30초 시간 제한이 있다(`src/codex/rpc.ts:23`)
