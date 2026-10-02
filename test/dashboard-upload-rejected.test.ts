@@ -13,14 +13,16 @@ function load(selectedSession: string) {
   assert.ok(start > 0 && end > start, 'showUploadRejected anchors not found');
   const errors: string[] = [];
   let renders = 0;
+  let messageRenders = 0;
   const ctx: Record<string, any> = {
-    state: { selectedSession, notifications: [] },
+    state: { selectedSession, notifications: [], waitingReply: { s1: true } },
+    renderMessages: () => { messageRenders++; },
     showMentionError: (m: string) => errors.push(m),
     renderNotifications: () => { renders++; },
   };
   vm.createContext(ctx);
   vm.runInContext(html.slice(start, end), ctx);
-  return { ctx, errors, renders: () => renders };
+  return { ctx, errors, renders: () => renders, messageRenders: () => messageRenders };
 }
 
 test('the dashboard handles upload_rejected messages', () => {
@@ -28,7 +30,7 @@ test('the dashboard handles upload_rejected messages', () => {
 });
 
 test('a rejection for the open session shows under the input and in the notifications', () => {
-  const { ctx, errors, renders } = load('s1');
+  const { ctx, errors, renders, messageRenders } = load('s1');
   ctx.showUploadRejected({ type: 'upload_rejected', sessionId: 's1', reason: 'the image is larger than 10 MB' });
   assert.deepEqual(errors, ['Image not delivered: the image is larger than 10 MB']);
   const [n] = ctx.state.notifications;
@@ -38,6 +40,8 @@ test('a rejection for the open session shows under the input and in the notifica
   assert.equal(n.level, 'warning');
   assert.equal(typeof n.time, 'number');
   assert.equal(renders(), 1);
+  assert.equal(ctx.state.waitingReply.s1, false);
+  assert.equal(messageRenders(), 1);
 });
 
 test('a rejection for another session only goes to the notifications', () => {
@@ -45,4 +49,12 @@ test('a rejection for another session only goes to the notifications', () => {
   ctx.showUploadRejected({ type: 'upload_rejected', sessionId: 's1', reason: 'the session is not connected' });
   assert.deepEqual(errors, []);
   assert.equal(ctx.state.notifications.length, 1);
+});
+
+
+test('a rejection with text labels both the image and message', () => {
+  const { ctx, errors } = load('s1');
+  ctx.showUploadRejected({ type: 'upload_rejected', sessionId: 's1', reason: 'the session is not connected', withText: true });
+  assert.deepEqual(errors, ['Image and message not delivered: the session is not connected']);
+  assert.equal(ctx.state.notifications[0].title, 'Image and message not delivered');
 });

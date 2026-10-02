@@ -33,53 +33,53 @@ function deps(o: { owners?: OwnerState[]; stop?: StopResult; legacy?: number; al
 
 test('stop with nothing running says so and sends no stop request', async () => {
   const t = deps();
-  assert.equal(await stopAdapter(t.d), 0);
+  assert.equal(await stopAdapter(t.d, false), 0);
   assert.deepEqual(t.out, ['Codex adapter is not running']);
   assert.equal(t.stops(), 0);
 });
 
 test('a live process in an old codex.pid is pointed out, never stopped or removed', async () => {
   const t = deps({ legacy: 4321, alive: [4321] });
-  assert.equal(await stopAdapter(t.d), 0);
+  assert.equal(await stopAdapter(t.d, false), 0);
   assert.deepEqual(t.out, ['Codex adapter is not running', note(4321)]);
   assert.equal(t.removed(), 0);
 });
 
 test('an old codex.pid naming a dead process is removed silently', async () => {
   const t = deps({ legacy: 4321 });
-  assert.equal(await stopAdapter(t.d), 0);
+  assert.equal(await stopAdapter(t.d, false), 0);
   assert.deepEqual(t.out, ['Codex adapter is not running']);
   assert.equal(t.removed(), 1);
 });
 
 test('stop waits until the adapter is gone', async () => {
   const t = deps({ owners: [{ state: 'running', pid: 10 }, { state: 'running', pid: 10 }, { state: 'absent' }], stop: { state: 'stopping', pid: 10 } });
-  assert.equal(await stopAdapter(t.d), 0);
+  assert.equal(await stopAdapter(t.d, false), 0);
   assert.deepEqual(t.out, ['Codex adapter stopped (PID: 10)']);
   assert.deepEqual(t.err, []);
 });
 
 test('a waiting hub adapter taking over still counts as stopped', async () => {
   const t = deps({ owners: [{ state: 'running', pid: 10 }, { state: 'running', pid: 11 }], stop: { state: 'stopping', pid: 10 } });
-  assert.equal(await stopAdapter(t.d), 0);
-  assert.deepEqual(t.out, ['Codex adapter stopped (PID: 10)']);
+  assert.equal(await stopAdapter(t.d, false), 0);
+  assert.deepEqual(t.out, ['Codex adapter stopped (PID: 10)', 'Another Codex adapter took over (PID: 11)']);
 });
 
 test('a refused stop names the config file', async () => {
   const t = deps({ owners: [{ state: 'running', pid: 10 }], stop: { state: 'unauthorized' } });
-  assert.equal(await stopAdapter(t.d), 1);
+  assert.equal(await stopAdapter(t.d, false), 1);
   assert.deepEqual(t.err, [`Codex adapter refused to stop: the token in ${CONFIG} does not match the one it started with`]);
 });
 
 test('an adapter that does not go away in time is reported', async () => {
   const t = deps({ owners: [{ state: 'running', pid: 10 }], stop: { state: 'stopping', pid: 10 } });
-  assert.equal(await stopAdapter(t.d), 1);
+  assert.equal(await stopAdapter(t.d, false), 1);
   assert.deepEqual(t.err, ['Stop requested, but the Codex adapter (PID: 10) is still running. Check with: claude-alarm codex status']);
 });
 
 test('an unanswering endpoint is an error for stop', async () => {
   const t = deps({ owners: [{ state: 'unknown', error: 'no answer within 1000ms' }] });
-  assert.equal(await stopAdapter(t.d), 1);
+  assert.equal(await stopAdapter(t.d, false), 1);
   assert.deepEqual(t.err, ['Codex adapter control endpoint is unavailable: no answer within 1000ms']);
   assert.equal(t.stops(), 0);
 });
@@ -96,4 +96,19 @@ test('status lines', async () => {
   const unknown = deps({ owners: [{ state: 'unknown', error: 'EACCES' }] });
   await adapterStatus(unknown.d, false);
   assert.deepEqual(unknown.out, ['Codex adapter: unknown (EACCES)', 'Start with hub: disabled']);
+});
+
+
+test('stop explains the hub restart when enabled and no adapter takes over', async () => {
+  const t = deps({ owners: [{ state: 'running', pid: 10 }, { state: 'absent' }], stop: { state: 'stopping', pid: 10 } });
+  assert.equal(await stopAdapter(t.d, true), 0);
+  assert.deepEqual(t.out, ['Codex adapter stopped (PID: 10)', 'If the hub started it, the hub will not start it again until you restart the hub.']);
+});
+
+test('running status points out a different live legacy PID only', async () => {
+  for (const legacy of [4321, 10]) {
+    const t = deps({ owners: [{ state: 'running', pid: 10 }], legacy, alive: [legacy] });
+    await adapterStatus(t.d, true);
+    assert.deepEqual(t.out, ['Codex adapter: running (PID: 10)', ...(legacy === 10 ? [] : [note(4321)]), 'Start with hub: enabled']);
+  }
 });

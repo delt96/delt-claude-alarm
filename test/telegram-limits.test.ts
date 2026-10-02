@@ -37,7 +37,6 @@ const photo = (size?: number) => ({
 
 const sent = (calls: Array<{ api: string; body: any }>) => calls.filter((c) => c.api === 'sendMessage').map((c) => c.body.text);
 
-// --- length
 
 test('escapes count as one character and tags not at all', () => {
   assert.equal(visibleLength('<b>a&amp;b</b>&lt;'), 4);
@@ -74,7 +73,6 @@ test('a cut inside a code block still leaves balanced tags', async (t) => {
   assert.equal(text.split('<pre>').length, text.split('</pre>').length);
 });
 
-// --- photos
 
 test('a photo over 10 MB is refused before a prompt is sent or anything is downloaded', async (t) => {
   const { bot, calls, images } = setup(t, [s('a'), s('b')]);
@@ -111,4 +109,17 @@ test('a photo within the limit is delivered without a message', async (t) => {
   await (bot as any).handleIncomingMessage(photo(1000));
   assert.deepEqual(images, ['a:image/jpeg']);
   assert.deepEqual(sent(calls), []);
+});
+
+
+test('a failed photo selection clears buttons without claiming delivery', async (t) => {
+  const { bot, calls, images } = setup(t, [s('a'), s('b')], { getFile: { ok: false } });
+  await (bot as any).handleIncomingMessage(photo());
+  const data = calls.find((c) => c.api === 'sendMessage')!.body.reply_markup.inline_keyboard[0][0].callback_data;
+  await (bot as any).handleCallbackQuery({ id: 'q', data, message: { chat: { id: 111 }, message_id: 7, text: '' } });
+  assert.ok(sent(calls).includes('Photo not delivered: Telegram did not return the file'));
+  assert.equal(calls.find((c) => c.api === 'answerCallbackQuery')!.body.text, 'Photo not delivered');
+  assert.ok(calls.some((c) => c.api === 'editMessageReplyMarkup' && c.body.reply_markup.inline_keyboard.length === 0));
+  assert.ok(!calls.some((c) => c.api === 'editMessageText' && c.body.text.includes('Sent to')));
+  assert.deepEqual(images, []);
 });

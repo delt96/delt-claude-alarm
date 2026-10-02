@@ -5,7 +5,7 @@ import type { AdapterHub } from './hub-target.js';
 
 export const ADAPTER_REPORT_TIMEOUT_MS = 10_000;
 export const HUB_CHECK_TIMEOUT_MS = 3000;
-export const RESTART_HINT = 'After fixing this, restart the adapter: claude-alarm codex stop, then claude-alarm codex start';
+export const RESTART_HINT = 'After fixing this, restart the adapter: claude-alarm codex stop, then claude-alarm codex start (if the hub started the adapter, restart the hub instead)';
 
 const CONFIG_PATH = '~/.claude-alarm/config.json';
 const NOT_CHECKED: Line = { text: 'Codex daemon: not checked (the adapter was already running)', warning: false };

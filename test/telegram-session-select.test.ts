@@ -118,3 +118,14 @@ test('only the 20 newest prompts are kept', async (t) => {
   await press(bot, all[20][0]);
   assert.deepEqual(delivered, ['a:m21']);
 });
+
+
+test('/s_ does not resolve an older prompt after the newest was answered', async (t) => {
+  const { bot, delivered, calls } = setup(t, [s('a'), s('b')]);
+  await say(bot, 'first', 1);
+  await say(bot, 'second', 2);
+  await press(bot, prompts(calls)[1][0]);
+  await say(bot, '/s_1', 3);
+  assert.deepEqual(delivered, ['a:second']);
+  assert.equal(prompts(calls).length, 3);
+});

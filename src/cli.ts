@@ -14,7 +14,7 @@ import { hubUrlHost } from './shared/hub-url.js';
 import { resolveAdapterHub } from './codex/hub-target.js';
 import { startAdapter } from './codex/start-check.js';
 import { controlEndpoint, queryOwner, requestStop } from './codex/instance-lock.js';
-import { adapterStatus, stopAdapter, type ControlDeps } from './codex/control-cli.js';
+import { adapterStatus, legacyNote, stopAdapter, type ControlDeps } from './codex/control-cli.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -376,6 +376,7 @@ async function codexStart() {
   // Before spawning: on a fresh PC this creates and saves the token, so the adapter reads the same one.
   const config = loadConfig();
   ensureConfigDir();
+  legacyNote(controlDeps());
   const code = await startAdapter({
     hub: resolveAdapterHub(config),
     command: config.codex?.command ?? 'codex',
@@ -480,7 +481,7 @@ async function main() {
     if (sub === 'enable') codexEnable(true);
     else if (sub === 'disable') codexEnable(false);
     else if (sub === 'start') await codexStart();
-    else if (sub === 'stop') process.exitCode = await stopAdapter(controlDeps());
+    else if (sub === 'stop') process.exitCode = await stopAdapter(controlDeps(), loadConfig().codex?.enabled === true);
     else if (sub === 'status') process.exitCode = await adapterStatus(controlDeps(), loadConfig().codex?.enabled === true);
     else if (sub === 'run') process.exitCode = await codexRun(args.slice(2));
     else {

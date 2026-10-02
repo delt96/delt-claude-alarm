@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { controlEndpoint, queryOwner, requestStop } from '../src/codex/instance-lock.js';
+import { acquireLock, controlEndpoint, queryOwner, requestStop } from '../src/codex/instance-lock.js';
 import { until } from './helpers/fake-codex-daemon.js';
 
 const TOKEN = 'lock-test';
@@ -33,18 +33,19 @@ async function makeHome(): Promise<string> {
 
 const endpointOf = (home: string) => controlEndpoint(path.join(home, '.claude-alarm'));
 
-function adapterIn(home: string, supervised = false): { child: ChildProcess; inbox: any[] } {
+function adapterIn(home: string, supervised = false): { child: ChildProcess; inbox: any[]; logs: string[] } {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
   delete env.CLAUDE_ALARM_HUB_HOST;
   delete env.CLAUDE_ALARM_HUB_PORT;
   delete env.CLAUDE_ALARM_HUB_TOKEN;
   const args = ['--import', 'tsx', path.join('src', 'codex', 'main.ts'), ...(supervised ? ['--watch-stdin'] : [])];
   const child = spawn(process.execPath, args, { env, stdio: [supervised ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'] });
-  child.stdout?.resume();
-  child.stderr?.resume();
+  const logs: string[] = [];
+  child.stdout?.on('data', (data) => logs.push(data.toString()));
+  child.stderr?.on('data', (data) => logs.push(data.toString()));
   const inbox: any[] = [];
   child.on('message', (m) => inbox.push(m));
-  return { child, inbox };
+  return { child, inbox, logs };
 }
 
 function exited(child: ChildProcess): Promise<number | null> {
@@ -84,11 +85,18 @@ test('an adapter started by the hub waits while another runs and takes over when
     assert.deepEqual(await queryOwner(endpoint), { state: 'running', pid: a.child.pid });
     assert.deepEqual(await requestStop(endpoint, TOKEN), { state: 'stopping', pid: a.child.pid });
     assert.equal(await exited(a.child), 0);
+    assert.ok(!a.logs.join('').includes('Stopped by claude-alarm codex stop'));
+    assert.ok(!a.logs.join('').includes('Codex adapter took over'));
     const pidB = b.child.pid;
     await until(async () => {
       const o = await queryOwner(endpoint);
       return o.state === 'running' && o.pid === pidB;
     }, 45_000);
+    await until(() => b!.logs.join('').includes('Codex adapter took over: the other adapter has stopped'));
+    assert.equal(b.logs.join('').split('Another Codex adapter is running').length - 1, 1);
+    assert.deepEqual(await requestStop(endpoint, TOKEN), { state: 'stopping', pid: pidB });
+    assert.equal(await exited(b.child), 0);
+    assert.ok(b.logs.join('').includes('Stopped by claude-alarm codex stop; the hub will not start the Codex adapter again until the hub restarts'));
   } finally {
     a.child.kill();
     b?.child.kill();
@@ -122,5 +130,25 @@ test('a stop request with the wrong token leaves the adapter running', { timeout
     assert.equal(a.child.exitCode, null);
   } finally {
     a.child.kill();
+  }
+});
+
+
+test('a waiting adapter logs again when the owner PID changes', { timeout: 60_000 }, async () => {
+  const home = await makeHome();
+  const endpoint = endpointOf(home);
+  let lock = await acquireLock(endpoint, { pid: 1111, token: TOKEN, onStop: () => {} });
+  assert.equal(lock.kind, 'owner');
+  const b = adapterIn(home, true);
+  try {
+    await until(() => b.logs.join('').includes('Another Codex adapter is running (PID: 1111)'), 30_000);
+    if (lock.kind === 'owner') await lock.close();
+    lock = await acquireLock(endpoint, { pid: 2222, token: TOKEN, onStop: () => {} });
+    assert.equal(lock.kind, 'owner');
+    await until(() => b.logs.join('').includes('Another Codex adapter is running (PID: 2222)'), 10_000);
+  } finally {
+    b.child.stdin!.end();
+    await exited(b.child);
+    if (lock.kind === 'owner') await lock.close();
   }
 });

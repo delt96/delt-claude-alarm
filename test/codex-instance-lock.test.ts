@@ -44,7 +44,6 @@ function rawRequest(endpoint: string, payload: string): Promise<string> {
   });
 }
 
-// --- endpoint names
 
 test('the Windows endpoint is a pipe named after the config directory, ignoring case', () => {
   const a = controlEndpoint('C:\\Users\\A\\.claude-alarm-missing', 'win32');
@@ -57,7 +56,6 @@ test('elsewhere the endpoint is codex.sock in the config directory', () => {
   assert.equal(controlEndpoint('/home/u/.claude-alarm', 'linux'), '/home/u/.claude-alarm/codex.sock');
 });
 
-// --- real endpoint
 
 test('the first adapter owns the lock and a second one sees it held, with the owner PID', async () => {
   const endpoint = freshEndpoint();
@@ -230,7 +228,6 @@ test('an endpoint held by something that does not answer is unknown, never a sec
   } finally { squatter.close(); }
 });
 
-// --- Windows retry and the POSIX socket-file path, with fakes
 
 const NOW = 1_000_000;
 const SOCK = '/home/u/.claude-alarm/codex.sock';

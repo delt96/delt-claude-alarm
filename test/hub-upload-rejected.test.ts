@@ -45,7 +45,7 @@ test('an image for a session that is not connected is rejected with a reason', a
   const dash = await open('/ws/dashboard');
   try {
     upload(dash, 'nobody');
-    assert.deepEqual(await rejection(dash, 'nobody'), { type: 'upload_rejected', sessionId: 'nobody', reason: 'the session is not connected' });
+    assert.deepEqual(await rejection(dash, 'nobody'), { type: 'upload_rejected', sessionId: 'nobody', reason: 'the session is not connected', withText: false });
   } finally { dash.ws.close(); }
 });
 
@@ -99,4 +99,13 @@ test('an accepted image still reaches the session and is not rejected', async ()
     await until(() => ch.inbox.find((m) => m.type === 'image_to_session'));
     assert.ok(!dash.inbox.some((m) => m.type === 'upload_rejected'));
   } finally { dash.ws.close(); ch.ws.close(); }
+});
+
+
+test('a rejected image reports accompanying text', async () => {
+  const dash = await open('/ws/dashboard');
+  try {
+    dash.ws.send(JSON.stringify({ type: 'image_upload', sessionId: 'text-nobody', imageData: png, mimeType: 'image/png', content: 'look at this' }));
+    assert.deepEqual(await rejection(dash, 'text-nobody'), { type: 'upload_rejected', sessionId: 'text-nobody', reason: 'the session is not connected', withText: true });
+  } finally { dash.ws.close(); }
 });

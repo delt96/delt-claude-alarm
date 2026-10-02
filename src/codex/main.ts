@@ -56,11 +56,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function takeLock(): Promise<boolean> {
   let delay = WAIT_MIN_MS;
-  let waiting = false;
+  let waitReason: string | undefined;
   for (;;) {
-    const lock = await acquireLock(endpoint, { pid: process.pid, token: config.hub.token ?? '', onStop: shutdown });
+    const lock = await acquireLock(endpoint, {
+      pid: process.pid,
+      token: config.hub.token ?? '',
+      onStop: () => {
+        if (supervised) logger.warn('Stopped by claude-alarm codex stop; the hub will not start the Codex adapter again until the hub restarts');
+        shutdown();
+      },
+    });
     if (lock.kind === 'owner') {
       release = lock.close;
+      if (waitReason !== undefined) logger.info('Codex adapter took over: the other adapter has stopped');
       return true;
     }
     if (!supervised) {
@@ -73,8 +81,9 @@ async function takeLock(): Promise<boolean> {
       }
       return false;
     }
-    if (!waiting) {
-      waiting = true;
+    const reason = lock.kind === 'held' ? `held:${lock.pid}` : `unknown:${lock.error}`;
+    if (reason !== waitReason) {
+      waitReason = reason;
       if (lock.kind === 'held') logger.info(`Another Codex adapter is running (PID: ${lock.pid}); this one takes over when it stops`);
       else logger.warn(`Codex adapter control endpoint is unavailable (${lock.error}); retrying`);
     }

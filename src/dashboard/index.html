@@ -1286,8 +1286,13 @@
   }
 
   function showUploadRejected(msg) {
-    if (state.selectedSession === msg.sessionId) showMentionError(`Image not delivered: ${msg.reason}`);
-    state.notifications.unshift({ sessionId: msg.sessionId, title: 'Image not delivered', message: msg.reason, level: 'warning', time: Date.now() });
+    state.waitingReply[msg.sessionId] = false;
+    const label = msg.withText ? 'Image and message not delivered' : 'Image not delivered';
+    if (state.selectedSession === msg.sessionId) {
+      renderMessages();
+      showMentionError(`${label}: ${msg.reason}`);
+    }
+    state.notifications.unshift({ sessionId: msg.sessionId, title: label, message: msg.reason, level: 'warning', time: Date.now() });
     renderNotifications();
   }
 

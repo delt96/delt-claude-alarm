@@ -256,7 +256,7 @@ test('warnings are followed by the restart hint', async () => {
   assert.match(t.out[1], /^ {2}Codex daemon: not connected/);
   assert.match(t.out[2], /^ {2}Hub: not reachable at .*\(ECONNREFUSED\)/);
   assert.equal(t.out[3], `  ${RESTART_HINT}`);
-  assert.equal(RESTART_HINT, 'After fixing this, restart the adapter: claude-alarm codex stop, then claude-alarm codex start');
+  assert.equal(RESTART_HINT, 'After fixing this, restart the adapter: claude-alarm codex stop, then claude-alarm codex start (if the hub started the adapter, restart the hub instead)');
 });
 
 test('no report within the limit is a warning, and the adapter is left running', async () => {

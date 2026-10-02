@@ -17,9 +17,9 @@ export interface ControlDeps {
   stopWaitMs?: number;
 }
 
-function legacyNote(d: ControlDeps): void {
+export function legacyNote(d: Pick<ControlDeps, 'legacyPid' | 'isRunning' | 'removeLegacyPidFile' | 'legacyPidFile' | 'out'>, ownerPid?: number): void {
   const pid = d.legacyPid();
-  if (pid === undefined) return;
+  if (pid === undefined || pid === ownerPid) return;
   if (!d.isRunning(pid)) {
     d.removeLegacyPidFile();
     return;
@@ -32,7 +32,7 @@ function unavailable(d: ControlDeps, error: string): number {
   return 1;
 }
 
-export async function stopAdapter(d: ControlDeps): Promise<number> {
+export async function stopAdapter(d: ControlDeps, startWithHub: boolean): Promise<number> {
   const owner = await d.queryOwner();
   if (owner.state === 'unknown') return unavailable(d, owner.error);
   if (owner.state === 'absent') {
@@ -54,9 +54,11 @@ export async function stopAdapter(d: ControlDeps): Promise<number> {
   for (let waited = 0; waited < (d.stopWaitMs ?? STOP_WAIT_MS); waited += STOP_POLL_MS) {
     await sleep(STOP_POLL_MS);
     const now = await d.queryOwner();
-    // A hub adapter that was waiting takes over at once; a different PID still means this one stopped.
+    // A waiting hub adapter may take over later; a different PID still means this one stopped.
     if (now.state === 'absent' || (now.state === 'running' && now.pid !== reply.pid)) {
       d.out(`Codex adapter stopped (PID: ${reply.pid})`);
+      if (now.state === 'running') d.out(`Another Codex adapter took over (PID: ${now.pid})`);
+      else if (startWithHub) d.out('If the hub started it, the hub will not start it again until you restart the hub.');
       return 0;
     }
   }
@@ -68,6 +70,7 @@ export async function adapterStatus(d: ControlDeps, startWithHub: boolean): Prom
   const owner = await d.queryOwner();
   if (owner.state === 'running') {
     d.out(`Codex adapter: running (PID: ${owner.pid})`);
+    legacyNote(d, owner.pid);
   } else if (owner.state === 'unknown') {
     d.out(`Codex adapter: unknown (${owner.error})`);
   } else {

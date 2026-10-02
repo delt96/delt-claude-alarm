@@ -84,6 +84,7 @@ export class TelegramBot {
   private choiceMessages = new Map<string, ChoiceMessage>();
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
+  private latestSelection: string | undefined;
   // Keyed by prompt, not by chat: buttons from an older prompt must still send that prompt's message.
   private selections = new Map<string, PendingSelection>();
 
@@ -249,19 +250,20 @@ export class TelegramBot {
 
     if (text) {
       const selectMatch = text.match(/^\/s_(\d+)$/);
-      const latest = [...this.selections.keys()].pop();
+      const latest = this.latestSelection;
       if (selectMatch && latest !== undefined) {
         const pending = this.selections.get(latest);
         if (pending) {
           this.selections.delete(latest);
           const session = this.pendingSession(pending, parseInt(selectMatch[1], 10) - 1);
           if (session) {
+            let delivered = true;
             if (pending.photoFileId) {
-              await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
+              delivered = await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
             } else if (pending.text) {
               this.deliverToSession(session.id, pending.text);
             }
-            this.sendMessage(`Sent to [${this.getLabel(session)}]`);
+            if (delivered) this.sendMessage(`Sent to [${this.getLabel(session)}]`);
           } else {
             this.sendMessage('Invalid session number.');
           }
@@ -288,6 +290,7 @@ export class TelegramBot {
     }
 
     const selectionId = randomUUID().replace(/-/g, '').slice(0, 8);
+    this.latestSelection = selectionId;
     const sessionIds = sessions.map((s) => s.id);
     if (hasPhoto) {
       const largest = msg.photo![msg.photo!.length - 1];
@@ -314,31 +317,31 @@ export class TelegramBot {
     }
   }
 
-  private async deliverPhotoToSession(sessionId: string, photos: TelegramPhotoSize[], caption?: string): Promise<void> {
+  private async deliverPhotoToSession(sessionId: string, photos: TelegramPhotoSize[], caption?: string): Promise<boolean> {
     // Get the largest photo (last in array)
     const largest = photos[photos.length - 1];
-    await this.deliverPhotoToSessionByFileId(sessionId, largest.file_id, caption);
+    return this.deliverPhotoToSessionByFileId(sessionId, largest.file_id, caption);
   }
 
-  private async deliverPhotoToSessionByFileId(sessionId: string, fileId: string, caption?: string): Promise<void> {
+  private async deliverPhotoToSessionByFileId(sessionId: string, fileId: string, caption?: string): Promise<boolean> {
     try {
       const fileRes = await fetch(`${this.apiUrl}/getFile?file_id=${fileId}`);
       const fileData = fileRes.ok ? ((await fileRes.json()) as { ok: boolean; result?: { file_path: string } }) : undefined;
       if (!fileData?.ok || !fileData.result) {
         this.photoNotDelivered('Telegram did not return the file');
-        return;
+        return false;
       }
 
       const downloadUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${fileData.result.file_path}`;
       const imgRes = await fetch(downloadUrl);
       if (!imgRes.ok) {
         this.photoNotDelivered('the download failed');
-        return;
+        return false;
       }
       const buffer = Buffer.from(await imgRes.arrayBuffer());
       if (buffer.length > MAX_PHOTO_BYTES) {
         this.photoNotDelivered('it is larger than 10 MB');
-        return;
+        return false;
       }
 
       const ext = fileData.result.file_path.split('.').pop() || 'jpg';
@@ -355,9 +358,11 @@ export class TelegramBot {
       }
 
       setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, 5 * 60 * 1000).unref();
+      return this.onImageToSession !== undefined;
     } catch (err) {
       logger.warn(`Telegram photo download failed: ${(err as Error).message}`);
       this.photoNotDelivered('the download failed');
+      return false;
     }
   }
 
@@ -579,7 +584,12 @@ export class TelegramBot {
     this.selections.delete(selectionId);
 
     if (pending.photoFileId) {
-      await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
+      const delivered = await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
+      if (!delivered) {
+        await this.answerCallbackQuery(query.id, 'Photo not delivered');
+        if (query.message) await this.removeButtons(query.message.chat.id, query.message.message_id);
+        return;
+      }
     } else if (pending.text) {
       this.deliverToSession(session.id, pending.text);
     }

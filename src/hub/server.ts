@@ -768,7 +768,7 @@ export class HubServer {
     const { sessionId, imageData, mimeType, originalName, content } = msg;
     const reject = (reason: string) => {
       logger.warn(`Image upload rejected for ${sessionId}: ${reason}`);
-      const rejected: ChannelMessage = { type: 'upload_rejected', sessionId, reason };
+      const rejected: ChannelMessage = { type: 'upload_rejected', sessionId, reason, withText: typeof content === 'string' && content.trim().length > 0 };
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(rejected));
     };
 
