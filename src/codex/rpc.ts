@@ -13,7 +13,7 @@ export class RpcError extends Error {
 interface Pending {
   resolve: (value: any) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 export class RpcClient extends EventEmitter {
@@ -33,14 +33,17 @@ export class RpcClient extends EventEmitter {
     });
   }
 
-  request<T = any>(method: string, params?: unknown): Promise<T> {
+  request<T = any>(method: string, params?: unknown, timeoutMs: number | null = this.timeoutMs): Promise<T> {
     if (this.ws.readyState !== this.ws.OPEN) return Promise.reject(new Error('connection closed'));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`${method} timed out`));
-      }, this.timeoutMs);
+      const timer =
+        timeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`${method} timed out`));
+            }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }));
     });

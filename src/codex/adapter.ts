@@ -1,13 +1,18 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CodexHubLink } from './hub-link.js';
 import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
-import type { ChannelMessage, NotifyLevel, SessionInfo } from '../shared/types.js';
+import type { ChannelMessage, CodexCall, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { imageInput, textInput, type UserInput } from './inputs.js';
 import { RpcClient, type RpcId } from './rpc.js';
 import { approvalView, fileChanges, type ApprovalChoice, type ApprovalView, type FileChange } from './approvals.js';
 import {
+  cleanFolder,
   codexSessionId,
   finalAnswer,
   hubStatus,
@@ -30,6 +35,9 @@ export interface CodexAdapterOptions {
   reconnectMaxMs?: number;
   idleReleaseMs?: number;
   noticeTimeoutMs?: number;
+  hostName?: string;
+  linkReconnectMs?: number;
+  rpcTimeoutMs?: number;
   onFirstConnect?: (outcome: FirstConnect) => void;
 }
 
@@ -69,17 +77,26 @@ export class CodexAdapter {
   private notFoundNotice: 'unsent' | 'sending' | 'sent' = 'unsent';
   private firstConnectReported = false;
 
+  private pins = new Set<string>();
+  private ready = false;
+  private readonly hostName: string;
+  private readonly link: CodexHubLink;
+
   constructor(private opts: CodexAdapterOptions) {
     this.delay = opts.reconnectMinMs ?? 2000;
+    this.hostName = opts.hostName ?? os.hostname();
+    this.link = new CodexHubLink(opts.hub, { id: randomUUID(), host: this.hostName }, (call) => this.onCall(call), opts.linkReconnectMs);
   }
 
   start(): void {
     this.stopped = false;
+    this.link.connect();
     void this.connect();
   }
 
   stop(): void {
     this.stopped = true;
+    this.link.disconnect();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
@@ -94,7 +111,7 @@ export class CodexAdapter {
         conn.close();
         return;
       }
-      const live = new RpcClient(conn.ws);
+      const live = new RpcClient(conn.ws, this.opts.rpcTimeoutMs);
       rpc = live;
       live.on('notification', (method: string, params: any) => this.onNotification(method, params));
       live.on('request', (id: RpcId, method: string, params: any) => this.onServerRequest(id, method, params));
@@ -110,8 +127,10 @@ export class CodexAdapter {
       logger.info(`Connected to Codex daemon (${init.userAgent ?? 'unknown version'})`);
       this.reportFirstConnect({ connected: true, ...(init.userAgent ? { userAgent: init.userAgent } : {}) });
       await this.discover();
+      if (this.rpc === live) this.setReady(true);
       this.delay = this.opts.reconnectMinMs ?? 2000;
     } catch (err) {
+      this.setReady(false);
       logger.warn(`Codex daemon connection failed: ${(err as Error).message}`);
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.noticeNotFound();
       this.reportFirstConnect({
@@ -130,6 +149,7 @@ export class CodexAdapter {
   }
 
   private onDaemonLost(): void {
+    this.setReady(false);
     this.rpc = undefined;
     this.conn?.close();
     this.conn = undefined;
@@ -181,6 +201,50 @@ export class CodexAdapter {
         this.notFoundNotice = (err as Error).name === 'TimeoutError' ? 'sent' : 'unsent';
         logger.debug(`Codex not-found notice failed: ${(err as Error).message}`);
       });
+  }
+
+  private setReady(ready: boolean): void {
+    this.ready = ready;
+    this.link.setReady(ready);
+  }
+
+  private requireDaemon(): RpcClient {
+    if (!this.ready || !this.rpc) throw new Error(`Codex is not connected on ${this.hostName}.`);
+    return this.rpc;
+  }
+
+  private async onCall(call: CodexCall): Promise<unknown> {
+    if (call.kind === 'folders') return { folders: await this.folders() };
+    return { sessionId: await this.create(call.cwd) };
+  }
+
+  private async folders(): Promise<string[]> {
+    const page = await this.requireDaemon().request<{ data: CodexThread[] }>('thread/list', { limit: 50, sortKey: 'updated_at' });
+    return [...new Set(page.data.map((t) => t.cwd).filter(Boolean))].slice(0, 10);
+  }
+
+  private async create(input: string): Promise<string> {
+    const rpc = this.requireDaemon();
+    const cwd = cleanFolder(input);
+    const isDir = path.isAbsolute(cwd) && (await fs.promises.stat(cwd).then((s) => s.isDirectory(), () => false));
+    if (!isDir) throw new Error(`Folder not found on ${this.hostName}: ${cwd}`);
+    let thread: CodexThread;
+    try {
+      // No RPC timeout: an answer dropped after a timeout would leave a conversation this connection holds but never pins.
+      ({ thread } = await rpc.request<{ thread: CodexThread }>('thread/start', { cwd, sandbox: 'danger-full-access', approvalPolicy: 'never' }, null));
+    } catch (err) {
+      throw new Error(`Codex could not start the conversation: ${(err as Error).message}`);
+    }
+    this.pins.add(thread.id);
+    this.upsert(thread);
+    const t = this.threads.get(thread.id);
+    if (!t) {
+      this.pins.delete(thread.id);
+      throw new Error('Codex started a conversation claude-alarm cannot follow.');
+    }
+    // The starting connection is already subscribed; marking it before upsert's queued sync runs avoids a resume that fails before the first turn.
+    t.subscribed = true;
+    return codexSessionId(thread.id);
   }
 
   private async discover(): Promise<void> {
@@ -242,13 +306,13 @@ export class CodexAdapter {
     const t = this.threads.get(threadId);
     if (!t) return {};
     const title = threadTitle(t.thread);
-    return { name: title, title, cwd: t.thread.cwd, agentKind: 'codex', status: hubStatus(t.thread.status) };
+    return { name: title, title, cwd: t.thread.cwd, agentKind: 'codex', status: hubStatus(t.thread.status), closable: this.pins.has(threadId) };
   }
 
   private want(threadId: string, subscribed: boolean): Promise<void> {
     const t = this.threads.get(threadId);
     if (!t) return Promise.resolve();
-    t.wantSubscribed = subscribed;
+    t.wantSubscribed = subscribed || this.pins.has(threadId);
     t.sync = t.sync.then(() => this.syncSubscription(t));
     return t.sync;
   }

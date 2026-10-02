@@ -52,3 +52,9 @@ export function finalAnswer(messages: AgentMessage[]): string | null {
   if (finals.length) return finals.join('\n\n');
   return messages.at(-1)?.text ?? null;
 }
+
+// Explorer's "Copy as path" wraps the path in double quotes.
+export function cleanFolder(input: string): string {
+  const s = input.trim();
+  return s.length >= 2 && s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1).trim() : s;
+}

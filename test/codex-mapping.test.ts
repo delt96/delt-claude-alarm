@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { codexSessionId, finalAnswer, hubStatus, isTrackable, threadTitle, withSourcePrefix, type CodexThread } from '../src/codex/mapping.js';
+import { cleanFolder, codexSessionId, finalAnswer, hubStatus, isTrackable, threadTitle, withSourcePrefix, type CodexThread } from '../src/codex/mapping.js';
 
 const thread = (extra: Partial<CodexThread> = {}): CodexThread => ({ id: '01a0f656-434c', name: null, preview: '', cwd: 'C:\\tmp\\codex-test', status: { type: 'idle' }, ...extra });
 
@@ -45,4 +45,11 @@ test('finalAnswer joins final answers and falls back to the last message', () =>
   assert.equal(finalAnswer([{ text: 'a', phase: 'final_answer' }, { text: 'b', phase: 'final_answer' }]), 'a\n\nb');
   assert.equal(finalAnswer([{ text: 'first' }, { text: 'last' }]), 'last');
   assert.equal(finalAnswer([]), null);
+});
+
+test('pasted folders lose surrounding spaces and one pair of double quotes', () => {
+  assert.equal(cleanFolder('  "C:\\work\\새 프로젝트"  '), 'C:\\work\\새 프로젝트');
+  assert.equal(cleanFolder('C:\\work'), 'C:\\work');
+  assert.equal(cleanFolder('"'), '"');
+  assert.equal(cleanFolder('""'), '');
 });

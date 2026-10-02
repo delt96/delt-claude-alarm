@@ -112,3 +112,12 @@ test('respond answers a server request with its own id while the socket is open'
   ]);
 });
 
+
+test('a request with no timeout waits for its answer', async () => {
+  const ws = new FakeWs();
+  const rpc = new RpcClient(ws as any, 20);
+  const pending = rpc.request('thread/start', { cwd: 'C:\\w' }, null);
+  await new Promise((r) => setTimeout(r, 60));
+  ws.emit('message', JSON.stringify({ id: 1, result: { thread: { id: 't' } } }));
+  assert.deepEqual(await pending, { thread: { id: 't' } });
+});

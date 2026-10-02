@@ -270,6 +270,11 @@ async function recordingHub(opts: { statuses?: number[]; delayMs?: number } = {}
   const statuses = [...(opts.statuses ?? [])];
   const requests: Recorded[] = [];
   const server = http.createServer((req, res) => {
+    if (req.headers.upgrade) {
+      res.writeHead(426);
+      res.end();
+      return;
+    }
     let data = '';
     req.on('data', (c) => { data += c; });
     req.on('end', () => {

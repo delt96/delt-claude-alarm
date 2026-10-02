@@ -79,7 +79,15 @@ export class FakeDaemon {
       return;
     }
     try {
-      reply({ result: handler(m.params) });
+      const result = handler(m.params);
+      if (result instanceof Promise) {
+        result.then(
+          (value) => reply({ result: value }),
+          (err) => reply({ error: { code: -32600, message: (err as Error).message } }),
+        );
+        return;
+      }
+      reply({ result });
     } catch (err) {
       reply({ error: { code: -32600, message: (err as Error).message } });
     }
