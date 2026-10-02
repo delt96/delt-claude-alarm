@@ -26,7 +26,7 @@
 
 - 범위: 어댑터 묶음 + 텔레그램·대시보드
 - 잠금 방식: Codex에 물어 정함(`codex run`, 읽기 전용, 스레드 `01a0fd08-b51a-7a52-b927-e4895f68b7aa`). Codex 추천 = named pipe·소켓을 잠금과 제어 채널로(A). PID 파일 + 신원 확인(B)은 신원 확인과 남은 파일 정리에 경쟁이 남고, 고정 포트(C)는 격리 HOME 테스트와 부딪힌다
-- Codex 제안 중 바꾼 것: stop 인증은 별도 비밀값 대신 설정 폴더의 기존 Hub 토큰(`config.hub.token`). 맥·리눅스 정리 잠금이 남으면 사람이 복구하는 대신 10초 넘은 것을 버려진 것으로 보고 치운다(정리는 수 밀리초)
+- Codex 제안 중 바꾼 것: stop 인증은 별도 비밀값 대신 설정 폴더의 기존 Hub 토큰(`config.hub.token`) — 구현 중 리뷰로 토큰 대신 그 HMAC 증명을 보내도록 바꿈(1절). 맥·리눅스 정리 잠금이 남으면 사람이 복구하는 대신 10초 넘은 것을 버려진 것으로 보고 치운다(정리는 수 밀리초)
 - `codex stop`의 의미: 지금 잠금을 쥔 어댑터만 멈춘다. Hub가 띄운 어댑터가 기다리고 있었다면 이어받는다. Codex를 끄려면 지금처럼 `codex disable` 후 Hub 재시작
 - 승인 요청 처리 예외: 데몬에 오류로 답하지 않는다(Codex 창에서 답할 기회를 막을 수 있음). 표시할 수 없는 요청과 같은 알림만 띄운다
 
@@ -44,11 +44,11 @@
 | 요청 | 응답 |
 |---|---|
 | `{"type":"status"}` | `{"type":"status","protocol":1,"pid":<pid>}` |
-| `{"type":"stop","token":"<토큰>"}` 토큰 일치 | `{"type":"stopping","pid":<pid>}` 를 보낸 뒤 종료 절차 |
-| 토큰 불일치 | `{"type":"error","error":"unauthorized"}` |
+| `{"type":"stop","proof":"<HMAC-SHA256(토큰, \"claude-alarm codex stop\")의 hex>"}` 증명 일치 | `{"type":"stopping","pid":<pid>}` 를 보낸 뒤 종료 절차 |
+| 증명 불일치·증명 없음·토큰을 그대로 보낸 요청 | `{"type":"error","error":"unauthorized"}` |
 | 그 밖 | `{"type":"error","error":"unknown request"}` |
 
-토큰은 어댑터가 시작할 때 `loadConfig().hub.token`으로 읽은 값이다. 어댑터가 Hub 접속에 `CLAUDE_ALARM_HUB_TOKEN`을 쓰더라도 제어 토큰은 설정 파일 값이다.
+토큰은 어댑터가 시작할 때 `loadConfig().hub.token`으로 읽은 값이다. 어댑터가 Hub 접속에 `CLAUDE_ALARM_HUB_TOKEN`을 쓰더라도 제어 토큰은 설정 파일 값이다. 토큰 자체는 파이프로 보내지 않는다: Windows 파이프 이름은 컴퓨터 전체에서 공유돼 다른 계정이 먼저 차지할 수 있고, 이 토큰은 Hub 대시보드·API 인증값이기도 하다(Task 1 리뷰, Jev keyed_proof 0.95). 증명은 같은 토큰이면 늘 같아 재사용될 수 있지만 그것으로는 어댑터를 멈추는 것밖에 못 한다.
 
 **클라이언트** `queryOwner(endpoint, timeoutMs = 1000): Promise<OwnerState>`
 

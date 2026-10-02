@@ -14,7 +14,7 @@
 
 - No new dependencies.
 - Control endpoint: Windows `\\.\pipe\claude-alarm-codex-<first 16 hex of sha256(lowercased realpath of the config dir)>`; elsewhere `<config dir>/codex.sock`, refused when its UTF-8 length exceeds 103 bytes.
-- Control protocol: one JSON line each way. `{"type":"status"}` → `{"type":"status","protocol":1,"pid":N}`; `{"type":"stop","token":T}` → `{"type":"stopping","pid":N}` or `{"type":"error","error":"unauthorized"}`; anything else → `{"type":"error","error":"unknown request"}`. The server drops a connection with no newline after 2000 ms or more than 4096 bytes.
+- Control protocol: one JSON line each way. `{"type":"status"}` → `{"type":"status","protocol":1,"pid":N}`; `{"type":"stop","proof":P}` with P = hex HMAC-SHA256(T, "claude-alarm codex stop") (`stopProof(T)`; the token itself never goes over the endpoint — Task 1 review ruling) → `{"type":"stopping","pid":N}` or `{"type":"error","error":"unauthorized"}`; anything else → `{"type":"error","error":"unknown request"}`. The server drops a connection with no newline after 2000 ms or more than 4096 bytes.
 - The stop token is `config.hub.token` from `config.json`, never `CLAUDE_ALARM_HUB_TOKEN`. An empty token refuses every stop.
 - New code never reads or writes `codex.pid` except the CLI's legacy note.
 - Supervised waiting: 2000 ms doubling to 30 000 ms. Proxy handshake limit 10 000 ms. Stop wait 5000 ms polled every 100 ms. Telegram visible limit 4000 characters. Photo and upload limit `10 * 1024 * 1024` bytes. At most 20 open Telegram selection prompts.
