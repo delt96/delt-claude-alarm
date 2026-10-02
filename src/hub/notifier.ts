@@ -76,6 +76,7 @@ export class Notifier {
       execFile(
         'powershell',
         ['-Command', '(Get-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications" -Name ToastEnabled -ErrorAction SilentlyContinue).ToastEnabled'],
+        { windowsHide: true },
         (err, stdout) => {
           if (err) { resolve(true); return; } // assume enabled on error
           const value = stdout.trim();
@@ -93,7 +94,7 @@ export class Notifier {
     logger.warn('Please enable notifications for this app, then try again.');
 
     if (process.platform === 'win32') {
-      execFile('powershell', ['-Command', 'Start-Process ms-settings:notifications']);
+      execFile('powershell', ['-Command', 'Start-Process ms-settings:notifications'], { windowsHide: true });
     }
 
     // Allow re-opening after 5 minutes

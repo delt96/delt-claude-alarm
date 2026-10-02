@@ -9,6 +9,7 @@ import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE,
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
+import { hubUrlHost } from './shared/hub-url.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,7 +71,7 @@ async function hubStart(daemon: boolean) {
   const config = loadConfig();
   const host = config.hub.host ?? DEFAULT_HUB_HOST;
   const port = config.hub.port ?? DEFAULT_HUB_PORT;
-  const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  const displayHost = hubUrlHost(host);
 
   // Check for updates (non-blocking)
   checkForUpdates();
@@ -173,7 +174,7 @@ async function hubStatus() {
   const config = loadConfig();
   const host = config.hub.host ?? DEFAULT_HUB_HOST;
   const port = config.hub.port ?? DEFAULT_HUB_PORT;
-  const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  const displayHost = hubUrlHost(host);
 
   // Check PID file
   let pidInfo = 'not running';
@@ -188,7 +189,7 @@ async function hubStatus() {
 
   // Try to reach the hub HTTP API
   try {
-    const res = await fetch(`http://${host}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
+    const res = await fetch(`http://${displayHost}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
     if (res.ok) {
       const data = await res.json() as any;
       console.log(`Hub: running (PID: ${data.pid})`);
@@ -228,7 +229,7 @@ async function test() {
     if (config.hub.token) {
       headers['Authorization'] = `Bearer ${config.hub.token}`;
     }
-    const res = await fetch(`http://${host}:${port}/api/notify`, {
+    const res = await fetch(`http://${hubUrlHost(host)}:${port}/api/notify`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -305,10 +306,10 @@ async function init() {
     const config = loadConfig();
     const host = config.hub.host ?? DEFAULT_HUB_HOST;
     const port = config.hub.port ?? DEFAULT_HUB_PORT;
-    const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+    const displayHost = hubUrlHost(host);
     let hubRunning = false;
     try {
-      const res = await fetch(`http://${host}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
+      const res = await fetch(`http://${displayHost}:${port}/api/status`, { headers: authHeaders(config.hub.token) });
       hubRunning = res.ok;
     } catch {}
 

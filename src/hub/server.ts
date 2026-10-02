@@ -23,6 +23,7 @@ import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { isEntryScript } from '../shared/entry.js';
+import { hubUrlHost } from '../shared/hub-url.js';
 import {
   isAuthorized,
   isCrossOrigin,
@@ -85,7 +86,7 @@ export class HubServer {
     if (config?.webhooks) {
       this.notifier.configure({ webhooks: config.webhooks });
     }
-    const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+    const displayHost = hubUrlHost(this.host);
     this.notifier.configure({ dashboardUrl: `http://${displayHost}:${this.port}` });
 
     // Initialize Telegram bot if configured
@@ -149,7 +150,7 @@ export class HubServer {
         // Past startup a rejected promise is a no-op, so errors must be logged instead
         this.httpServer.removeListener('error', onStartupError);
         this.httpServer.on('error', (err) => logger.error(`HTTP server error: ${err.message}`));
-        const displayHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+        const displayHost = hubUrlHost(this.host);
         logger.info(`Hub server listening on http://${displayHost}:${this.port}`);
         this.startCodexAdapter();
         resolve();
