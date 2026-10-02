@@ -10,6 +10,14 @@ import { permissionKey } from '../shared/permission-key.js';
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_CHOICE_MESSAGES = 200;
 const MAX_SELECTIONS = 20;
+const MAX_VISIBLE_CHARS = 4000;
+const TRUNCATED = '…(truncated)';
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+// Telegram's 4096 limit counts the text left after parsing entities: tags are free and each escape is one character.
+export function visibleLength(html: string): number {
+  return html.replace(/<[^>]*>/g, '').replace(/&(?:amp|lt|gt);/g, '&').length;
+}
 
 interface ChoiceMessage {
   html: string;
@@ -89,7 +97,7 @@ export class TelegramBot {
 
   /** Send a notification message to Telegram */
   async sendNotification(sessionId: string, _sessionLabel: string, title: string, message: string): Promise<void> {
-    const text = `<b>${this.escHtml(title)}</b>\n${this.mdToHtml(message)}`;
+    const text = this.fitNotification(title, message);
     const result = await this.sendMessage(text);
     if (result?.message_id) {
       this.messageSessionMap.set(result.message_id, sessionId);
@@ -101,6 +109,25 @@ export class TelegramBot {
         }
       }
     }
+  }
+
+  private fitNotification(title: string, message: string): string {
+    const render = (body: string) => `<b>${this.escHtml(title)}</b>\n${this.mdToHtml(body)}`;
+    const full = render(message);
+    if (visibleLength(full) <= MAX_VISIBLE_CHARS) return full;
+    const cut = (n: number) => {
+      // Cutting between the halves of a surrogate pair would send invalid UTF-16.
+      const end = n > 0 && /[\uD800-\uDBFF]/.test(message[n - 1]) ? n - 1 : n;
+      return render(`${message.slice(0, end)}\n${TRUNCATED}`);
+    };
+    let lo = 0;
+    let hi = message.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (visibleLength(cut(mid)) <= MAX_VISIBLE_CHARS) lo = mid;
+      else hi = mid - 1;
+    }
+    return cut(lo);
   }
 
   /** Send a text message to the configured chat */
@@ -199,6 +226,13 @@ export class TelegramBot {
     const text = (msg.text || msg.caption || '').trim();
 
     if (!text && !hasPhoto) return;
+    if (hasPhoto) {
+      const size = msg.photo![msg.photo!.length - 1].file_size;
+      if (size !== undefined && size > MAX_PHOTO_BYTES) {
+        this.photoNotDelivered('it is larger than 10 MB');
+        return;
+      }
+    }
 
     // Check if it's a reply to a known message
     if (msg.reply_to_message) {
@@ -288,39 +322,48 @@ export class TelegramBot {
 
   private async deliverPhotoToSessionByFileId(sessionId: string, fileId: string, caption?: string): Promise<void> {
     try {
-      // Get file path from Telegram
       const fileRes = await fetch(`${this.apiUrl}/getFile?file_id=${fileId}`);
-      if (!fileRes.ok) { logger.warn('Failed to get Telegram file info'); return; }
-      const fileData = await fileRes.json() as { ok: boolean; result: { file_path: string } };
-      if (!fileData.ok) return;
+      const fileData = fileRes.ok ? ((await fileRes.json()) as { ok: boolean; result?: { file_path: string } }) : undefined;
+      if (!fileData?.ok || !fileData.result) {
+        this.photoNotDelivered('Telegram did not return the file');
+        return;
+      }
 
-      // Download the file
       const downloadUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${fileData.result.file_path}`;
       const imgRes = await fetch(downloadUrl);
-      if (!imgRes.ok) { logger.warn('Failed to download Telegram photo'); return; }
+      if (!imgRes.ok) {
+        this.photoNotDelivered('the download failed');
+        return;
+      }
       const buffer = Buffer.from(await imgRes.arrayBuffer());
+      if (buffer.length > MAX_PHOTO_BYTES) {
+        this.photoNotDelivered('it is larger than 10 MB');
+        return;
+      }
 
-      // Determine extension
       const ext = fileData.result.file_path.split('.').pop() || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
 
-      // Save to uploads dir
       fs.mkdirSync(UPLOADS_DIR, { recursive: true });
       const filename = `${randomUUID()}.${ext}`;
       const filePath = path.join(UPLOADS_DIR, filename);
       fs.writeFileSync(filePath, buffer);
       logger.info(`Telegram photo saved: ${filename} (${buffer.length} bytes)`);
 
-      // Deliver to session
       if (this.onImageToSession) {
         this.onImageToSession(sessionId, filePath, mimeType, caption);
       }
 
-      // Cleanup after 5 minutes
-      setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, 5 * 60 * 1000);
+      setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, 5 * 60 * 1000).unref();
     } catch (err) {
       logger.warn(`Telegram photo download failed: ${(err as Error).message}`);
+      this.photoNotDelivered('the download failed');
     }
+  }
+
+  private photoNotDelivered(reason: string): void {
+    logger.warn(`Telegram photo not delivered: ${reason}`);
+    void this.sendMessage(`Photo not delivered: ${reason}`);
   }
 
   // Buttons are numbered against the list shown when they were sent; Codex sessions come and go, so the live list may have shifted.
