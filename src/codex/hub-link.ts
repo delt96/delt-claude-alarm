@@ -6,6 +6,7 @@ import type { CodexCall, CodexLinkMessage } from '../shared/types.js';
 export class CodexHubLink {
   private ws: WebSocket | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = true;
   private ready = false;
 
@@ -14,6 +15,7 @@ export class CodexHubLink {
     private identity: { id: string; host: string },
     private onCall: (call: CodexCall) => Promise<unknown>,
     private reconnectMs = 5000,
+    private pingTimeoutMs = 75_000,
   ) {}
 
   connect(): void {
@@ -29,13 +31,17 @@ export class CodexHubLink {
     }
     this.ws = ws;
     ws.on('open', () => {
-      if (this.ws === ws) this.hello();
+      if (this.ws !== ws) return;
+      this.armWatchdog(ws);
+      this.hello();
     });
+    ws.on('ping', () => this.armWatchdog(ws));
     ws.on('message', (data) => {
       if (this.ws === ws) this.onMessage(String(data));
     });
     ws.on('close', () => {
       if (this.ws !== ws) return;
+      this.clearWatchdog();
       this.ws = null;
       this.scheduleReconnect();
     });
@@ -50,6 +56,7 @@ export class CodexHubLink {
 
   disconnect(): void {
     this.closed = true;
+    this.clearWatchdog();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
     const ws = this.ws;
@@ -72,12 +79,27 @@ export class CodexHubLink {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     if (msg.type !== 'adapter_call') return;
     const { requestId, call } = msg;
     this.onCall(call).then(
       (data) => this.send({ type: 'adapter_result', requestId, ok: true, data }),
       (err) => this.send({ type: 'adapter_result', requestId, ok: false, error: (err as Error).message }),
     );
+  }
+
+  private clearWatchdog(): void {
+    if (this.pingTimer) clearTimeout(this.pingTimer);
+    this.pingTimer = null;
+  }
+
+  private armWatchdog(ws: WebSocket): void {
+    if (this.ws !== ws) return;
+    this.clearWatchdog();
+    // The hub pings every 30 s, so two missed pings mean it already dropped this socket.
+    this.pingTimer = setTimeout(() => {
+      if (this.ws === ws) ws.terminate();
+    }, this.pingTimeoutMs);
   }
 
   private scheduleReconnect(): void {

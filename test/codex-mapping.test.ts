@@ -53,3 +53,16 @@ test('pasted folders lose surrounding spaces and one pair of double quotes', () 
   assert.equal(cleanFolder('"'), '"');
   assert.equal(cleanFolder('""'), '');
 });
+
+test('threadTitle strips known source prefixes before truncation and fallback', () => {
+  assert.equal(threadTitle(thread({ preview: '[claude-alarm · Dashboard] Reply with exactly: pong and nothing else' })), 'Reply with exactly: pong and n…');
+  assert.equal(threadTitle(thread({ preview: '[claude-alarm] run tests' })), 'run tests');
+  assert.equal(threadTitle(thread({ preview: '[claude-alarm · Telegram]   ', cwd: 'C:\\w\\proj' })), 'proj');
+  assert.equal(threadTitle(thread({ preview: '[claude-alarm]', cwd: '' })), '01a0f656');
+});
+
+test('threadTitle preserves embedded prefixes, unknown sources and names', () => {
+  assert.equal(threadTitle(thread({ preview: 'hi [claude-alarm] run tests' })), 'hi [claude-alarm] run tests');
+  assert.equal(threadTitle(thread({ preview: '[claude-alarm · Slack] hi' })), '[claude-alarm · Slack] hi');
+  assert.equal(threadTitle(thread({ name: '[claude-alarm · Dashboard] title' })), '[claude-alarm · Dashboard] title');
+});

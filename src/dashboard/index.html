@@ -2286,7 +2286,7 @@
     const select = $('#codexAdapter');
     const current = select.value;
     const labels = adapterLabels(usable);
-    select.innerHTML = usable.map((a, i) => `<option value="${esc(a.id)}">${esc(labels[i])}</option>`).join('');
+    select.replaceChildren(...usable.map((a, i) => new Option(labels[i], a.id)));
     if (usable.some(a => a.id === current)) select.value = current;
     select.hidden = usable.length < 2;
   }
@@ -2300,7 +2300,7 @@
       const res = await fetch(`/api/codex/folders?adapterId=${encodeURIComponent(adapterId)}`);
       if (!res.ok || $('#codexAdapter').value !== adapterId) return;
       const { folders } = await res.json();
-      list.innerHTML = folders.map(f => `<option value="${esc(f)}"></option>`).join('');
+      list.replaceChildren(...folders.map(f => new Option('', f)));
     } catch {}
   }
 

@@ -2,7 +2,7 @@
 import './isolate-home.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import { HubServer } from '../src/hub/server.js';
 import { CodexHubLink } from '../src/codex/hub-link.js';
 import { until } from './helpers/fake-codex-daemon.js';
@@ -88,4 +88,68 @@ test('a disconnected link stays away', async () => {
   await absent('L3');
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(!(await adapters()).some((a) => a.id === 'L3'));
+});
+
+async function bareLink(onConnection: (ws: WebSocket) => void = () => {}) {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  let connections = 0;
+  server.on('connection', (ws) => { connections++; onConnection(ws); });
+  const address = server.address() as { port: number };
+  const link = new CodexHubLink({ host: '127.0.0.1', port: address.port }, { id: 'watchdog', host: 'pc' }, async () => ({ folders: ['C:\\p'] }), 50, 200);
+  link.connect();
+  return {
+    link,
+    connections: () => connections,
+    close: async () => {
+      link.disconnect();
+      for (const ws of server.clients) ws.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+test('the watchdog reconnects when the hub never pings', async () => {
+  const setup = await bareLink();
+  try {
+    await until(() => setup.connections() >= 2, 2000);
+  } finally { await setup.close(); }
+});
+
+test('hub pings keep the watchdog from reconnecting', async () => {
+  const setup = await bareLink((ws) => {
+    const timer = setInterval(() => ws.ping(), 50);
+    ws.once('close', () => clearInterval(timer));
+  });
+  try {
+    await until(() => setup.connections() === 1);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.equal(setup.connections(), 1);
+  } finally { await setup.close(); }
+});
+
+test('disconnect stops the watchdog from reconnecting', async () => {
+  const setup = await bareLink();
+  try {
+    await until(() => setup.connections() === 1);
+    setup.link.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(setup.connections(), 1);
+  } finally { await setup.close(); }
+});
+
+test('non-object frames do not prevent the next adapter call', async () => {
+  let result: unknown;
+  const setup = await bareLink((ws) => {
+    ws.on('message', (data) => {
+      const msg = JSON.parse(String(data));
+      if (msg.type === 'adapter_result') result = msg;
+    });
+    for (const frame of [null, 42, 'hello']) ws.send(JSON.stringify(frame));
+    ws.send(JSON.stringify({ type: 'adapter_call', requestId: 'r1', call: { kind: 'folders' } }));
+  });
+  try {
+    await until(() => result !== undefined);
+    assert.deepEqual(result, { type: 'adapter_result', requestId: 'r1', ok: true, data: { folders: ['C:\\p'] } });
+  } finally { await setup.close(); }
 });

@@ -22,6 +22,8 @@ export interface AgentMessage {
 const TITLE_MAX = 30;
 const SOURCE_LABEL: Record<MessageSource, string> = { dashboard: 'Dashboard', telegram: 'Telegram', api: 'API' };
 
+const SOURCE_PREFIX = new RegExp(`^\\[claude-alarm(?: · (?:${Object.values(SOURCE_LABEL).join('|')}))?\\] ?`);
+
 export function codexSessionId(threadId: string): string {
   return `codex:${threadId}`;
 }
@@ -33,7 +35,7 @@ export function isTrackable(thread: CodexThread): boolean {
 export function threadTitle(thread: CodexThread): string {
   const name = thread.name?.trim();
   if (name) return name;
-  const preview = (thread.preview ?? '').replace(/\s+/g, ' ').trim();
+  const preview = (thread.preview ?? '').replace(/\s+/g, ' ').trim().replace(SOURCE_PREFIX, '').trim();
   if (preview) return preview.length > TITLE_MAX ? `${preview.slice(0, TITLE_MAX)}…` : preview;
   return thread.cwd.replace(/^.*[/\\]/, '') || thread.id.slice(0, 8);
 }
