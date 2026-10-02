@@ -187,7 +187,7 @@ claude-alarm hub start
 - If the hub console keeps printing `Codex daemon connection failed: spawn codex ENOENT`, the hub's terminal cannot find `codex`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal or set `codex.command`.
 - Every loaded Codex conversation appears as a session with a **Codex** badge. Replies, failures and approval requests are relayed to the dashboard and Telegram.
 - Messages you send show up in Codex prefixed with `[claude-alarm · Dashboard]` or `[claude-alarm · Telegram]`. If Codex is idle they start a new task; if it is working they join the current task and Codex reads them after its current step (you get a **Queued** notice). While Codex waits for an approval or for your answer, messages are not delivered; answer that first.
-- Images work the same way: paste, drag & drop or 📎 on the dashboard, or send a photo to the Telegram bot. The Codex adapter must run on the same PC as the hub to read them.
+- Images work the same way: paste, drag & drop or 📎 on the dashboard, or send a photo to the Telegram bot (PNG, JPEG, GIF or WebP). The Codex adapter must run on the same PC as the hub to read them.
 - Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Buttons from before a hub or adapter restart show **Expired**; if Codex is still waiting, a new request appears.
 - After updating claude-alarm, reload open dashboard tabs so they pick up the changes.
 - Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
@@ -296,7 +296,7 @@ In the dashboard input, type `@<session name>` to have the selected session send
 
 - Node.js >= 18
 - Claude Code with MCP Channels support
-- Optional, for Codex sessions: OpenAI Codex CLI with the app-server daemon (tested with 0.159.3; approvals also with app-server 0.160.0)
+- Optional, for Codex sessions: OpenAI Codex CLI with the app-server daemon (tested with 0.159.3; approvals, steering and images also with app-server 0.160.0)
 
 ## License
 

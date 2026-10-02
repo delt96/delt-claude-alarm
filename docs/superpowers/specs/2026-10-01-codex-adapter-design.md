@@ -70,6 +70,7 @@ codex?: { enabled: boolean; command?: string };
 | `src/codex/adapter.ts` | 발견·구독·대화별 Hub 연결·응답·지시·재연결 |
 | `src/codex/main.ts` | 실행 진입점, pid 파일, stdin 감시 |
 | `src/codex/approvals.ts` | 승인 요청 → 선택지, 응답, 해결 동기화 (단계 B) |
+| `src/codex/inputs.ts` | 지시·이미지 → Codex 입력(출처 접두어, 이미지 data URL) (단계 C) |
 
 대화별 Hub 연결은 기존 `HubClient`(`src/channel/hub-client.ts`)에 등록 정보 확장·재등록·끊은 뒤 재연결 금지를 더해 재사용한다.
 
@@ -202,7 +203,7 @@ choiceId?: string;
 
 - **가짜 proxy**: stdin/stdout에서 WebSocket 서버 역할을 하는 Node 스크립트. transport가 받는 spawn 함수를 테스트에서 바꿔 끼워(`config.codex.command`는 실제 실행 파일 경로용) proxy 이후의 실제 transport 경로를 그대로 지난다. 실제 Codex·데몬에는 접근하지 않는다.
 - 순수 함수: 상태 변환, 제목 결정, 출처 접두어, 선택지 생성(`availableDecisions` 있음/없음, 객체 선택지).
-- 어댑터 + 가짜 proxy + 격리 Hub 통합: 대화 발견 → 세션 등록, 이름 변경, notLoaded → 해제, `reply` 전달, idle/working일 때 지시 처리, (단계 B) 승인 왕복·resolved·expired.
+- 어댑터 + 가짜 proxy + 격리 Hub 통합: 대화 발견 → 세션 등록, 이름 변경, notLoaded → 해제, `reply` 전달, idle/working일 때 지시 처리, (단계 B) 승인 왕복·resolved·expired, (단계 C) 실행 중 steer·승인 대기 거절·연속 메시지 직렬화·목록 조회 실패 시 start·steer 실패 알림·이미지 data URL·못 읽는 이미지.
 - 모든 Hub 테스트는 기존처럼 `test/isolate-home.ts`로 HOME·USERPROFILE을 격리하고 텔레그램·웹훅·데스크톱 알림을 막는다(실제 봇 오염 사고 이력).
 - 수동 검증: 사전 확인과 같은 방식으로 실험용 터미널 대화에서 표시·응답·지시·승인을 확인한다.
 

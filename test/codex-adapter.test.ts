@@ -731,3 +731,72 @@ test('an image that cannot be read is reported and later messages still go throu
     dash.ws.close();
   }
 });
+
+test('a steer to a conversation that could not be subscribed still warns when the reply is not relayed', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/resume', () => {
+      throw new Error('no rollout found for thread id t1');
+    });
+    dm.handle('thread/turns/list', () => ({ data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null }));
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'one more thing' }));
+    await until(() => d.calls('turn/steer').length === 1);
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+    assert.equal(n.sessionId, 'codex:t1');
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test("a failing second message keeps the first message's reply-not-relayed warning", async () => {
+  let running: string | undefined;
+  const d = await startAdapter([thread('t1')], (dm) => {
+    dm.handle('thread/resume', () => {
+      throw new Error('no rollout found for thread id t1');
+    });
+    dm.handle('turn/start', () => {
+      running = 'u1';
+      return { turn: { id: 'u1' } };
+    });
+    dm.handle('thread/turns/list', () => ({ data: running ? [{ id: running, status: 'inProgress', items: [] }] : [], nextCursor: null }));
+    dm.handle('turn/steer', () => {
+      throw new Error('no active turn to steer');
+    });
+  });
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'first' }));
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'second' }));
+    await until(() => dash.inbox.find((m) => m.type === 'notification' && m.message === 'Codex rejected the message: no active turn to steer'));
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a conversation closed while its message is being delivered gets no turn', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => {
+    dm.handle('thread/turns/list', () => {
+      dm.notify('thread/closed', { threadId: 't1' });
+      return { data: [], nextCursor: null };
+    });
+  });
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'hello' }));
+    await until(() => d.calls('thread/turns/list').length >= 1);
+    await until(async () => !(await sessions()).some((x) => x.id === 'codex:t1'));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.calls('turn/start').length, 0);
+    assert.equal(d.calls('turn/steer').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});

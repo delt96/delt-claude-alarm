@@ -376,31 +376,36 @@ export class CodexAdapter {
       this.notify(threadId, 'Not delivered', 'The image could not be read here, so it was not delivered. Codex may be running on another PC.', 'warning');
       return;
     }
+    if (this.threads.get(threadId) !== t) return;
     t.pendingTurn = true;
+    const wasUnrelayed = t.unrelayed;
     try {
-      if (!this.rpc) throw new Error('not connected to the Codex daemon');
+      const rpc = this.rpc;
+      if (!rpc) throw new Error('not connected to the Codex daemon');
       await this.want(threadId, true);
-      const running = await this.runningTurn(threadId);
+      // A new conversation cannot be subscribed before its first turn (no rollout found); the active broadcast retries it.
+      const unsubscribed = !t.subscribed;
+      const running = await this.runningTurn(rpc, threadId);
+      if (this.threads.get(threadId) !== t) return;
+      if (unsubscribed) t.unrelayed = true;
       if (running) {
-        await this.rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
+        await rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
         this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info');
         return;
       }
-      // A new conversation cannot be subscribed before its first turn (no rollout found); the active broadcast retries it.
-      t.unrelayed = !t.subscribed;
-      await this.rpc.request('turn/start', { threadId, input });
+      await rpc.request('turn/start', { threadId, input });
     } catch (err) {
       t.pendingTurn = false;
-      t.unrelayed = false;
+      t.unrelayed = wasUnrelayed;
       this.releaseLater(t);
       this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
     }
   }
 
   // The list is unavailable before a new conversation's first turn; starting a turn is safe then, since turn/start steers a running turn.
-  private async runningTurn(threadId: string): Promise<string | undefined> {
+  private async runningTurn(rpc: RpcClient, threadId: string): Promise<string | undefined> {
     try {
-      const page = await this.rpc!.request<{ data: Array<{ id: string; status: string }> }>('thread/turns/list', {
+      const page = await rpc.request<{ data: Array<{ id: string; status: string }> }>('thread/turns/list', {
         threadId,
         limit: 1,
         sortDirection: 'desc',
