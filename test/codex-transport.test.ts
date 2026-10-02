@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { connectProxy, findCodex, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
-import { FakeDaemon } from './helpers/fake-codex-daemon.js';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { connectProxy, defaultSpawn, findCodex, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
+import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
 test('connectProxy speaks WebSocket over the proxy stdio', async () => {
   const daemon = new FakeDaemon();
@@ -50,6 +50,35 @@ test('findOnPath tells whether codex is installed', () => {
 test('resolveCommand leaves explicit paths and other platforms alone', () => {
   assert.deepEqual(resolveCommand('C:/tools/codex.exe', 'win32', { PATH: '' }), { file: 'C:/tools/codex.exe', shell: false });
   assert.deepEqual(resolveCommand('codex', 'linux', { PATH: '/usr/bin' }), { file: 'codex', shell: false });
+  assert.deepEqual(resolveCommand('/opt/codex.cmd', 'linux', { PATH: '' }), { file: '/opt/codex.cmd', shell: false });
+});
+
+test('an explicit .cmd or .bat path runs through a shell', () => {
+  assert.deepEqual(resolveCommand('C:\\tools\\codex.cmd', 'win32', { PATH: '' }), { file: 'C:\\tools\\codex.cmd', shell: true });
+  assert.deepEqual(resolveCommand('D:/x/Codex.BAT', 'win32', { PATH: '' }), { file: 'D:/x/Codex.BAT', shell: true });
+  assert.deepEqual(resolveCommand('codex.cmd', 'win32', { PATH: '' }), { file: 'codex.cmd', shell: true });
+});
+
+test('an explicit .cmd path in a folder with spaces really runs', { skip: process.platform !== 'win32' }, async () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cmd-')), 'with space');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'fake codex.cmd');
+  fs.writeFileSync(file, '@echo ran %1 %2\r\n');
+  const child = defaultSpawn(file, ['app-server', 'proxy']);
+  let output = '';
+  child.stdout?.on('data', (d) => { output += d; });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.equal(code, 0);
+  assert.match(output, /ran app-server proxy/);
+});
+
+test('connectProxy gives up on a daemon that never answers the handshake, and stops the proxy', async () => {
+  let child: ChildProcess | undefined;
+  const spawnFn: SpawnFn = () => (child = spawn(process.execPath, ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], { stdio: 'pipe' }));
+  const started = Date.now();
+  await assert.rejects(connectProxy('codex', spawnFn, 300), /^Error: codex daemon did not answer within 0.3s$/);
+  assert.ok(Date.now() - started < 3000);
+  await until(() => child!.exitCode !== null || child!.signalCode !== null);
 });
 
 function winInstall() {

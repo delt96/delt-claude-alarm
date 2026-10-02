@@ -18,7 +18,8 @@ export function resolveCommand(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; shell: boolean } {
-  if (platform !== 'win32' || /[\\/]/.test(command) || path.extname(command)) return { file: command, shell: false };
+  if (platform !== 'win32') return { file: command, shell: false };
+  if (/[\\/]/.test(command) || path.extname(command)) return { file: command, shell: /\.(cmd|bat)$/i.test(command) };
   const file = findCodex(command, platform, env);
   return file ? { file, shell: file.endsWith('.cmd') } : { file: command, shell: false };
 }
@@ -60,7 +61,9 @@ export const defaultSpawn: SpawnFn = (command, args) => {
 };
 
 // The daemon control socket speaks WebSocket, not JSONL: `codex app-server proxy` only relays bytes.
-export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn): Promise<ProxyConnection> {
+export const HANDSHAKE_TIMEOUT_MS = 10_000;
+
+export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn, timeoutMs = HANDSHAKE_TIMEOUT_MS): Promise<ProxyConnection> {
   const child = spawnFn(command, ['app-server', 'proxy']);
   child.stdin?.on('error', () => {});
   child.stderr?.on('data', (d) => logger.debug(`codex proxy: ${String(d).trim()}`));
@@ -90,9 +93,11 @@ export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn): 
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    const timer = setTimeout(() => fail(new Error(`codex daemon did not answer within ${timeoutMs / 1000}s`)), timeoutMs);
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       close();
       reject(err);
     };
@@ -102,6 +107,7 @@ export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn): 
     ws.once('open', () => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       child.on('error', (err) => logger.warn(`codex proxy error: ${err.message}`));
       ws.on('error', (err) => logger.warn(`codex daemon socket error: ${err.message}`));
       resolve({ ws, close });
