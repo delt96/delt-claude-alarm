@@ -12,20 +12,39 @@ export function resolveAdapterScript(baseDir: string): string | undefined {
   return [path.join(baseDir, '..', 'codex', 'main.js'), path.join(baseDir, 'codex', 'main.js')].find((p) => fs.existsSync(p));
 }
 
+export interface SupervisorOptions {
+  spawnFn?: SupervisorSpawn;
+  minDelayMs?: number;
+  maxDelayMs?: number;
+  stopGraceMs?: number;
+  env?: NodeJS.ProcessEnv;
+}
+
+// An adapter the hub starts must reach this hub, not one named by CLAUDE_ALARM_HUB_* in the shell; its token comes from config.json, not the environment.
+export function adapterEnv(base: NodeJS.ProcessEnv, hub: { host: string; port: number }): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, CLAUDE_ALARM_HUB_HOST: hub.host, CLAUDE_ALARM_HUB_PORT: String(hub.port) };
+  delete env.CLAUDE_ALARM_HUB_TOKEN;
+  return env;
+}
+
 export class CodexSupervisor {
   private child?: ChildProcess;
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
   private delay: number;
+  private readonly spawnFn: SupervisorSpawn;
+  private readonly minDelayMs: number;
+  private readonly maxDelayMs: number;
+  private readonly stopGraceMs: number;
+  private readonly env?: NodeJS.ProcessEnv;
 
-  constructor(
-    private script: string,
-    private spawnFn: SupervisorSpawn = spawn,
-    private minDelayMs = 2000,
-    private maxDelayMs = 60_000,
-    private stopGraceMs = 3000,
-  ) {
-    this.delay = minDelayMs;
+  constructor(private script: string, opts: SupervisorOptions = {}) {
+    this.spawnFn = opts.spawnFn ?? spawn;
+    this.minDelayMs = opts.minDelayMs ?? 2000;
+    this.maxDelayMs = opts.maxDelayMs ?? 60_000;
+    this.stopGraceMs = opts.stopGraceMs ?? 3000;
+    this.env = opts.env;
+    this.delay = this.minDelayMs;
   }
 
   start(): void {
@@ -48,11 +67,12 @@ export class CodexSupervisor {
 
   private launch(): void {
     const startedAt = Date.now();
-    // Detached: on Windows a non-detached child shares the hub's kill-on-close job and dies before it can remove codex.pid. Piped: a detached child cannot write to the hub's console (EBADF).
+    // Detached: on Windows a non-detached child shares the hub's kill-on-close job and dies before it can shut down cleanly. Piped: a detached child cannot write to the hub's console (EBADF).
     const child = this.spawnFn(process.execPath, [this.script, '--watch-stdin'], {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      ...(this.env ? { env: this.env } : {}),
     });
     this.child = child;
     child.stdout?.on('data', (d) => process.stdout.write(d));

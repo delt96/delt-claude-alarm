@@ -17,7 +17,7 @@ import {
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
 import { TelegramBot } from './telegram.js';
-import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
+import { CodexSupervisor, adapterEnv, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
@@ -978,7 +978,7 @@ export class HubServer {
       logger.warn('Codex adapter is enabled but codex/main.js was not found next to the hub');
       return;
     }
-    this.codexSupervisor = new CodexSupervisor(script);
+    this.codexSupervisor = new CodexSupervisor(script, { env: adapterEnv(process.env, { host: this.host, port: this.port }) });
     this.codexSupervisor.start();
     logger.info('Codex adapter started');
   }

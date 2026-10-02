@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CodexSupervisor, resolveAdapterScript } from '../src/hub/codex-supervisor.js';
+import { CodexSupervisor, adapterEnv, resolveAdapterScript } from '../src/hub/codex-supervisor.js';
 
 class FakeChild extends EventEmitter {
   ended = false;
@@ -15,17 +15,23 @@ class FakeChild extends EventEmitter {
   kill() { this.killed = true; return true; }
 }
 
-function harness(graceMs = 3000) {
+function harness(graceMs = 3000, env?: NodeJS.ProcessEnv) {
   const children: FakeChild[] = [];
   const args: string[][] = [];
   const options: any[] = [];
-  const sup = new CodexSupervisor('/x/codex/main.js', (_cmd, a, o) => {
-    args.push(a);
-    options.push(o);
-    const c = new FakeChild();
-    children.push(c);
-    return c as any;
-  }, 10, 40, graceMs);
+  const sup = new CodexSupervisor('/x/codex/main.js', {
+    spawnFn: (_cmd, a, o) => {
+      args.push(a);
+      options.push(o);
+      const c = new FakeChild();
+      children.push(c);
+      return c as any;
+    },
+    minDelayMs: 10,
+    maxDelayMs: 40,
+    stopGraceMs: graceMs,
+    env,
+  });
   return { sup, children, args, options };
 }
 
@@ -100,4 +106,31 @@ test('resolveAdapterScript finds the adapter next to the hub or the bundled CLI'
   fs.writeFileSync(path.join(root, 'codex', 'main.js'), '');
   assert.equal(resolveAdapterScript(path.join(root, 'hub')), path.join(root, 'codex', 'main.js'));
   assert.equal(resolveAdapterScript(root), path.join(root, 'codex', 'main.js'));
+});
+
+test('the adapter gets the environment it was given', () => {
+  const env = { CLAUDE_ALARM_HUB_HOST: '127.0.0.1', CLAUDE_ALARM_HUB_PORT: '7900' };
+  const { sup, options } = harness(3000, env);
+  sup.start();
+  assert.deepEqual(options[0].env, env);
+  sup.stop();
+});
+
+test('without an environment the adapter inherits the hub one', () => {
+  const { sup, options } = harness();
+  sup.start();
+  assert.equal('env' in options[0], false);
+  sup.stop();
+});
+
+test('adapterEnv points at the hub itself and keeps the token out of the environment', () => {
+  const base = {
+    PATH: '/bin',
+    CLAUDE_ALARM_HUB_HOST: 'other-pc',
+    CLAUDE_ALARM_HUB_PORT: '9999',
+    CLAUDE_ALARM_HUB_TOKEN: 'other-token',
+  };
+  const env = adapterEnv(base, { host: '0.0.0.0', port: 7900 });
+  assert.deepEqual(env, { PATH: '/bin', CLAUDE_ALARM_HUB_HOST: '0.0.0.0', CLAUDE_ALARM_HUB_PORT: '7900' });
+  assert.equal(base.CLAUDE_ALARM_HUB_TOKEN, 'other-token');
 });
