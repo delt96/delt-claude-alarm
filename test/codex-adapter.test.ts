@@ -297,12 +297,13 @@ const NOT_FOUND_NOTICE = {
   level: 'warning',
 };
 
-function missingCodexAdapter(hub: { host: string; port: number; token?: string }, counter: { attempts: number }): CodexAdapter {
+function missingCodexAdapter(hub: { host: string; port: number; token?: string }, counter: { attempts: number }, noticeTimeoutMs?: number): CodexAdapter {
   return new CodexAdapter({
     command: MISSING,
     hub,
     reconnectMinMs: 20,
     reconnectMaxMs: 40,
+    noticeTimeoutMs,
     spawnFn: () => {
       counter.attempts++;
       return spawn(MISSING, [], { stdio: 'pipe' });
@@ -350,6 +351,23 @@ test('no second notice is sent while the notice is still being sent', async () =
     adapter = missingCodexAdapter(rec.hub, counter);
     adapter.start();
     await until(() => rec.requests.length >= 1);
+    const seen = counter.attempts;
+    await until(() => counter.attempts >= seen + 3);
+    assert.equal(rec.requests.length, 1);
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
+});
+
+test('a hub that replies after the notice timeout still counts as notified', async () => {
+  const rec = await recordingHub({ delayMs: 300 });
+  const counter = { attempts: 0 };
+  try {
+    adapter = missingCodexAdapter(rec.hub, counter, 100);
+    adapter.start();
+    await until(() => rec.requests.length >= 1);
+    await new Promise((r) => setTimeout(r, 200));
     const seen = counter.attempts;
     await until(() => counter.attempts >= seen + 3);
     assert.equal(rec.requests.length, 1);

@@ -1,6 +1,6 @@
 # Codex를 못 찾을 때 — 표준 위치에서 찾기와 알림 한 번
 
-날짜: 2026-10-02 · 상태: 사용자 승인 대기
+날짜: 2026-10-02 · 상태: 사용자 승인(2026-10-02)
 
 ## 배경
 
@@ -44,6 +44,7 @@ PATH가 표준 위치보다 항상 먼저다(PATH에 `.cmd`만 있고 표준 위
 
 - `connect()`의 실패 처리에서 오류 코드가 `ENOENT`이고, 이 어댑터 인스턴스에서 아직 알림을 보내지 못했으면 Hub에 알린다
 - 요청: `POST http://<opts.hub.host>:<opts.hub.port>/api/notify`, 헤더 `Content-Type: application/json`, 토큰이 있으면 `Authorization: Bearer <token>`, 본문 `{ title, message, level: 'warning' }`, 요청 하나당 최대 5000ms
+- 요청이 시간 초과로 끝나면 보낸 것으로 친다 — Hub의 `/api/notify`는 데스크톱 알림 처리가 끝난 뒤에 응답하므로(`notifier.notify`를 기다림, `wait: true`) 알림 표시 방식에 따라 시간 제한을 넘길 수 있고, 그때도 Hub는 요청을 받은 것이다(최종 리뷰에서 지적, 이 PC 실측은 465ms라 재현되지 않음). 테스트용으로 시간은 어댑터 옵션 `noticeTimeoutMs`(기본 5000)
 - 문구(영어, 정확히 이대로):
   - title: `Codex not found`
   - message: `The Codex adapter cannot find "<command>". Open a new terminal and restart the hub, or set "codex.command" in ~/.claude-alarm/config.json.` (`<command>`는 `opts.command`)

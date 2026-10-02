@@ -181,7 +181,7 @@ claude-alarm hub stop
 claude-alarm hub start
 ```
 
-`claude-alarm init` also offers this once when it finds `codex` on `PATH`. Your answer is saved, and `codex enable` / `codex disable` change it later.
+`claude-alarm init` also offers this once when it finds `codex` (on `PATH`, or on Windows in the standard install locations below). Your answer is saved, and `codex enable` / `codex disable` change it later.
 
 - Requires the Codex CLI with its app-server daemon (`codex app-server daemon version` shows `running`). On Windows, when `codex` is not on `PATH`, the adapter also looks in the standard install locations (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`, then `%APPDATA%\npm\codex.cmd`). Anywhere else, set `"codex": { "command": "C:/path/to/codex.exe" }` in `~/.claude-alarm/config.json`.
 - If `codex` cannot be found at all, the hub sends one `Codex not found` notification (desktop and webhooks) and the console keeps printing `Codex daemon connection failed: spawn codex ENOENT`. A terminal opened before Codex was installed still has the old `PATH`, so open a new terminal and restart the hub, or set `codex.command`.

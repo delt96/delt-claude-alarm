@@ -25,6 +25,7 @@ export interface CodexAdapterOptions {
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
   idleReleaseMs?: number;
+  noticeTimeoutMs?: number;
 }
 
 interface Tracked {
@@ -146,14 +147,15 @@ export class CodexAdapter {
         message: `The Codex adapter cannot find "${this.opts.command}". Open a new terminal and restart the hub, or set "codex.command" in ~/.claude-alarm/config.json.`,
         level: 'warning',
       }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(this.opts.noticeTimeoutMs ?? 5000),
     })
       .then((res) => {
         this.notFoundNotice = res.ok ? 'sent' : 'unsent';
         if (!res.ok) logger.debug(`Codex not-found notice was refused (${res.status})`);
       })
       .catch((err) => {
-        this.notFoundNotice = 'unsent';
+        // The hub replies only after its desktop notification closes, which can outlast the timeout, so a timeout still means it arrived.
+        this.notFoundNotice = (err as Error).name === 'TimeoutError' ? 'sent' : 'unsent';
         logger.debug(`Codex not-found notice failed: ${(err as Error).message}`);
       });
   }
