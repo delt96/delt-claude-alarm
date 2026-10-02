@@ -1050,3 +1050,59 @@ test('a stopped adapter reports nothing', async () => {
   await new Promise((r) => setTimeout(r, 600));
   assert.deepEqual(outcomes, []);
 });
+
+test('a turn started in Codex whose subscription fails raises "Reply not relayed" when it ends', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => dm.handle('thread/resume', () => {
+    throw new Error('thread busy');
+  }), 150);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    d.notify('thread/status/changed', { threadId: 't1', status: active });
+    await until(() => d.calls('thread/resume').length === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+    assert.equal(n.level, 'warning');
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a turn started in Codex that is followed normally raises no warning', async () => {
+  const d = await startAdapter([thread('t1')], undefined, 150);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    d.notify('thread/status/changed', { threadId: 't1', status: active });
+    await until(() => d.calls('thread/resume').length === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    d.notify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!dash.inbox.some((m) => m.type === 'notification' && m.title === 'Reply not relayed'));
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('an approval that cannot be relayed falls back to the Codex warning without answering the daemon', async () => {
+  const d = await startAdapter([thread('t1', { status: active })]);
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    const link = (adapter as any).threads.get('t1').hub;
+    const send = link.send.bind(link);
+    link.send = (m: any) => {
+      if (m.type === 'permission_request') throw new Error('boom');
+      return send(m);
+    };
+    d.serverRequest(99, 'item/commandExecution/requestApproval', approvalParams);
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Codex is waiting'));
+    assert.equal(n.level, 'warning');
+    assert.equal(n.message, 'Codex asked for input that claude-alarm cannot relay. Handle it in Codex.');
+    assert.equal((adapter as any).approvals.size, 0);
+    assert.equal(d.responses.length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});

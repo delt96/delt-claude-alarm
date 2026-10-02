@@ -335,6 +335,8 @@ export class CodexAdapter {
       }
     } catch (err) {
       logger.debug(`subscription sync for ${threadId} deferred: ${(err as Error).message}`);
+      // A turn started in the Codex window has no other way to reach claude-alarm, so its reply is lost unless a later resume succeeds.
+      if (t.wantSubscribed && !t.subscribed && t.thread.status.type === 'active') t.unrelayed = true;
     }
   }
 
@@ -579,7 +581,7 @@ export class CodexAdapter {
     }
     if (!t || !view) {
       if (t && (broken || USER_REQUESTS.has(method))) {
-        this.notify(t.thread.id, 'Codex is waiting', 'Codex asked for input that claude-alarm cannot relay. Handle it in Codex.', 'warning');
+        this.waitingInCodex(t.thread.id);
       } else {
         logger.debug(`Ignoring Codex server request ${method}`);
       }
@@ -590,17 +592,28 @@ export class CodexAdapter {
       if (a.threadId === t.thread.id && a.rpcId === rpcId) return;
     }
     const requestId = randomUUID();
-    this.approvals.set(requestId, { threadId: t.thread.id, rpcId, turnId: params.turnId, choices: view.choices, answered: false });
-    t.hub.send({
-      type: 'permission_request',
-      sessionId: codexSessionId(t.thread.id),
-      requestId,
-      toolName: view.toolName,
-      description: view.description,
-      inputPreview: view.inputPreview,
-      timestamp: Date.now(),
-      choices: view.choices.map((c, i) => ({ id: String(i), label: c.label })),
-    });
+    try {
+      this.approvals.set(requestId, { threadId: t.thread.id, rpcId, turnId: params.turnId, choices: view.choices, answered: false });
+      t.hub.send({
+        type: 'permission_request',
+        sessionId: codexSessionId(t.thread.id),
+        requestId,
+        toolName: view.toolName,
+        description: view.description,
+        inputPreview: view.inputPreview,
+        timestamp: Date.now(),
+        choices: view.choices.map((c, i) => ({ id: String(i), label: c.label })),
+      });
+    } catch (err) {
+      this.approvals.delete(requestId);
+      logger.warn(`Codex ${method} could not be relayed: ${(err as Error).message}`);
+      // No reply to the daemon: the same request is open in the Codex window, and an error reply could cancel it there.
+      this.waitingInCodex(t.thread.id);
+    }
+  }
+
+  private waitingInCodex(threadId: string): void {
+    this.notify(threadId, 'Codex is waiting', 'Codex asked for input that claude-alarm cannot relay. Handle it in Codex.', 'warning');
   }
 
   private answer(threadId: string, requestId: string, choiceId?: string): void {
