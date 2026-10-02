@@ -47,6 +47,7 @@ export type ChannelMessage =
   | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }
   | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string; content?: string }
   | { type: 'image_to_session'; sessionId: string; imagePath: string; mimeType: string; originalName?: string; content?: string; source?: MessageSource }
+  | { type: 'upload_rejected'; sessionId: string; reason: string }
   | { type: 'sessions_list'; sessions: SessionInfo[] }
   | { type: 'session_connected'; session: SessionInfo }
   | { type: 'session_disconnected'; sessionId: string }

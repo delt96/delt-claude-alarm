@@ -706,7 +706,7 @@ export class HubServer {
             channelWs.send(JSON.stringify({ ...msg, source: 'dashboard' }));
           }
         } else if (msg.type === 'image_upload') {
-          this.handleImageUpload(msg);
+          this.handleImageUpload(ws, msg);
         } else if (msg.type === 'permission_response') {
           if (this.forwardPermissionResponse(msg)) {
             const verdict = msg.choiceId !== undefined ? `choice ${msg.choiceId}` : msg.behavior;
@@ -764,29 +764,34 @@ export class HubServer {
     }
   }
 
-  private handleImageUpload(msg: ChannelMessage & { type: 'image_upload' }): void {
+  private handleImageUpload(ws: WebSocket, msg: ChannelMessage & { type: 'image_upload' }): void {
     const { sessionId, imageData, mimeType, originalName, content } = msg;
+    const reject = (reason: string) => {
+      logger.warn(`Image upload rejected for ${sessionId}: ${reason}`);
+      const rejected: ChannelMessage = { type: 'upload_rejected', sessionId, reason };
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(rejected));
+    };
 
-    // Only allow for local sessions
+    const channelWs = this.channelSockets.get(sessionId);
+    if (!channelWs || channelWs.readyState !== WebSocket.OPEN) {
+      reject('the session is not connected');
+      return;
+    }
     if (!this.localChannels.has(sessionId)) {
-      logger.warn(`Image upload rejected: session ${sessionId} is not local`);
+      reject("this session is on another PC; images can only go to sessions on the hub's PC");
       return;
     }
 
-    const channelWs = this.channelSockets.get(sessionId);
-    if (!channelWs || channelWs.readyState !== WebSocket.OPEN) return;
-
-    // Validate mime type
     const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-    if (!allowedTypes.includes(mimeType)) return;
+    if (!allowedTypes.includes(mimeType)) {
+      reject('only PNG, JPEG, GIF and WebP images are supported');
+      return;
+    }
 
-    // Extract base64 data (remove data URL prefix if present)
     const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
-
-    // Validate size (10MB max)
     if (buffer.length > 10 * 1024 * 1024) {
-      logger.warn('Image upload rejected: exceeds 10MB');
+      reject('the image is larger than 10 MB');
       return;
     }
 

@@ -1285,6 +1285,12 @@
     el.classList.toggle('show', !!msg);
   }
 
+  function showUploadRejected(msg) {
+    if (state.selectedSession === msg.sessionId) showMentionError(`Image not delivered: ${msg.reason}`);
+    state.notifications.unshift({ sessionId: msg.sessionId, title: 'Image not delivered', message: msg.reason, level: 'warning', time: Date.now() });
+    renderNotifications();
+  }
+
   let mentionState = { open: false, items: [], index: 0, start: -1 };
 
   function currentMentionQuery(input) {
@@ -1447,6 +1453,9 @@
         else { state.unread[msg.sessionId] = (state.unread[msg.sessionId] || 0) + 1; renderSessions(); }
         state.notifications.unshift({ sessionId: msg.sessionId, title: 'Reply', message: msg.content.slice(0, 100), level: 'info', time: msg.timestamp });
         renderNotifications();
+        break;
+      case 'upload_rejected':
+        showUploadRejected(msg);
         break;
       case 'notification':
         state.notifications.unshift({ sessionId: msg.sessionId, title: msg.title, message: msg.message, level: msg.level || 'info', time: msg.timestamp });
