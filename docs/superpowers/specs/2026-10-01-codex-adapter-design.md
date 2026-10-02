@@ -43,6 +43,7 @@ claude-alarm은 Claude Code 세션만 대시보드·텔레그램으로 보고 �
 | `{type:'localImage', path}`는 파일을 턴 시작 시점이 아니라 나중에 읽는다. `turn/start` 응답 직후 파일을 지우면 모델이 이미지를 보지 못했다 | 단계 C 사전 실측 |
 | 첫 턴 전의 새 대화에는 `thread/turns/list`가 `… is not materialized yet; thread/turns/list is unavailable before first user message`로 실패한다 | 단계 C 사전 실측 |
 | 실행 중인 대화에 `turn/start`를 보내면 새 턴을 만들지 않고 진행 중인 턴에 steer된다(같은 턴 ID를 돌려주고 최종 답에 반영) | 단계 C 사전 실측 |
+| 9.5MB PNG(data URL 약 12.7MB)도 `turn/start`·`turn/steer` 모두 처리되고 연결이 유지된다(Hub 업로드 상한 10MB 안쪽) | 단계 C 구현 후 실측 |
 
 ## 설계
 
@@ -224,4 +225,4 @@ choiceId?: string;
 - 이미 해결된 승인에 뒤늦게 답하면 무시되는 것은 확인했다(1.5초 간격). 거의 같은 순간에 두 곳에서 답할 때와 데몬이 꺼져 있을 때 `proxy`의 동작은 미검증이다.
 - 터미널에서 시킨 모든 턴의 결과가 텔레그램으로 간다. 너무 잦으면 운영해 보고 필터를 따로 정한다.
 - Codex 세션 원격 제어 권한은 Hub 토큰에 묶인다(Claude 세션과 같음). 기능은 기본 꺼짐이다.
-- (단계 C) 큰 이미지(수 MB)의 데몬·모델 상한은 미검증이다.
+- (단계 C) 10MB를 넘는 이미지(텔레그램 사진은 Hub가 크기를 확인하지 않음)의 데몬·모델 상한은 미검증이다. 9.5MB까지는 확인했다.
