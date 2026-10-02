@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
+import type { OwnerState } from '../src/codex/instance-lock.js';
 import type { AdapterHub } from '../src/codex/hub-target.js';
 import {
   RESTART_HINT,
@@ -96,6 +97,17 @@ test('no report in time is a timeout, and the listeners are removed', async () =
   assert.deepEqual(await waitForAdapterReport(asChild(child), 50), { kind: 'timeout' });
   assert.equal(child.listenerCount('message'), 0);
   assert.equal(child.listenerCount('error'), 0);
+});
+
+test('lock reports end the wait', async () => {
+  const a = new FakeChild();
+  const waitingA = waitForAdapterReport(asChild(a), 1000);
+  a.emit('message', { type: 'codex-already-running', pid: 31 });
+  assert.deepEqual(await waitingA, { kind: 'already', pid: 31 });
+  const b = new FakeChild();
+  const waitingB = waitForAdapterReport(asChild(b), 1000);
+  b.emit('message', { type: 'codex-lock-failed', error: 'boom' });
+  assert.deepEqual(await waitingB, { kind: 'lockFailed', error: 'boom' });
 });
 
 // --- checkHub
@@ -195,32 +207,30 @@ test('an IPv6 hub is shown with brackets', () => {
 
 // --- startAdapter
 
-function deps(over: Partial<StartDeps> & { child?: FakeChild; pidFile?: { pid?: number } } = {}) {
+function deps(over: Partial<StartDeps> & { child?: FakeChild; owners?: OwnerState[] } = {}) {
   const out: string[] = [];
   const err: string[] = [];
-  const pidFile = over.pidFile ?? {};
+  const owners = [...(over.owners ?? [])];
   let spawned = 0;
   const d: StartDeps = {
     hub: hubAt(1),
     command: 'codex',
     logFile: LOG,
     spawnAdapter: () => { spawned++; return asChild(over.child ?? new FakeChild()); },
-    readPid: () => pidFile.pid,
-    isRunning: () => false,
-    removePidFile: () => { pidFile.pid = undefined; },
+    queryOwner: async () => owners.shift() ?? { state: 'absent' },
     out: (l) => out.push(l),
     err: (l) => err.push(l),
     reportTimeoutMs: 1000,
     hubTimeoutMs: 1000,
     ...over,
   };
-  return { d, out, err, pidFile, spawnedCount: () => spawned };
+  return { d, out, err, spawnedCount: () => spawned };
 }
 
 test('a started adapter that reached Codex and the hub prints three lines and exits 0', async () => {
   const s = await serve(statusOk);
   const child = new FakeChild();
-  const t = deps({ child, hub: s.hub, pidFile: { pid: 4242 } });
+  const t = deps({ child, hub: s.hub });
   try {
     const running = startAdapter(t.d);
     setTimeout(() => child.emit('message', { type: 'codex-first-connect', connected: true, userAgent: 'codex/1' }), 20);
@@ -233,7 +243,6 @@ test('a started adapter that reached Codex and the hub prints three lines and ex
     assert.deepEqual(t.err, []);
     assert.equal(child.disconnected, 1);
     assert.equal(child.unrefed, 1);
-    assert.equal(t.pidFile.pid, 4242);
   } finally { await s.close(); }
 });
 
@@ -264,7 +273,7 @@ test('no report within the limit is a warning, and the adapter is left running',
 test('an exit after the report wins over the report', async () => {
   const s = await serve((req, res) => { setTimeout(() => statusOk(req, res), 200); });
   const child = new FakeChild();
-  const t = deps({ child, hub: s.hub, pidFile: { pid: 4242 } });
+  const t = deps({ child, hub: s.hub });
   try {
     const running = startAdapter(t.d);
     setTimeout(() => child.emit('message', { type: 'codex-first-connect', connected: true }), 20);
@@ -272,7 +281,6 @@ test('an exit after the report wins over the report', async () => {
     assert.equal(await running, 1);
     assert.deepEqual(t.out, []);
     assert.deepEqual(t.err, [`Codex adapter exited during startup (code 1). See ${LOG}`]);
-    assert.equal(t.pidFile.pid, undefined);
     assert.equal(child.disconnected, 0);
   } finally { await s.close(); }
 });
@@ -286,16 +294,14 @@ test('an exit by signal is described by the signal', async () => {
   assert.deepEqual(t.err, [`Codex adapter exited during startup (signal SIGTERM). See ${LOG}`]);
 });
 
-test('a PID file owned by another live adapter is kept, and the start reports it as already running', async () => {
+test('an adapter that exits at startup while another one owns the lock is reported as already running', async () => {
   const s = await serve(statusOk);
   const child = new FakeChild();
-  const t = deps({ child, hub: s.hub, pidFile: {}, isRunning: (pid) => pid === 9999 });
+  const t = deps({ child, hub: s.hub, owners: [{ state: 'absent' }, { state: 'running', pid: 9999 }] });
   try {
     const running = startAdapter(t.d);
-    t.pidFile.pid = 9999;
     setTimeout(() => child.emit('exit', 0, null), 20);
     assert.equal(await running, 0);
-    assert.equal(t.pidFile.pid, 9999);
     assert.deepEqual(t.out, [
       'Codex adapter is already running (PID: 9999)',
       '  Codex daemon: not checked (the adapter was already running)',
@@ -303,6 +309,39 @@ test('a PID file owned by another live adapter is kept, and the start reports it
     ]);
     assert.deepEqual(t.err, []);
   } finally { await s.close(); }
+});
+
+test('a lock-held report from the adapter is printed as already running', async () => {
+  const s = await serve(statusOk);
+  const child = new FakeChild();
+  const t = deps({ child, hub: s.hub });
+  try {
+    const running = startAdapter(t.d);
+    setTimeout(() => {
+      child.emit('message', { type: 'codex-already-running', pid: 5150 });
+      child.emit('exit', 0, null);
+    }, 20);
+    assert.equal(await running, 0);
+    assert.deepEqual(t.out, [
+      'Codex adapter is already running (PID: 5150)',
+      '  Codex daemon: not checked (the adapter was already running)',
+      `  Hub: reachable at http://127.0.0.1:${s.hub.port}`,
+    ]);
+    assert.deepEqual(t.err, []);
+  } finally { await s.close(); }
+});
+
+test('a lock failure from the adapter is an error', async () => {
+  const child = new FakeChild();
+  const t = deps({ child, hub: hubAt(await closedPort()) });
+  const running = startAdapter(t.d);
+  setTimeout(() => {
+    child.emit('message', { type: 'codex-lock-failed', error: 'control socket path is too long: /x' });
+    child.emit('exit', 1, null);
+  }, 20);
+  assert.equal(await running, 1);
+  assert.deepEqual(t.out, []);
+  assert.deepEqual(t.err, ['Codex adapter cannot start: control socket path is too long: /x']);
 });
 
 test('a spawn error is a failed start', async () => {
@@ -317,7 +356,7 @@ test('a spawn error is a failed start', async () => {
 
 test('a running adapter is not started again, but the hub is still checked', async () => {
   const s = await serve(statusOk);
-  const t = deps({ hub: s.hub, pidFile: { pid: 777 }, isRunning: (pid) => pid === 777 });
+  const t = deps({ hub: s.hub, owners: [{ state: 'running', pid: 777 }] });
   try {
     assert.equal(await startAdapter(t.d), 0);
     assert.equal(t.spawnedCount(), 0);
@@ -330,7 +369,7 @@ test('a running adapter is not started again, but the hub is still checked', asy
 });
 
 test('a running adapter with an unreachable hub also gets the restart hint', async () => {
-  const t = deps({ hub: hubAt(await closedPort()), pidFile: { pid: 777 }, isRunning: (pid) => pid === 777 });
+  const t = deps({ hub: hubAt(await closedPort()), owners: [{ state: 'running', pid: 777 }] });
   assert.equal(await startAdapter(t.d), 0);
   assert.equal(t.out.length, 4);
   assert.equal(t.out[3], `  ${RESTART_HINT}`);

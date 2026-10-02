@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex } from './shared/config.js';
 import { findCodex } from './codex/transport.js';
 import { runFromCli } from './codex/run.js';
-import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE } from './shared/constants.js';
+import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
 import { hubUrlHost } from './shared/hub-url.js';
 import { resolveAdapterHub } from './codex/hub-target.js';
 import { startAdapter } from './codex/start-check.js';
+import { controlEndpoint, queryOwner, requestStop } from './codex/instance-lock.js';
+import { adapterStatus, stopAdapter, type ControlDeps } from './codex/control-cli.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -378,11 +380,7 @@ async function codexStart() {
     hub: resolveAdapterHub(config),
     command: config.codex?.command ?? 'codex',
     logFile: CODEX_LOG_FILE,
-    readPid: readCodexPid,
-    isRunning: isProcessRunning,
-    removePidFile: () => {
-      try { fs.unlinkSync(CODEX_PID_FILE); } catch {}
-    },
+    queryOwner: () => queryOwner(controlEndpoint(CONFIG_DIR)),
     spawnAdapter: () => {
       const logFd = fs.openSync(CODEX_LOG_FILE, 'a');
       return spawn(process.execPath, [path.join(__dirname, 'codex', 'main.js')], {
@@ -398,26 +396,22 @@ async function codexStart() {
   if (code !== 0) process.exit(code);
 }
 
-function codexStop() {
-  const pid = readCodexPid();
-  if (pid === undefined) {
-    console.log('Codex adapter is not running');
-    return;
-  }
-  try {
-    process.kill(pid, 'SIGTERM');
-    console.log(`Codex adapter stopped (PID: ${pid})`);
-  } catch {
-    console.log('Codex adapter process not found (may have already stopped)');
-  }
-  try { fs.unlinkSync(CODEX_PID_FILE); } catch {}
-}
-
-function codexStatus() {
-  const pid = readCodexPid();
-  const state = pid === undefined ? 'not running' : isProcessRunning(pid) ? `running (PID: ${pid})` : 'not running (stale PID file)';
-  console.log(`Codex adapter: ${state}`);
-  console.log(`Start with hub: ${loadConfig().codex?.enabled ? 'enabled' : 'disabled'}`);
+function controlDeps(): ControlDeps {
+  const endpoint = controlEndpoint(CONFIG_DIR);
+  const token = loadConfig().hub.token ?? '';
+  return {
+    queryOwner: () => queryOwner(endpoint),
+    requestStop: () => requestStop(endpoint, token),
+    legacyPid: readCodexPid,
+    isRunning: isProcessRunning,
+    removeLegacyPidFile: () => {
+      try { fs.unlinkSync(CODEX_PID_FILE); } catch {}
+    },
+    legacyPidFile: CODEX_PID_FILE,
+    configFile: CONFIG_FILE,
+    out: (line) => console.log(line),
+    err: (line) => console.error(line),
+  };
 }
 
 async function codexRun(argv: string[]): Promise<number> {
@@ -486,8 +480,8 @@ async function main() {
     if (sub === 'enable') codexEnable(true);
     else if (sub === 'disable') codexEnable(false);
     else if (sub === 'start') await codexStart();
-    else if (sub === 'stop') codexStop();
-    else if (sub === 'status') codexStatus();
+    else if (sub === 'stop') process.exitCode = await stopAdapter(controlDeps());
+    else if (sub === 'status') process.exitCode = await adapterStatus(controlDeps(), loadConfig().codex?.enabled === true);
     else if (sub === 'run') process.exitCode = await codexRun(args.slice(2));
     else {
       console.error(`Unknown codex command: ${sub}`);

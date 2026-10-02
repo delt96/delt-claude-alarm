@@ -1,3 +1,4 @@
+import type { OwnerState } from './instance-lock.js';
 import type { ChildProcess } from 'node:child_process';
 import type { FirstConnect } from './adapter.js';
 import type { AdapterHub } from './hub-target.js';
@@ -11,6 +12,8 @@ const NOT_CHECKED: Line = { text: 'Codex daemon: not checked (the adapter was al
 
 export type AdapterReport =
   | { kind: 'report'; outcome: FirstConnect }
+  | { kind: 'already'; pid: number }
+  | { kind: 'lockFailed'; error: string }
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null; error?: Error }
   | { kind: 'timeout' };
 
@@ -40,9 +43,11 @@ export function waitForAdapterReport(child: ChildProcess, timeoutMs = ADAPTER_RE
       resolve(result);
     };
     const onMessage = (msg: unknown) => {
-      if (msg && typeof msg === 'object' && (msg as { type?: unknown }).type === 'codex-first-connect') {
-        finish({ kind: 'report', outcome: toOutcome(msg as Record<string, unknown>) });
-      }
+      if (!msg || typeof msg !== 'object') return;
+      const m = msg as Record<string, unknown>;
+      if (m.type === 'codex-first-connect') finish({ kind: 'report', outcome: toOutcome(m) });
+      else if (m.type === 'codex-already-running' && Number.isInteger(m.pid)) finish({ kind: 'already', pid: m.pid as number });
+      else if (m.type === 'codex-lock-failed') finish({ kind: 'lockFailed', error: String(m.error ?? '') });
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => finish({ kind: 'exited', code, signal });
     const onError = (error: Error) => finish({ kind: 'exited', code: null, signal: null, error });
@@ -80,7 +85,7 @@ export async function checkHub(hub: AdapterHub, timeoutMs = HUB_CHECK_TIMEOUT_MS
   return res.status === 401 ? { kind: 'unauthorized' } : { kind: 'not-hub', status: res.status };
 }
 
-export function daemonLine(report: Exclude<AdapterReport, { kind: 'exited' }>, command: string, logFile: string): Line {
+export function daemonLine(report: Extract<AdapterReport, { kind: 'report' | 'timeout' }>, command: string, logFile: string): Line {
   if (report.kind === 'timeout') {
     return { text: `Codex daemon: no answer within ${ADAPTER_REPORT_TIMEOUT_MS / 1000}s. The adapter keeps trying. See ${logFile}`, warning: true };
   }
@@ -122,9 +127,7 @@ export interface StartDeps {
   command: string;
   logFile: string;
   spawnAdapter: () => ChildProcess;
-  readPid: () => number | undefined;
-  isRunning: (pid: number) => boolean;
-  removePidFile: () => void;
+  queryOwner: () => Promise<OwnerState>;
   out: (line: string) => void;
   err: (line: string) => void;
   reportTimeoutMs?: number;
@@ -149,9 +152,9 @@ interface Exit {
 }
 
 export async function startAdapter(d: StartDeps): Promise<number> {
-  const existing = d.readPid();
-  if (existing !== undefined && d.isRunning(existing)) {
-    printAlreadyRunning(d, existing, await checkHub(d.hub, d.hubTimeoutMs));
+  const existing = await d.queryOwner();
+  if (existing.state === 'running') {
+    printAlreadyRunning(d, existing.pid, await checkHub(d.hub, d.hubTimeoutMs));
     return 0;
   }
 
@@ -168,6 +171,14 @@ export async function startAdapter(d: StartDeps): Promise<number> {
   if (child.connected) child.disconnect();
   child.unref();
 
+  if (report.kind === 'already') {
+    printAlreadyRunning(d, report.pid, hub);
+    return 0;
+  }
+  if (report.kind === 'lockFailed') {
+    d.err(`Codex adapter cannot start: ${report.error}`);
+    return 1;
+  }
   if (report.kind !== 'exited' && !seen.exit && child.pid !== undefined) {
     d.out(`Codex adapter started (PID: ${child.pid}). Logs: ${d.logFile}`);
     printChecks(d, daemonLine(report, d.command, d.logFile), hubLine(hub, d.hub));
@@ -179,10 +190,9 @@ export async function startAdapter(d: StartDeps): Promise<number> {
     d.err(`Codex adapter failed to start: ${exit?.error?.message ?? 'no process id'}`);
     return 1;
   }
-  const owner = d.readPid();
-  if (owner !== undefined && owner === child.pid) d.removePidFile();
-  else if (owner !== undefined && d.isRunning(owner)) {
-    printAlreadyRunning(d, owner, hub);
+  const owner = await d.queryOwner();
+  if (owner.state === 'running' && owner.pid !== child.pid) {
+    printAlreadyRunning(d, owner.pid, hub);
     return 0;
   }
   const how = exit.code !== null ? `code ${exit.code}` : `signal ${exit.signal}`;
