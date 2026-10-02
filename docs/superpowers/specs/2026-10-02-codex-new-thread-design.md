@@ -1,6 +1,6 @@
 # 대시보드 "+"로 새 Codex 대화 만들기
 
-날짜: 2026-10-02 · 상태: 설계 승인(섹션별, 2026-10-02) · 스펙 검토 대기
+날짜: 2026-10-02 · 상태: 설계 승인(섹션별, 2026-10-02) · Codex 읽기 전용 검토 반영(REVISE, important 4건: `thread/start` RPC 시간 제한, 닫기 경쟁, 구독 해제 실패, discover 중 고정 정리) · 사용자 스펙 검토 대기
 
 ## 배경
 
@@ -62,7 +62,7 @@
 | Hub → 어댑터 | `{ type: 'adapter_call', requestId, call: { kind: 'folders' } \| { kind: 'create', cwd } }` |
 | 어댑터 → Hub | `{ type: 'adapter_result', requestId, ok: true, data } \| { type: 'adapter_result', requestId, ok: false, error }` |
 
-- `id`: 어댑터 프로세스마다 새로 만드는 UUID. `host`: `os.hostname()`. `ready`: Codex 데몬과 `initialize`까지 마쳤는지
+- `id`: 어댑터 프로세스마다 새로 만드는 UUID. `host`: `os.hostname()`. `ready`: Codex 데몬과 `initialize`를 마치고 기존 대화 탐색(`discover`)까지 끝났는지
 - `adapter_hello`는 연결이 열릴 때마다, 그리고 `ready`가 바뀔 때마다 보낸다
 - `data`: `folders` → `{ folders: string[] }`, `create` → `{ sessionId }`
 - `error`: 사람이 읽을 영어 문장
@@ -116,14 +116,14 @@ HTTP API(기존 인증·같은 출처 검사·POST JSON Content-Type 검사를 �
 **연결 수명**
 
 - `start()`에서 어댑터 전용 연결을 열고 `stop()`에서 닫는다
-- 데몬 `initialize`가 성공하면 `ready = true`, 데몬 연결 실패·끊김이면 `ready = false`. 바뀔 때마다 `adapter_hello`
+- 데몬과 `initialize`를 마치고 `discover()`까지 끝나면 `ready = true`, 데몬 연결 실패·끊김이면 `ready = false`. 바뀔 때마다 `adapter_hello`. discover 중에 만든 대화의 고정이 정리 단계에서 지워지지 않게 하려고 discover가 끝난 뒤에 켠다
 
 **만들기 (`create`)**
 
-1. 데몬에 연결돼 있지 않으면 실패 `Codex is not connected on <host>.`
+1. `ready`가 아니면 실패 `Codex is not connected on <host>.`
 2. `cwd` 정리: 앞뒤 공백을 지우고, 전체가 큰따옴표 한 쌍으로 감싸져 있으면 벗긴다(탐색기 "경로로 복사"가 따옴표를 붙인다)
 3. 절대 경로이고 그 PC에 있는 폴더인지 `fs.stat`으로 확인한다. 아니면 실패 `Folder not found on <host>: <cwd>`
-4. `thread/start { cwd, sandbox: 'danger-full-access', approvalPolicy: 'never' }`. 거부되면 실패 `Codex could not start the conversation: <message>`
+4. `thread/start { cwd, sandbox: 'danger-full-access', approvalPolicy: 'never' }`. 거부되면 실패 `Codex could not start the conversation: <message>`. 이 요청에는 RPC 시간 제한을 두지 않는다(응답이나 데몬 연결 종료로만 끝남) — `RpcClient`의 기본 30초 제한으로 끝내면 늦게 만들어진 대화의 응답이 버려져 고정되지 않은 채 실제로는 구독된 대화가 남는다. 시간 제한은 Hub의 60초뿐이고, 늦게 성공한 대화는 고정되어 목록에 나타난다(Hub 504 문구와 일치). `RpcClient.request`에 요청별 시간 제한 옵션(제한 없음 포함)을 더한다
 5. `pins`에 넣고 응답의 `thread`로 `upsert`한다. `thread/started` 방송이 먼저 와서 이미 추적 중이면 등록만 다시 해서 `closable: true`가 된다
 6. 그 대화의 `subscribed = true`로 둔다 — `thread/start`를 부른 연결은 이미 구독자다(`codex run`은 resume 없이 그 대화 이벤트를 받는다). **실측 확인 항목 1**. `upsert`가 예약한 구독 동기화가 돌기 전에 표시해야 한다. 늦으면 첫 턴 전이라 실패할 `thread/resume`이 나간다
 7. 성공 `{ sessionId: 'codex:<threadId>' }`
@@ -139,21 +139,24 @@ HTTP API(기존 인증·같은 출처 검사·POST JSON Content-Type 검사를 �
 **닫기 (`codex_close`)**
 
 - 고정 대화가 아니면 무시한다
-- `pins`에서 빼고:
-  - 작업 중이 아니면(status가 active가 아니고 `pendingTurn`도 아님): 구독 해제(`thread/unsubscribe`)가 끝난 뒤 추적에서 뺀다(`drop`) → 세션이 대시보드에서 바로 사라진다. 다른 구독자가 없으면 데몬이 60초 뒤 대화를 내린다. 추적에서 먼저 빼면 구독 해제가 건너뛰어지므로 순서를 지킨다
-  - 작업 중이면: 등록만 다시 한다(`closable: false`). 진행 중인 작업은 중단하지 않는다. 턴이 끝나면 지금의 창 대화처럼 구독을 놓고 약 1분 뒤 사라진다
+- `pins`에서 빼고 등록을 다시 한다(`closable: false`). 그다음:
+  - 작업 중이면(status가 active이거나 `pendingTurn`): 더 하지 않는다. 진행 중인 작업은 중단하지 않는다. 턴이 끝나면 지금의 창 대화처럼 구독을 놓고 약 1분 뒤 사라진다
+  - 작업 중이 아니면: 구독 해제(`want(false)` → `thread/unsubscribe`)를 기다린 뒤 **다시 확인한다**. 추적에서 먼저 빼면 구독 해제가 건너뛰어지므로 순서를 지킨다
+    - 그 사이 작업이 시작됐으면(같은 추적 객체인데 active, `pendingTurn`, 또는 다시 구독을 원함 — 기다리는 동안 지시 전달이나 active 방송이 `want(true)`를 걸 수 있다): 작업 중 닫기와 같이 둔다
+    - 구독이 풀렸으면(`subscribed === false`): 추적에서 뺀다(`drop`) → 세션이 대시보드에서 바로 사라진다. 다른 구독자가 없으면 데몬이 60초 뒤 대화를 내린다
+    - 구독 해제가 실패했으면(`subscribed`가 그대로 — `syncSubscription`은 오류를 로그만 남기고 삼킨다): 고정을 되돌리고(`closable: true`) 그 세션에 경고 알림 `Not closed` / `Codex did not release the conversation. Try closing it again.`을 보낸다. 구독된 대화를 추적 없이 버리지 않는다
 - 대화를 삭제·보관하지 않는다 — Codex 기록에 남아 Codex 앱에서 이어 갈 수 있다
 
 **고정이 풀리는 경우**
 
 - 닫기, `thread/archived` · `thread/deleted` · `thread/closed`
 - 데몬 연결이 끊기면(`onDaemonLost`, 연결 실패) 추적은 모두 빠지지만 `pins`는 유지한다. 60초 안에 다시 붙으면 `discover()`가 대화를 다시 찾고, 고정 대화는 `want()`에서 다시 구독된다
-- `discover()`가 끝난 뒤 loaded 목록에 없는 고정 ID는 `pins`에서 지운다
+- `discover()`가 끝난 뒤 loaded 목록에 없는 고정 ID는 `pins`에서 지운다. 단 discover를 시작할 때 이미 있던 고정 ID만 대상으로 하고, discover 도중 데몬 연결이 바뀌었으면(시작 때의 `rpc`와 지금의 `rpc`가 다름) 정리하지 않는다 — 옛 연결의 목록으로 새 연결의 고정을 지우지 않기 위해서다
 - 첫 턴 전 고정 대화는 다시 붙은 뒤 resume이 실패할 수 있어 60초 뒤 내려간다(`thread/closed` → 고정 해제). 받아들인다
 
 **폴더 목록 (`folders`)**
 
-- 데몬에 연결돼 있지 않으면 실패 `Codex is not connected on <host>.`
+- `ready`가 아니면 실패 `Codex is not connected on <host>.`
 - `thread/list { limit: 50, sortKey: 'updated_at' }`의 `cwd`를 나온 순서대로 중복 없이 최대 10개
 
 **제목 다시 읽기**
@@ -210,11 +213,15 @@ Hub:
 어댑터(FakeDaemon 확장):
 
 - `create`: `thread/start` 파라미터(`cwd`, `danger-full-access`, `never`), 등록에 `closable: true`, 턴이 끝나도 `thread/unsubscribe` 없음
+- `create`: `thread/start` 응답이 30초를 넘겨 와도 고정된다(RPC 시간 제한 없음). `ready` 전(discover 중)에는 실패
+- `RpcClient.request` 요청별 시간 제한(제한 없음 포함)
 - `cwd` 정리(따옴표·공백), 없는 폴더·상대 경로 실패, 데몬 미연결 실패
 - 닫기: 작업 중이 아니면 `thread/unsubscribe` 뒤 세션 사라짐. 작업 중이면 `closable: false`로 남고 턴이 끝나면 구독 해제. 고정 아닌 대화의 `codex_close`는 무시
+- 닫기 경쟁: `thread/unsubscribe` 응답을 붙잡아 둔 사이 지시 전달 또는 active 방송 → 추적이 남고 작업 중 닫기처럼 동작(응답 중계됨)
+- 닫기 실패: `thread/unsubscribe` 오류 → 세션이 남고 `closable: true`로 돌아오며 `Not closed` 알림
 - `folders`: 중복 제거·순서·최대 10개, 데몬 미연결 실패
 - 이름·미리보기 없는 대화: 턴이 끝나면 `thread/read` 후 새 제목으로 재등록
-- 데몬 재연결 뒤 고정 대화 다시 구독, loaded 목록에 없는 고정 ID 정리
+- 데몬 재연결 뒤 고정 대화 다시 구독, loaded 목록에 없는 고정 ID 정리. discover 중 데몬 연결이 바뀌면 정리하지 않음
 - `ready` 변화에 따른 `adapter_hello`
 
 대시보드(기존처럼 `vm`으로 뽑아낼 수 있는 부분): 쓸 수 있는 어댑터 0·1·여러 개(not ready 섞임)에 따른 Codex 부분 표시와 PC 선택, 등록이 늦을 때 나중 선택과 취소, 닫기 두 번 누르기.
