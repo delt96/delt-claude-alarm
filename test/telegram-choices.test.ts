@@ -62,11 +62,16 @@ test('pressing a choice sends it once and removes the buttons', async (t) => {
   assert.match(edit.text, /Sent: Always allow this command/);
 });
 
-test('an unknown token answers Expired', async (t) => {
+test('an unknown token answers Expired and removes the buttons', async (t) => {
   const { bot, calls, verdicts } = setup(t);
   await press(bot, 'pc:deadbeef');
   assert.deepEqual(verdicts, []);
   assert.equal(calls.find((c) => c.api === 'answerCallbackQuery')!.body.text, 'Expired');
+  assert.deepEqual(calls.find((c) => c.api === 'editMessageReplyMarkup')!.body, {
+    chat_id: 111,
+    message_id: 42,
+    reply_markup: { inline_keyboard: [] },
+  });
 });
 
 test('resolution edits the message and retires its buttons', async (t) => {

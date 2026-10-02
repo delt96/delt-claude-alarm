@@ -9,11 +9,19 @@ import { permissionKey } from '../shared/permission-key.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_CHOICE_MESSAGES = 200;
+const MAX_SELECTIONS = 20;
 
 interface ChoiceMessage {
   html: string;
   messageId?: number;
   outcome?: string;
+}
+
+interface PendingSelection {
+  text?: string;
+  photoFileId?: string;
+  caption?: string;
+  sessionIds: string[];
 }
 
 interface TelegramPhotoSize {
@@ -68,8 +76,8 @@ export class TelegramBot {
   private choiceMessages = new Map<string, ChoiceMessage>();
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
-  // Pending messages for session selection
-  private pendingMessages = new Map<number, { text?: string; photoFileId?: string; caption?: string; sessionIds: string[] }>(); // chatId -> pending
+  // Keyed by prompt, not by chat: buttons from an older prompt must still send that prompt's message.
+  private selections = new Map<string, PendingSelection>();
 
   constructor(config: TelegramConfig) {
     this.config = config;
@@ -205,13 +213,13 @@ export class TelegramBot {
       }
     }
 
-    // Check if it's a session selection command: /s_<index>
     if (text) {
       const selectMatch = text.match(/^\/s_(\d+)$/);
-      if (selectMatch) {
-        const pending = this.pendingMessages.get(msg.chat.id);
+      const latest = [...this.selections.keys()].pop();
+      if (selectMatch && latest !== undefined) {
+        const pending = this.selections.get(latest);
         if (pending) {
-          this.pendingMessages.delete(msg.chat.id);
+          this.selections.delete(latest);
           const session = this.pendingSession(pending, parseInt(selectMatch[1], 10) - 1);
           if (session) {
             if (pending.photoFileId) {
@@ -245,17 +253,18 @@ export class TelegramBot {
       return;
     }
 
-    // Multiple sessions — ask user to pick with inline buttons
+    const selectionId = randomUUID().replace(/-/g, '').slice(0, 8);
     const sessionIds = sessions.map((s) => s.id);
     if (hasPhoto) {
       const largest = msg.photo![msg.photo!.length - 1];
-      this.pendingMessages.set(msg.chat.id, { photoFileId: largest.file_id, caption: text, sessionIds });
+      this.selections.set(selectionId, { photoFileId: largest.file_id, caption: text, sessionIds });
     } else {
-      this.pendingMessages.set(msg.chat.id, { text, sessionIds });
+      this.selections.set(selectionId, { text, sessionIds });
     }
+    while (this.selections.size > MAX_SELECTIONS) this.selections.delete(this.selections.keys().next().value as string);
     const buttons = sessions.map((s, i) => ({
       text: this.getLabel(s),
-      callback_data: `sess:${i}:${msg.chat.id}`,
+      callback_data: `sel:${selectionId}:${i}`,
     }));
     // Arrange buttons in rows of 2
     const rows: Array<typeof buttons> = [];
@@ -443,7 +452,7 @@ export class TelegramBot {
   private async handleChoiceCallback(query: TelegramCallbackQuery): Promise<void> {
     const choice = this.choiceTokens.get(query.data!.slice('pc:'.length));
     if (!choice) {
-      await this.answerCallbackQuery(query.id, 'Expired');
+      await this.expire(query);
       return;
     }
     this.dropChoiceTokens(choice.sessionId, choice.requestId);
@@ -474,8 +483,13 @@ export class TelegramBot {
     if (!query.data) return;
     if (String(query.message?.chat.id) !== String(this.config.chatId)) return;
 
-    if (query.data.startsWith('sess:')) {
+    if (query.data.startsWith('sel:')) {
       await this.handleSessionSelectCallback(query);
+      return;
+    }
+
+    if (query.data.startsWith('sess:')) {
+      await this.expire(query);
       return;
     }
 
@@ -508,18 +522,18 @@ export class TelegramBot {
   }
 
   private async handleSessionSelectCallback(query: TelegramCallbackQuery): Promise<void> {
-    const parts = query.data!.split(':');
-    if (parts.length < 3) return;
-    const [, idxStr, chatIdStr] = parts;
-    const chatId = parseInt(chatIdStr, 10);
-
-    const pending = this.pendingMessages.get(chatId);
-    const session = pending ? this.pendingSession(pending, parseInt(idxStr, 10)) : undefined;
-    if (!pending || !session) {
+    const [, selectionId, idxStr] = query.data!.split(':');
+    const pending = this.selections.get(selectionId);
+    if (!pending) {
+      await this.expire(query);
+      return;
+    }
+    const session = this.pendingSession(pending, parseInt(idxStr, 10));
+    if (!session) {
       await this.answerCallbackQuery(query.id, 'Session not found');
       return;
     }
-    this.pendingMessages.delete(chatId);
+    this.selections.delete(selectionId);
 
     if (pending.photoFileId) {
       await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
@@ -543,6 +557,23 @@ export class TelegramBot {
       });
     } catch (err) {
       logger.warn(`Telegram answerCallbackQuery error: ${(err as Error).message}`);
+    }
+  }
+
+  private async expire(query: TelegramCallbackQuery): Promise<void> {
+    await this.answerCallbackQuery(query.id, 'Expired');
+    if (query.message) await this.removeButtons(query.message.chat.id, query.message.message_id);
+  }
+
+  private async removeButtons(chatId: number | string, messageId: number): Promise<void> {
+    try {
+      await fetch(`${this.apiUrl}/editMessageReplyMarkup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }),
+      });
+    } catch (err) {
+      logger.warn(`Telegram editMessageReplyMarkup error: ${(err as Error).message}`);
     }
   }
 
