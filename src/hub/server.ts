@@ -22,6 +22,7 @@ import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
+import { isEntryScript } from '../shared/entry.js';
 import {
   isAuthorized,
   isCrossOrigin,
@@ -912,11 +913,8 @@ export class HubServer {
   }
 }
 
-// Direct execution support
-if (process.argv[1] && (
-  process.argv[1].endsWith('hub/server.js') ||
-  process.argv[1].endsWith('hub/server.ts')
-)) {
+// Not import.meta.url: dist/cli.js bundles this module, so that check would also pass inside the CLI and start a second hub.
+if (isEntryScript(process.argv[1], ['/hub/server.js', '/hub/server.ts'])) {
   installCrashGuard('hub daemon');
   logStartup('Hub daemon');
   const config = loadConfig();
