@@ -60,8 +60,9 @@ import assert from 'node:assert/strict';
 import { resolveAdapterHub } from '../src/codex/hub-target.js';
 import type { AppConfig } from '../src/shared/types.js';
 
-function config(host: string, port = 7900, token: string | undefined = 'cfg-token'): AppConfig {
-  return { hub: { host, port, token }, notifications: { desktop: false, sound: false }, webhooks: [] };
+// null, not undefined, means "no token": passing undefined would select the default.
+function config(host: string, port = 7900, token: string | null = 'cfg-token'): AppConfig {
+  return { hub: { host, port, token: token ?? undefined }, notifications: { desktop: false, sound: false }, webhooks: [] };
 }
 
 test('config hosts are turned into URL hosts', () => {
@@ -101,7 +102,7 @@ test('each override is reported on its own', () => {
 });
 
 test('a config without a token stays without one', () => {
-  assert.equal(resolveAdapterHub(config('127.0.0.1', 7900, undefined), {}).token, undefined);
+  assert.equal(resolveAdapterHub(config('127.0.0.1', 7900, null), {}).token, undefined);
 });
 
 test('every resolved host makes a valid URL', () => {
@@ -1223,7 +1224,7 @@ Run: `npm run build` — Expected: completes; `dist/cli.js` and `dist/codex/main
 
 - [ ] **Step 4: Smoke-run the built CLI without Codex or a hub** (isolated HOME, no real daemon, nothing listening)
 
-Write and run this script from the repository root (e.g. as a file in a temp folder, `node <file>`):
+Write this script to a `.mjs` file outside the repository (it uses top-level `await`) and run it with the repository root as the working directory (`node <file>.mjs`):
 
 ```js
 import { spawnSync } from 'node:child_process';
