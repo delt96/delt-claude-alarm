@@ -21,7 +21,7 @@ import { CodexSupervisor, resolveAdapterScript } from './codex-supervisor.js';
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexLinkMessage } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexCall, CodexLinkMessage } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { isEntryScript } from '../shared/entry.js';
 import { hubUrlHost } from '../shared/hub-url.js';
@@ -44,6 +44,10 @@ function validChoices(choices: unknown): PermissionChoice[] | undefined {
   const valid = choices.filter((c): c is PermissionChoice => typeof c?.id === 'string' && typeof c?.label === 'string');
   return valid.length ? valid : undefined;
 }
+
+type CodexCallOutcome = { status: number; body: unknown };
+
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
 
 export class HubServer {
   private httpServer: http.Server;
@@ -76,6 +80,7 @@ export class HubServer {
   private codexAdapters = new Map<string, { ws: WebSocket; info: CodexAdapterInfo }>();
   private codexAlive = new WeakMap<WebSocket, boolean>();
   private codexCallTimeoutMs: number;
+  private codexCalls = new Map<string, { adapterId: string; settle: (outcome: CodexCallOutcome) => void }>();
 
   constructor(config?: Partial<AppConfig>, options: { codexCallTimeoutMs?: number } = {}) {
     this.codexCallTimeoutMs = options.codexCallTimeoutMs ?? 60_000;
@@ -261,6 +266,12 @@ export class HubServer {
       this.handleApiSend(req, res);
     } else if (url.pathname === '/api/notify' && req.method === 'POST') {
       this.handleApiNotify(req, res);
+    } else if (url.pathname === '/api/codex/folders' && req.method === 'GET') {
+      this.handleCodexFolders(url, res);
+    } else if (url.pathname === '/api/codex/threads' && req.method === 'POST') {
+      this.handleCodexCreate(req, res);
+    } else if (url.pathname === '/api/codex/threads/close' && req.method === 'POST') {
+      this.handleCodexClose(req, res);
     } else if (url.pathname === '/api/webhooks' && req.method === 'GET') {
       const config = loadConfig();
       this.jsonResponse(res, 200, { webhooks: config.webhooks || [] });
@@ -577,14 +588,81 @@ export class HubServer {
         adapterId = a.id;
         this.codexAdapters.set(a.id, { ws, info: { id: a.id, host: a.host, ready: a.ready === true, isLocal } });
         this.broadcastCodexAdapters();
+      } else if (msg.type === 'adapter_result' && adapterId) {
+        const call = this.codexCalls.get(msg.requestId);
+        if (!call || call.adapterId !== adapterId) return;
+        call.settle(msg.ok ? { status: 200, body: msg.data } : { status: 422, body: { error: String(msg.error) } });
       }
     });
     ws.on('close', () => {
       if (!adapterId || this.codexAdapters.get(adapterId)?.ws !== ws) return;
       this.codexAdapters.delete(adapterId);
+      for (const call of [...this.codexCalls.values()]) {
+        if (call.adapterId === adapterId) call.settle({ status: 502, body: { error: 'Codex adapter disconnected' } });
+      }
       logger.info(`Codex adapter disconnected: ${adapterId}`);
       this.broadcastCodexAdapters();
     });
+  }
+
+  private callCodexAdapter(adapterId: string, call: CodexCall): Promise<CodexCallOutcome> {
+    const adapter = this.codexAdapters.get(adapterId);
+    if (!adapter || adapter.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve({ status: 404, body: { error: 'Codex adapter is not connected' } });
+    }
+    const requestId = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(
+        () => settle({ status: 504, body: { error: 'Codex did not respond in time. The conversation may still appear.' } }),
+        this.codexCallTimeoutMs,
+      );
+      const settle = (outcome: CodexCallOutcome) => {
+        clearTimeout(timer);
+        this.codexCalls.delete(requestId);
+        resolve(outcome);
+      };
+      this.codexCalls.set(requestId, { adapterId, settle });
+      adapter.ws.send(JSON.stringify({ type: 'adapter_call', requestId, call } satisfies CodexLinkMessage));
+    });
+  }
+
+  private async handleCodexFolders(url: URL, res: http.ServerResponse): Promise<void> {
+    const adapterId = url.searchParams.get('adapterId');
+    if (!nonEmpty(adapterId)) {
+      this.jsonResponse(res, 400, { error: 'adapterId is required' });
+      return;
+    }
+    const out = await this.callCodexAdapter(adapterId, { kind: 'folders' });
+    this.jsonResponse(res, out.status, out.body);
+  }
+
+  private async handleCodexCreate(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = (await this.readBody(req)) as { adapterId?: unknown; cwd?: unknown } | null;
+    const adapterId = body?.adapterId;
+    const cwd = body?.cwd;
+    if (!nonEmpty(adapterId) || !nonEmpty(cwd)) {
+      this.jsonResponse(res, 400, { error: 'adapterId and cwd are required' });
+      return;
+    }
+    const out = await this.callCodexAdapter(adapterId, { kind: 'create', cwd });
+    this.jsonResponse(res, out.status, out.body);
+  }
+
+  private async handleCodexClose(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = (await this.readBody(req)) as { sessionId?: unknown } | null;
+    const sessionId = body?.sessionId;
+    if (!nonEmpty(sessionId)) {
+      this.jsonResponse(res, 400, { error: 'sessionId is required' });
+      return;
+    }
+    const session = this.sessions.get(sessionId);
+    const ws = this.channelSockets.get(sessionId);
+    if (session?.agentKind !== 'codex' || !session.closable || ws?.readyState !== WebSocket.OPEN) {
+      this.jsonResponse(res, 404, { error: 'No closable Codex conversation' });
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'codex_close', sessionId } satisfies ChannelMessage));
+    this.jsonResponse(res, 200, { ok: true });
   }
 
   private codexAdapterList(): CodexAdapterInfo[] {
