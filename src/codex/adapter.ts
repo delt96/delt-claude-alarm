@@ -18,6 +18,10 @@ import {
   type CodexThreadStatus,
 } from './mapping.js';
 
+export type FirstConnect =
+  | { connected: true; userAgent?: string }
+  | { connected: false; error: string; notFound: boolean };
+
 export interface CodexAdapterOptions {
   command: string;
   hub: { host: string; port: number; token?: string };
@@ -26,6 +30,7 @@ export interface CodexAdapterOptions {
   reconnectMaxMs?: number;
   idleReleaseMs?: number;
   noticeTimeoutMs?: number;
+  onFirstConnect?: (outcome: FirstConnect) => void;
 }
 
 interface Tracked {
@@ -62,6 +67,7 @@ export class CodexAdapter {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private delay: number;
   private notFoundNotice: 'unsent' | 'sending' | 'sent' = 'unsent';
+  private firstConnectReported = false;
 
   constructor(private opts: CodexAdapterOptions) {
     this.delay = opts.reconnectMinMs ?? 2000;
@@ -102,11 +108,17 @@ export class CodexAdapter {
       });
       live.notify('initialized');
       logger.info(`Connected to Codex daemon (${init.userAgent ?? 'unknown version'})`);
+      this.reportFirstConnect({ connected: true, ...(init.userAgent ? { userAgent: init.userAgent } : {}) });
       await this.discover();
       this.delay = this.opts.reconnectMinMs ?? 2000;
     } catch (err) {
       logger.warn(`Codex daemon connection failed: ${(err as Error).message}`);
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.noticeNotFound();
+      this.reportFirstConnect({
+        connected: false,
+        error: (err as Error).message,
+        notFound: (err as NodeJS.ErrnoException).code === 'ENOENT',
+      });
       if (rpc && this.rpc === rpc) {
         this.rpc = undefined;
         this.conn?.close();
@@ -133,6 +145,17 @@ export class CodexAdapter {
       void this.connect();
     }, this.delay);
     this.delay = Math.min(this.delay * 2, this.opts.reconnectMaxMs ?? 60_000);
+  }
+
+  private reportFirstConnect(outcome: FirstConnect): void {
+    if (this.firstConnectReported || this.stopped) return;
+    this.firstConnectReported = true;
+    try {
+      this.opts.onFirstConnect?.(outcome);
+    } catch (err) {
+      // Inside connect(), a throw here would be taken for a daemon failure and drop a healthy connection.
+      logger.debug(`First-connect observer failed: ${(err as Error).message}`);
+    }
   }
 
   private noticeNotFound(): void {

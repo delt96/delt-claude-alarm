@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { HubServer } from '../src/hub/server.js';
-import { CodexAdapter } from '../src/codex/adapter.js';
+import { CodexAdapter, type FirstConnect } from '../src/codex/adapter.js';
 import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
 const PORT = 7994;
@@ -938,4 +938,110 @@ test('a conversation closed while its message is being delivered gets no turn', 
   } finally {
     dash.ws.close();
   }
+});
+
+function firstConnectDaemon(threads: any[] = []): Promise<FakeDaemon> {
+  const d = new FakeDaemon();
+  daemon = d;
+  return d.start().then(() => {
+    d.handle('thread/loaded/list', () => ({ data: threads.map((t) => t.id), nextCursor: null }));
+    d.handle('thread/read', (p) => ({ thread: threads.find((x) => x.id === p.threadId) }));
+    d.handle('thread/resume', () => ({}));
+    d.handle('thread/unsubscribe', () => ({ status: 'unsubscribed' }));
+    return d;
+  });
+}
+
+test('the first daemon connection is reported once, with the daemon version', async () => {
+  const d = await firstConnectDaemon();
+  const outcomes: FirstConnect[] = [];
+  adapter = new CodexAdapter({
+    command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200,
+    onFirstConnect: (o) => outcomes.push(o),
+  });
+  adapter.start();
+  await until(() => outcomes.length > 0);
+  d.dropClient();
+  await until(() => d.connections === 2, 5000);
+  await until(() => d.calls('thread/loaded/list').length >= 2);
+  assert.deepEqual(outcomes, [{ connected: true, userAgent: 'fake-codex/0' }]);
+});
+
+test('a missing Codex binary is reported once as not found', async () => {
+  const outcomes: FirstConnect[] = [];
+  const counter = { attempts: 0 };
+  adapter = new CodexAdapter({
+    command: MISSING, hub: HUB, reconnectMinMs: 20, reconnectMaxMs: 40,
+    onFirstConnect: (o) => outcomes.push(o),
+    spawnFn: () => {
+      counter.attempts++;
+      return spawn(MISSING, [], { stdio: 'pipe' });
+    },
+  });
+  adapter.start();
+  await until(() => counter.attempts >= 3, 3000);
+  assert.equal(outcomes.length, 1);
+  const [outcome] = outcomes;
+  assert.ok(!outcome.connected);
+  assert.equal(outcome.notFound, true);
+  assert.match(outcome.error, /ENOENT/);
+});
+
+test('a proxy that exits at once is reported as not connected, not as not found', async () => {
+  const outcomes: FirstConnect[] = [];
+  let attempts = 0;
+  adapter = new CodexAdapter({
+    command: 'codex', hub: HUB, reconnectMinMs: 20, reconnectMaxMs: 40,
+    onFirstConnect: (o) => outcomes.push(o),
+    spawnFn: () => {
+      attempts++;
+      return spawn(process.execPath, ['-e', 'process.exit(3)'], { stdio: 'pipe' });
+    },
+  });
+  adapter.start();
+  await until(() => attempts >= 3, 5000);
+  assert.equal(outcomes.length, 1);
+  const [outcome] = outcomes;
+  assert.ok(!outcome.connected);
+  assert.equal(outcome.notFound, false);
+  assert.ok(outcome.error.length > 0);
+});
+
+test('a throwing first-connect observer does not break a healthy connection', async () => {
+  const d = await firstConnectDaemon([thread('t1')]);
+  adapter = new CodexAdapter({
+    command: 'codex', hub: HUB, spawnFn: d.spawnFn, reconnectMinMs: 50, reconnectMaxMs: 200,
+    onFirstConnect: () => { throw new Error('observer failed'); },
+  });
+  adapter.start();
+  await session('codex:t1');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(d.connections, 1);
+});
+
+test('a throwing first-connect observer does not stop the retries', async () => {
+  let attempts = 0;
+  adapter = new CodexAdapter({
+    command: 'codex', hub: HUB, reconnectMinMs: 20, reconnectMaxMs: 40,
+    onFirstConnect: () => { throw new Error('observer failed'); },
+    spawnFn: () => {
+      attempts++;
+      return spawn(process.execPath, ['-e', 'process.exit(3)'], { stdio: 'pipe' });
+    },
+  });
+  adapter.start();
+  await until(() => attempts >= 3, 5000);
+});
+
+test('a stopped adapter reports nothing', async () => {
+  const outcomes: FirstConnect[] = [];
+  adapter = new CodexAdapter({
+    command: 'codex', hub: HUB, reconnectMinMs: 20, reconnectMaxMs: 40,
+    onFirstConnect: (o) => outcomes.push(o),
+    spawnFn: () => spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(3), 300)'], { stdio: 'pipe' }),
+  });
+  adapter.start();
+  adapter.stop();
+  await new Promise((r) => setTimeout(r, 600));
+  assert.deepEqual(outcomes, []);
 });

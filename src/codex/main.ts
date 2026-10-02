@@ -31,7 +31,17 @@ logStartup('Codex adapter');
 
 const { host, port, token } = resolveAdapterHub(config);
 
-const adapter = new CodexAdapter({ command: config.codex?.command ?? 'codex', hub: { host, port, token } });
+const adapter = new CodexAdapter({
+  command: config.codex?.command ?? 'codex',
+  hub: { host, port, token },
+  onFirstConnect: (outcome) => {
+    if (!process.send || !process.connected) return;
+    // With a callback, a channel that closes between the check and the send reports here instead of throwing.
+    process.send({ type: 'codex-first-connect', ...outcome }, undefined, undefined, (err: Error | null) => {
+      if (err) logger.debug(`First-connect report not delivered: ${err.message}`);
+    });
+  },
+});
 adapter.start();
 
 let exiting = false;
