@@ -10,6 +10,8 @@ import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
 import { hubUrlHost } from './shared/hub-url.js';
+import { resolveAdapterHub } from './codex/hub-target.js';
+import { startAdapter } from './codex/start-check.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -363,21 +365,32 @@ function codexEnable(enabled: boolean) {
     : 'Codex adapter disabled. Restart the hub to apply.');
 }
 
-function codexStart() {
-  const pid = readCodexPid();
-  if (pid !== undefined && isProcessRunning(pid)) {
-    console.log(`Codex adapter is already running (PID: ${pid})`);
-    return;
-  }
+async function codexStart() {
+  // Before spawning: on a fresh PC this creates and saves the token, so the adapter reads the same one.
+  const config = loadConfig();
   ensureConfigDir();
-  const logFd = fs.openSync(CODEX_LOG_FILE, 'a');
-  const child = spawn(process.execPath, [path.join(__dirname, 'codex', 'main.js')], {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-    env: { ...process.env },
+  const code = await startAdapter({
+    hub: resolveAdapterHub(config),
+    command: config.codex?.command ?? 'codex',
+    logFile: CODEX_LOG_FILE,
+    readPid: readCodexPid,
+    isRunning: isProcessRunning,
+    removePidFile: () => {
+      try { fs.unlinkSync(CODEX_PID_FILE); } catch {}
+    },
+    spawnAdapter: () => {
+      const logFd = fs.openSync(CODEX_LOG_FILE, 'a');
+      return spawn(process.execPath, [path.join(__dirname, 'codex', 'main.js')], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd, 'ipc'],
+        windowsHide: true,
+        env: { ...process.env },
+      });
+    },
+    out: (line) => console.log(line),
+    err: (line) => console.error(line),
   });
-  child.unref();
-  console.log(`Codex adapter started (PID: ${child.pid}). Logs: ${CODEX_LOG_FILE}`);
+  if (code !== 0) process.exit(code);
 }
 
 function codexStop() {
@@ -443,7 +456,7 @@ async function main() {
   if (cmd === 'codex') {
     if (sub === 'enable') codexEnable(true);
     else if (sub === 'disable') codexEnable(false);
-    else if (sub === 'start') codexStart();
+    else if (sub === 'start') await codexStart();
     else if (sub === 'stop') codexStop();
     else if (sub === 'status') codexStatus();
     else {

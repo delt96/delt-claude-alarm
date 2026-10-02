@@ -77,7 +77,7 @@ Open `http://127.0.0.1:7900` in your browser.
 | `claude-alarm token` | Show auth token |
 | `claude-alarm test` | Send test notification |
 | `claude-alarm codex enable` / `disable` | Start (or stop starting) the Codex adapter with the hub |
-| `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC |
+| `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC. `start` tells you whether the adapter reached Codex and the hub |
 
 ## Tools Available to Claude
 
@@ -192,7 +192,7 @@ claude-alarm hub start
 - After updating claude-alarm, reload open dashboard tabs so they pick up the changes.
 - Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
 - A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window.
-- If Codex runs on another PC, run `claude-alarm codex start` there with that PC's config pointing at your hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
+- If Codex runs on another PC, run `claude-alarm codex start` there. It reads the hub address and token from that PC's `~/.claude-alarm/config.json` (`hub.host`, `hub.port`, `hub.token`) or from `CLAUDE_ALARM_HUB_HOST`, `CLAUDE_ALARM_HUB_PORT` and `CLAUDE_ALARM_HUB_TOKEN`; the remote-hub answers you give `claude-alarm init` go only into that project's `.mcp.json` and do not apply here. `codex start` says whether it reached Codex and the hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
 
 ## Permission Relay
 
