@@ -102,6 +102,24 @@ test('a connection cannot switch adapter ids, and a reconnect with the same id r
   }
 });
 
+test('non-object JSON frames do not prevent an adapter from registering on the same socket', async () => {
+  const dash = await open('/ws/dashboard');
+  const link = await open('/ws/codex');
+  try {
+    link.ws.send('null');
+    link.ws.send('1');
+    link.ws.send('"x"');
+    link.ws.send(JSON.stringify({ type: 'adapter_hello', adapter: { id: 'a4', host: 'pc-1', ready: true } }));
+    const adapter = await until(() => latestAdapters(dash.inbox)?.find((a) => a.id === 'a4'));
+    assert.deepEqual(adapter, { id: 'a4', host: 'pc-1', ready: true, isLocal: true });
+    assert.equal(link.ws.readyState, WebSocket.OPEN);
+  } finally {
+    link.ws.close();
+    dash.ws.close();
+  }
+  await waitAdapter('a4', false);
+});
+
 test('the codex socket needs the hub token', async () => {
   const outcome = await new Promise<'open' | number>((resolve) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/codex`);

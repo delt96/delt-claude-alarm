@@ -558,6 +558,10 @@ export class HubServer {
       let msg: CodexLinkMessage;
       try {
         msg = JSON.parse(data.toString()) as CodexLinkMessage;
+        if (msg === null || typeof msg !== 'object') {
+          logger.warn('Invalid message from Codex adapter');
+          return;
+        }
       } catch {
         logger.warn('Invalid message from Codex adapter');
         return;
