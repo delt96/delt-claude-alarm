@@ -191,8 +191,12 @@ claude-alarm hub start
 - Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Buttons from before a hub or adapter restart show **Expired**; if Codex is still waiting, a new request appears.
 - After updating claude-alarm, reload open dashboard tabs so they pick up the changes.
 - Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
-- A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window.
+- A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window. Conversations created from the dashboard are the exception (below).
 - If Codex runs on another PC, run `claude-alarm codex start` there. It reads the hub address and token from that PC's `~/.claude-alarm/config.json` (`hub.host`, `hub.port`, `hub.token`) or from `CLAUDE_ALARM_HUB_HOST`, `CLAUDE_ALARM_HUB_PORT` and `CLAUDE_ALARM_HUB_TOKEN`; the remote-hub answers you give `claude-alarm init` go only into that project's `.mcp.json` and do not apply here. `codex start` says whether it reached Codex and the hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
+
+- **New Codex conversation from the dashboard**: click **+** in the session list. The Codex part appears only when a Codex adapter is connected to a running Codex daemon; claude-alarm does not start the daemon, so after a reboot open Codex once. Pick the PC if more than one is connected, type a folder on that PC or pick one of its recent Codex folders, and click **Create**. The new session is selected; send the first instruction from the message box.
+- Conversations created this way run with **full access and no approval prompts** (`danger-full-access`, approval policy `never`): Codex can run any command on that PC.
+- They stay on the dashboard until you close them with the session's **×** button (tap it, then tap **Close?** again). Closing only lets go of the conversation: it stays in Codex's history and can be continued in Codex. If Codex is still working, the task finishes first and the session drops off about a minute later. When the hub restarts, an adapter started by the hub restarts with it and these conversations drop off about a minute later.
 
 ## Permission Relay
 
@@ -216,6 +220,8 @@ Every connection to the hub needs the hub token — including ones from the same
 > Upgrading from 0.9.x: a local session that sets `CLAUDE_ALARM_HUB_TOKEN` to a different value than the hub's token no longer connects. Scripts that called the local API without a token now get `401`.
 
 ## Remote Access
+
+> Anyone who can open the dashboard can start Codex conversations with full access on every PC that runs the Codex adapter. Keep the hub token private.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/remote-access.svg" alt="Remote Access" width="600">

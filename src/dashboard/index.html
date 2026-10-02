@@ -143,6 +143,19 @@
     color: var(--text-dim);
     margin-bottom: 8px;
   }
+  [hidden] { display: none !important; }
+  .codex-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+  .codex-section .cmd-popup-title { margin-bottom: 0; color: var(--text); font-weight: 600; }
+  #codexAdapter, #codexFolder { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
+  #codexFolder::placeholder { color: var(--text-dim); }
+  #codexAdapter:focus, #codexFolder:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .codex-warning { color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+  #codexCreate { min-height: 36px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  #codexCreate:disabled { opacity: 0.6; cursor: wait; }
+  .codex-error { color: var(--red); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+  .session-close { flex-shrink: 0; align-self: flex-end; min-width: 32px; min-height: 32px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-dim); font-size: 16px; cursor: pointer; }
+  .session-close:hover, .session-close:focus-visible { border-color: var(--red); color: var(--red); }
+  .session-close.armed { border-color: var(--red); color: var(--red); font-size: 11px; font-weight: 600; }
   .session-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -863,6 +876,9 @@
 
   /* Mobile responsive */
   @media (max-width: 768px) {
+    .codex-section { gap: 10px; }
+    #codexAdapter, #codexFolder, #codexCreate { min-height: 40px; font-size: 13px; }
+    .session-close { min-width: 36px; min-height: 36px; }
     .container {
       grid-template-columns: 1fr;
       height: calc(100vh - 97px);
@@ -1015,6 +1031,15 @@
         <span class="cmd-text">claude --dangerously-load-development-channels server:claude-alarm --dangerously-skip-permissions</span>
         <span class="cmd-icon">&#128203;</span>
       </div>
+      <div class="codex-section" id="codexSection" hidden>
+        <div class="cmd-popup-title">New Codex conversation:</div>
+        <select id="codexAdapter" hidden></select>
+        <input id="codexFolder" list="codexFolders" placeholder="Folder on that PC, e.g. C:\work\project" autocomplete="off" spellcheck="false">
+        <datalist id="codexFolders"></datalist>
+        <div class="codex-warning">Runs with full access: no approval prompts.</div>
+        <button id="codexCreate" type="button">Create</button>
+        <div class="codex-error" id="codexError" hidden></div>
+      </div>
     </div>
     <div id="sessionsList"></div>
   </div>
@@ -1066,6 +1091,9 @@
     waitingReply: {},
     permissionRequests: {},  // sessionId -> [{ requestId, toolName, description, inputPreview, timestamp, resolved, behavior }]
     sessionMeta: { names: {}, order: [] },  // custom names + order, keyed by volatile sessionId
+    codexAdapters: [],
+    pendingSelect: null,
+    closeArmed: null,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -1390,11 +1418,13 @@
         msg.sessions.forEach(s => { state.sessions[s.id] = s; });
         pruneSessionData();
         renderSessions();
+        if (state.pendingSelect && state.sessions[state.pendingSelect]) selectSession(state.pendingSelect);
         break;
       case 'session_connected':
         state.sessions[msg.session.id] = msg.session;
         if (!state.messages[msg.session.id]) state.messages[msg.session.id] = [];
         renderSessions();
+        if (state.pendingSelect === msg.session.id) selectSession(msg.session.id);
         break;
       case 'session_disconnected':
         delete state.sessions[msg.sessionId];
@@ -1463,6 +1493,15 @@
         renderPermissionBar();
         renderNotifications();
         break;
+      case 'codex_adapters': {
+        state.codexAdapters = msg.adapters || [];
+        if ($('#cmdPopup').classList.contains('active')) {
+          const before = $('#codexAdapter').value;
+          renderCodexForm();
+          if ($('#codexAdapter').value !== before) loadCodexFolders();
+        }
+        break;
+      }
       case 'permission_resolved': {
         const req = (state.permissionRequests[msg.sessionId] || []).find(r => r.requestId === msg.requestId);
         if (req && !req.resolved) {
@@ -1491,6 +1530,10 @@
       const unread = state.unread[id] || 0;
       const dispName = sessionDisplayName(s);
       const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const armed = state.closeArmed && state.closeArmed.id === id && closeStep(state.closeArmed.at, Date.now()) !== 'arm';
+      const closeBtn = s.closable
+        ? `<button class="session-close${armed ? ' armed' : ''}" type="button" title="Close — stays in Codex history">${armed ? 'Close?' : '&times;'}</button>`
+        : '';
       return `<div class="session-card${active}" data-id="${id}">
         <span class="drag-handle" title="Drag to reorder">&#10303;</span>
         <div class="session-body">
@@ -1498,6 +1541,7 @@
           ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
           <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
         </div>
+        ${closeBtn}
       </div>`;
     }).join('');
     bindSessionCards(el);
@@ -1508,10 +1552,13 @@
     el.querySelectorAll('.session-card').forEach(card => {
       const id = card.dataset.id;
       card.addEventListener('click', (e) => {
+        if (e.target.closest('.session-close')) return;
         if (e.target.closest('.drag-handle')) return;
         if (e.target.classList.contains('name-edit-input')) return;
         selectSession(id);
       });
+      const closeBtn = card.querySelector('.session-close');
+      if (closeBtn) closeBtn.addEventListener('click', (e) => { e.stopPropagation(); onCloseClick(id); });
       const nameEl = card.querySelector('.session-name');
       nameEl.addEventListener('dblclick', (e) => {
         e.stopPropagation();
@@ -1621,6 +1668,7 @@
   }
 
   function selectSession(id) {
+    state.pendingSelect = null;
     state.selectedSession = id;
     state.unread[id] = 0;
     if (!state.messages[id]) state.messages[id] = [];
@@ -2185,10 +2233,32 @@
     msgList.scrollTo({ top: msgList.scrollHeight, behavior: 'smooth' });
   });
 
+  // --- Codex helpers ---
+  function usableAdapters(adapters) {
+    return adapters.filter(a => a.ready).sort((a, b) => (b.isLocal ? 1 : 0) - (a.isLocal ? 1 : 0));
+  }
+
+  function adapterLabels(adapters) {
+    const counts = {};
+    adapters.forEach(a => { counts[a.host] = (counts[a.host] || 0) + 1; });
+    return adapters.map(a => counts[a.host] > 1 ? `${a.host} (${a.id.slice(0, 4)})` : a.host);
+  }
+
+  // A second tap within 0.4 s is a phone double-tap, not a confirmation.
+  function closeStep(armedAt, now) {
+    if (armedAt === null || now - armedAt >= 3000) return 'arm';
+    return now - armedAt < 400 ? 'wait' : 'close';
+  }
+
   // --- Add session popup ---
   $('#addSessionBtn').addEventListener('click', (e) => {
     e.stopPropagation();
+    const opening = !$('#cmdPopup').classList.contains('active');
     $('#cmdPopup').classList.toggle('active');
+    if (opening) {
+      renderCodexForm();
+      loadCodexFolders();
+    }
   });
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#cmdPopup') && !e.target.closest('#addSessionBtn')) {
@@ -2209,6 +2279,97 @@
     });
   });
 
+  function renderCodexForm() {
+    const usable = usableAdapters(state.codexAdapters);
+    $('#codexSection').hidden = !usable.length;
+    if (!usable.length) return;
+    const select = $('#codexAdapter');
+    const current = select.value;
+    const labels = adapterLabels(usable);
+    select.innerHTML = usable.map((a, i) => `<option value="${esc(a.id)}">${esc(labels[i])}</option>`).join('');
+    if (usable.some(a => a.id === current)) select.value = current;
+    select.hidden = usable.length < 2;
+  }
+
+  async function loadCodexFolders() {
+    const list = $('#codexFolders');
+    list.innerHTML = '';
+    const adapterId = $('#codexAdapter').value;
+    if (!adapterId) return;
+    try {
+      const res = await fetch(`/api/codex/folders?adapterId=${encodeURIComponent(adapterId)}`);
+      if (!res.ok || $('#codexAdapter').value !== adapterId) return;
+      const { folders } = await res.json();
+      list.innerHTML = folders.map(f => `<option value="${esc(f)}"></option>`).join('');
+    } catch {}
+  }
+
+  async function createCodexConversation() {
+    const btn = $('#codexCreate');
+    const folder = $('#codexFolder').value.trim();
+    const adapterId = $('#codexAdapter').value;
+    if (!folder || !adapterId || btn.disabled) return;
+    const error = $('#codexError');
+    error.hidden = true;
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    try {
+      const res = await fetch('/api/codex/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adapterId, cwd: folder }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      $('#cmdPopup').classList.remove('active');
+      $('#codexFolder').value = '';
+      // The session can register before or after this answer arrives.
+      if (state.sessions[body.sessionId]) selectSession(body.sessionId);
+      else state.pendingSelect = body.sessionId;
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Create';
+    }
+  }
+
+  async function onCloseClick(id) {
+    const armedAt = state.closeArmed && state.closeArmed.id === id ? state.closeArmed.at : null;
+    const step = closeStep(armedAt, Date.now());
+    if (step === 'wait') return;
+    if (step === 'arm') {
+      const at = Date.now();
+      state.closeArmed = { id, at };
+      renderSessions();
+      setTimeout(() => {
+        if (state.closeArmed && state.closeArmed.at === at) {
+          state.closeArmed = null;
+          renderSessions();
+        }
+      }, 3000);
+      return;
+    }
+    state.closeArmed = null;
+    renderSessions();
+    try {
+      await fetch('/api/codex/threads/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: id }),
+      });
+    } catch {}
+  }
+
+  $('#codexAdapter').addEventListener('change', loadCodexFolders);
+  $('#codexCreate').addEventListener('click', createCodexConversation);
+  $('#codexFolder').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      createCodexConversation();
+    }
+  });
   // --- Settings modal (Webhook + Telegram) ---
   let webhookData = [];
   const closeSettings = () => $('#settingsOverlay').classList.add('hidden');
