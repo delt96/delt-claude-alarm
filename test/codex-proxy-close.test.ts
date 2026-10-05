@@ -82,6 +82,7 @@ test('closing a connection ends the proxy stdin first, then its process tree', a
     assert.equal(killed[0].child, spawned);
     assert.equal(killed[0].stdinEnded, true);
   } finally {
+    if (spawned && spawned.exitCode === null && spawned.signalCode === null) spawned.kill();
     await daemon.stop();
   }
 });
@@ -90,14 +91,18 @@ test('a handshake timeout ends the proxy tree through the same function', async 
   let spawned: ChildProcess | undefined;
   const spawnFn: SpawnFn = () => (spawned = spawn(process.execPath, ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], { stdio: 'pipe' }));
   const killed: ChildProcess[] = [];
-  await assert.rejects(
-    connectProxy('codex', spawnFn, 300, (child) => {
-      killed.push(child);
-      child.kill();
-    }),
-    /^Error: codex daemon did not answer within 0.3s$/,
-  );
-  assert.equal(killed.length, 1);
-  assert.equal(killed[0], spawned);
-  await until(() => spawned!.exitCode !== null || spawned!.signalCode !== null);
+  try {
+    await assert.rejects(
+      connectProxy('codex', spawnFn, 300, (child) => {
+        killed.push(child);
+        child.kill();
+      }),
+      /^Error: codex daemon did not answer within 0.3s$/,
+    );
+    assert.equal(killed.length, 1);
+    assert.equal(killed[0], spawned);
+    await until(() => spawned!.exitCode !== null || spawned!.signalCode !== null);
+  } finally {
+    if (spawned && spawned.exitCode === null && spawned.signalCode === null) spawned.kill();
+  }
 });

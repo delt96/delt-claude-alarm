@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { connectProxy, defaultSpawn, findCodex, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
+import { connectProxy, defaultSpawn, treeKiller, findCodex, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
 import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
 test('connectProxy speaks WebSocket over the proxy stdio', async () => {
@@ -182,7 +182,8 @@ function silentProxy(): string {
 }
 
 // Only what this test started, by the pid the proxy wrote and by our own handle; never by image name.
-function stopLeftovers(proxy: { pid?: number }, shell: ChildProcess | undefined): void {
+function stopLeftovers(proxy: { pid?: number; stopped?: boolean }, shell: ChildProcess | undefined, pidFile: string): void {
+  if (!proxy.stopped && proxy.pid === undefined) proxy.pid = readPid(pidFile);
   if (proxy.pid !== undefined && alive(proxy.pid)) process.kill(proxy.pid);
   if (shell && shell.exitCode === null && shell.signalCode === null) shell.kill();
 }
@@ -190,7 +191,7 @@ function stopLeftovers(proxy: { pid?: number }, shell: ChildProcess | undefined)
 test('a codex.cmd proxy that never answers is ended with its shell at the handshake timeout', { skip: process.platform !== 'win32' }, async () => {
   const { cmd, pidFile } = fakeCodexCmd(silentProxy());
   let shell: ChildProcess | undefined;
-  const proxy: { pid?: number } = {};
+  const proxy: { pid?: number; stopped?: boolean } = {};
   try {
     const pending = connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 5000);
     pending.catch(() => {});
@@ -201,8 +202,9 @@ test('a codex.cmd proxy that never answers is ended with its shell at the handsh
     await until(() => !alive(proxy.pid!), 5000);
     // Seen gone: Windows may reuse the pid, so the cleanup must not touch it any more.
     proxy.pid = undefined;
+    proxy.stopped = true;
   } finally {
-    stopLeftovers(proxy, shell);
+    stopLeftovers(proxy, shell, pidFile);
   }
 });
 
@@ -211,7 +213,7 @@ test('closing a connection to a codex.cmd proxy also ends the proxy under the sh
   await daemon.start();
   const { cmd, pidFile } = fakeCodexCmd(FAKE_PROXY, { FAKE_CODEX_CONTROL: daemon.url, FAKE_CODEX_LINGER: '1' });
   let shell: ChildProcess | undefined;
-  const proxy: { pid?: number } = {};
+  const proxy: { pid?: number; stopped?: boolean } = {};
   try {
     const conn = await connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 10_000);
     proxy.pid = await until(() => readPid(pidFile), 5000);
@@ -220,9 +222,35 @@ test('closing a connection to a codex.cmd proxy also ends the proxy under the sh
     await until(() => !alive(proxy.pid!), 5000);
     // Seen gone: Windows may reuse the pid, so the cleanup must not touch it any more.
     proxy.pid = undefined;
+    proxy.stopped = true;
     await until(() => shell!.exitCode !== null || shell!.signalCode !== null, 5000);
   } finally {
-    stopLeftovers(proxy, shell);
+    stopLeftovers(proxy, shell, pidFile);
+    await daemon.stop();
+  }
+});
+
+
+test('G3: closing an exited shell ends its lingering proxy descendant', { skip: process.platform !== 'win32' }, async () => {
+  const daemon = new FakeDaemon();
+  await daemon.start();
+  const { cmd, pidFile } = fakeCodexCmd(FAKE_PROXY, { FAKE_CODEX_CONTROL: daemon.url, FAKE_CODEX_LINGER: '1' });
+  let shell: ChildProcess | undefined;
+  const proxy: { pid?: number; stopped?: boolean } = {};
+  try {
+    const conn = await connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 10_000);
+    proxy.pid = await until(() => readPid(pidFile), 5000);
+    assert.equal(alive(proxy.pid), true);
+    shell!.kill();
+    await until(() => shell!.exitCode !== null || shell!.signalCode !== null, 5000);
+    assert.equal(alive(proxy.pid), true);
+    treeKiller()(shell!);
+    conn.close();
+    await until(() => !alive(proxy.pid!), 1000);
+    proxy.pid = undefined;
+    proxy.stopped = true;
+  } finally {
+    stopLeftovers(proxy, shell, pidFile);
     await daemon.stop();
   }
 });
