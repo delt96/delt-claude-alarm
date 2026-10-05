@@ -1287,3 +1287,23 @@ test('stopping the adapter while it connects waits until that proxy is closed', 
   await adapter.stop();
   assert.equal(spawned!.killed, true);
 });
+
+test('a message is refused while this adapter holds an unanswered approval, even before the status says so', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], steering);
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    const req = await approvalOnDashboard(d, dash, 91);
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'also this' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Not delivered');
+    assert.equal(n.message, WAITING_NOTICE);
+    assert.equal(d.calls('turn/steer').length, 0);
+    choose(dash, req.requestId, '0');
+    await until(() => d.responses.length === 1);
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'answered, so this one goes' }));
+    await until(() => d.calls('turn/steer').length === 1);
+  } finally {
+    dash.ws.close();
+  }
+});

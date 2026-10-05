@@ -523,7 +523,7 @@ export class CodexAdapter {
     const threadId = t.thread.id;
     if (this.threads.get(threadId) !== t) return;
     // A steer is accepted while an approval is pending but read only after it is answered, which reads like an answer.
-    if (hubStatus(t.thread.status) === 'waiting_input') {
+    if (this.waitingForAnswer(t)) {
       this.refuseWhileWaiting(threadId);
       return;
     }
@@ -547,7 +547,7 @@ export class CodexAdapter {
       const running = await this.runningTurn(rpc, threadId);
       if (this.threads.get(threadId) !== t) return;
       // An approval can start while the input is built and the turn looked up; the check at the top cannot see it.
-      if (hubStatus(t.thread.status) === 'waiting_input') {
+      if (this.waitingForAnswer(t)) {
         this.abandonDelivery(t, wasUnrelayed);
         this.refuseWhileWaiting(threadId);
         return;
@@ -569,6 +569,13 @@ export class CodexAdapter {
     t.pendingTurn = false;
     t.unrelayed = wasUnrelayed;
     this.releaseLater(t);
+  }
+
+  // The approval request itself can arrive before the status broadcast that marks the thread as waiting.
+  private waitingForAnswer(t: Tracked): boolean {
+    if (hubStatus(t.thread.status) === 'waiting_input') return true;
+    for (const a of this.approvals.values()) if (a.threadId === t.thread.id && !a.answered) return true;
+    return false;
   }
 
   private refuseWhileWaiting(threadId: string): void {
