@@ -134,3 +134,11 @@ test('a message with no hub callback is reported as not delivered', async (t) =>
   await say(bot, 'hello');
   assert.deepEqual(sent(calls), [GONE]);
 });
+
+test('a photo whose hub callback throws is deleted at once and reported as not connected', async (t) => {
+  const { bot, calls, photos } = setup(t, [s('a')], true);
+  bot.onImageToSession = (_id, imagePath) => { photos.push(imagePath); throw new Error('boom'); };
+  await sendPhoto(bot);
+  assert.equal(fs.existsSync(photos[0]), false);
+  assert.deepEqual(sent(calls), [PHOTO_GONE]);
+});

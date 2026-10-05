@@ -353,7 +353,13 @@ export class TelegramBot {
       fs.writeFileSync(filePath, buffer);
       logger.info(`Telegram photo saved: ${filename} (${buffer.length} bytes)`);
 
-      if (this.onImageToSession?.(sessionId, filePath, mimeType, caption) !== true) {
+      let accepted = false;
+      try {
+        accepted = this.onImageToSession?.(sessionId, filePath, mimeType, caption) === true;
+      } catch (err) {
+        logger.warn(`Telegram photo hand-off failed: ${(err as Error).message}`);
+      }
+      if (!accepted) {
         try { fs.unlinkSync(filePath); } catch {}
         this.photoNotDelivered(NO_LONGER_CONNECTED);
         return false;
