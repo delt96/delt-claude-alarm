@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { connectProxy, defaultSpawn, treeKiller, findCodex, findOnPath, resolveCommand, type SpawnFn } from '../src/codex/transport.js';
+import { connectProxy, defaultSpawn, treeKiller, findCodex, findOnPath, resolveCommand, type KillTreeFn, type SpawnFn } from '../src/codex/transport.js';
 import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
 test('connectProxy speaks WebSocket over the proxy stdio', async () => {
@@ -251,6 +251,67 @@ test('closing a connection whose shell has exited still ends the proxy that outl
     proxy.stopped = true;
   } finally {
     stopLeftovers(proxy, shell, pidFile);
+    await daemon.stop();
+  }
+});
+
+test('a shell that exits before the handshake still has its proxy ended', { skip: process.platform !== 'win32' }, async () => {
+  const { cmd, pidFile } = fakeCodexCmd(silentProxy());
+  let shell: ChildProcess | undefined;
+  const proxy: { pid?: number; stopped?: boolean } = {};
+  const real = treeKiller();
+  const recordings: Array<Promise<void> | undefined> = [];
+  const killer: KillTreeFn = Object.assign((child: ChildProcess) => real(child), {
+    track: (child: ChildProcess) => {
+      const recording = real.track?.(child);
+      recordings.push(recording);
+      return recording ?? Promise.resolve();
+    },
+  });
+  try {
+    const pending = connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 20_000, killer);
+    pending.catch(() => {});
+    proxy.pid = await until(() => readPid(pidFile), 5000);
+    await Promise.all(recordings);
+    shell!.kill();
+    await assert.rejects(pending, /^Error: codex proxy exited/);
+    await until(() => !alive(proxy.pid!), 10_000);
+    proxy.pid = undefined;
+    proxy.stopped = true;
+  } finally {
+    stopLeftovers(proxy, shell, pidFile);
+  }
+});
+
+const TRANSPORT = new URL('../src/codex/transport.ts', import.meta.url).href;
+
+test('a process that closes a codex.cmd proxy and exits right after leaves no proxy behind', { skip: process.platform !== 'win32' }, async () => {
+  const daemon = new FakeDaemon();
+  await daemon.start();
+  const { cmd, pidFile } = fakeCodexCmd(FAKE_PROXY, { FAKE_CODEX_CONTROL: daemon.url, FAKE_CODEX_LINGER: '1' });
+  const script = path.join(path.dirname(pidFile), 'close-and-exit.mjs');
+  fs.writeFileSync(script, [
+    `import { connectProxy } from ${JSON.stringify(TRANSPORT)};`,
+    'const conn = await connectProxy(process.argv[2]);',
+    'await conn.close();',
+    'process.exit(0);',
+  ].join('\n'));
+  let runner: ChildProcess | undefined;
+  const proxy: { pid?: number; stopped?: boolean } = {};
+  try {
+    runner = spawn(process.execPath, ['--import', 'tsx', script, cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    runner.stdout?.on('data', (d) => { output += d; });
+    runner.stderr?.on('data', (d) => { output += d; });
+    const code = await new Promise((resolve) => runner!.once('exit', resolve));
+    assert.equal(code, 0, output);
+    proxy.pid = readPid(pidFile);
+    assert.notEqual(proxy.pid, undefined);
+    await until(() => !alive(proxy.pid!), 3000);
+    proxy.pid = undefined;
+    proxy.stopped = true;
+  } finally {
+    stopLeftovers(proxy, runner, pidFile);
     await daemon.stop();
   }
 });

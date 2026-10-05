@@ -9,7 +9,7 @@ export type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
 export interface ProxyConnection {
   ws: WebSocket;
-  close(): void;
+  close(): Promise<void>;
 }
 
 // npm installs Codex on Windows as a codex.cmd shim, which only runs through a shell.
@@ -54,15 +54,22 @@ export function findCodex(
   return candidates.find((file): file is string => !!file && fs.existsSync(file));
 }
 
+const shellSpawns = new WeakSet<ChildProcess>();
+
+export const spawnedThroughShell = (child: ChildProcess): boolean => shellSpawns.has(child);
+
 export const defaultSpawn: SpawnFn = (command, args) => {
   const { file, shell } = resolveCommand(command);
-  if (shell) return spawn(`"${file}" ${args.join(' ')}`, { stdio: 'pipe', windowsHide: true, shell: true });
-  return spawn(file, args, { stdio: 'pipe', windowsHide: true });
+  if (!shell) return spawn(file, args, { stdio: 'pipe', windowsHide: true });
+  const child = spawn(`"${file}" ${args.join(' ')}`, { stdio: 'pipe', windowsHide: true, shell: true });
+  shellSpawns.add(child);
+  return child;
 };
 
-export type KillTreeFn = ((child: ChildProcess) => void) & { track?: (child: ChildProcess) => Promise<void> };
+export type KillTreeFn = ((child: ChildProcess) => Promise<void>) & { track?: (child: ChildProcess) => Promise<void> };
 export interface ProcessIdentity { pid: number; parentPid: number; creationTime: string }
 export type ProcessQueryFn = () => Promise<ProcessIdentity[]>;
+type Descendant = ProcessIdentity & { depth: number };
 
 export const queryProcesses: ProcessQueryFn = () => new Promise((resolve, reject) => {
   const script = "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
@@ -83,64 +90,87 @@ const runFile: RunFn = (file, args, options, callback) => {
   execFile(file, args, options, (err) => callback(err));
 };
 
+function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] | undefined {
+  const root = rows.find(row => row.pid === rootPid);
+  if (!root) return undefined;
+  const found: Descendant[] = [];
+  const seen = new Set([root.pid]);
+  let level: ProcessIdentity[] = [root];
+  for (let depth = 1; level.length; depth++) {
+    const next: ProcessIdentity[] = [];
+    for (const parent of level) {
+      for (const row of rows) {
+        // Windows keeps a dead parent's PID in its children, so a process older than the PID's current owner is not its child.
+        if (row.parentPid !== parent.pid || seen.has(row.pid) || row.creationTime < parent.creationTime) continue;
+        seen.add(row.pid);
+        next.push(row);
+        found.push({ ...row, depth });
+      }
+    }
+    level = next;
+  }
+  return found;
+}
+
+const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+
 export function treeKiller(
   platform: NodeJS.Platform = process.platform,
   run: RunFn = runFile,
   query: ProcessQueryFn = queryProcesses,
+  throughShell: (child: ChildProcess) => boolean = spawnedThroughShell,
 ): KillTreeFn {
-  const tracked = new WeakMap<ChildProcess, Promise<ProcessIdentity[]>>();
-  const stop = (pid: number) => run('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) => {
-    if (err) logger.debug(`taskkill ${pid} failed: ${err.message}`);
+  const recorded = new WeakMap<ChildProcess, Promise<Descendant[]>>();
+  const stop = (pid: number) => new Promise<void>((resolve) => {
+    // No /T: taskkill builds trees from ParentProcessId alone, so it would also end older processes naming a reused PID as parent.
+    run('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true }, (err) => {
+      if (err) logger.debug(`taskkill ${pid} failed: ${err.message}`);
+      resolve();
+    });
   });
+  const stopDeepestFirst = async (descendants: Descendant[]) => {
+    for (const descendant of [...descendants].sort((a, b) => b.depth - a.depth)) await stop(descendant.pid);
+  };
   const snapshot = async () => {
     try { return await query(); }
-    catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return []; }
+    catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return undefined; }
   };
-  const killer: KillTreeFn = (child) => {
-    // Once the proxy has exited, Windows may give its pid to an unrelated process.
-    if (child.exitCode !== null || child.signalCode !== null) {
-      const pending = tracked.get(child);
-      if (platform === 'win32' && pending) void pending.then(async (descendants) => {
-        if (!descendants.length) return;
-        const current = await snapshot();
-        // Creation times prevent an exited proxy's reused PID from targeting another process.
-        for (const descendant of descendants) {
-          if (current.some(row => row.pid === descendant.pid && row.creationTime === descendant.creationTime)) stop(descendant.pid);
-        }
-      });
-      return;
-    }
-    if (platform !== 'win32' || child.pid === undefined) {
-      child.kill();
+  const isShellTree = (child: ChildProcess) => platform === 'win32' && child.pid !== undefined && throughShell(child);
+  const killer: KillTreeFn = async (child) => {
+    if (!isShellTree(child)) {
+      if (!exited(child)) child.kill();
       return;
     }
     // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    stop(child.pid);
+    if (!exited(child)) {
+      const rows = await snapshot();
+      // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
+      if (!exited(child)) {
+        const descendants = rows && descendantsOf(child.pid!, rows);
+        if (descendants) await stopDeepestFirst(descendants);
+        child.kill();
+        return;
+      }
+    }
+    const descendants = (await recorded.get(child)) ?? [];
+    if (!descendants.length) return;
+    const current = await snapshot();
+    if (!current) return;
+    // A recorded descendant may have exited and its PID been reused; only the same creation time proves it is the same process.
+    await stopDeepestFirst(descendants.filter(d => current.some(row => row.pid === d.pid && row.creationTime === d.creationTime)));
   };
   killer.track = async (child) => {
-    if (platform !== 'win32' || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-    if (!tracked.has(child)) tracked.set(child, (async () => {
+    if (!isShellTree(child) || exited(child)) return;
+    const earlier = recorded.get(child);
+    const latest = (async () => {
       const rows = await snapshot();
-      if (child.exitCode !== null || child.signalCode !== null) return [];
-      const root = rows.find(row => row.pid === child.pid);
-      if (!root) return [];
-      const parents = new Map([[root.pid, root]]);
-      const descendants: ProcessIdentity[] = [];
-      let found = true;
-      while (found) {
-        found = false;
-        for (const row of rows) {
-          const parent = parents.get(row.parentPid);
-          if (!parents.has(row.pid) && parent && row.creationTime >= parent.creationTime) {
-            parents.set(row.pid, row);
-            descendants.push(row);
-            found = true;
-          }
-        }
-      }
-      return descendants;
-    })());
-    await tracked.get(child);
+      // A snapshot that ends after the shell exited may show another process under the shell's reused PID.
+      const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
+      const before = (await earlier) ?? [];
+      return [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
+    })();
+    recorded.set(child, latest);
+    await latest;
   };
   return killer;
 }
@@ -157,6 +187,7 @@ export function connectProxy(
   killTreeFn: KillTreeFn = killTree,
 ): Promise<ProxyConnection> {
   const child = spawnFn(command, ['app-server', 'proxy']);
+  void killTreeFn.track?.(child);
   child.stdin?.on('error', () => {});
   child.stderr?.on('data', (d) => logger.debug(`codex proxy: ${String(d).trim()}`));
 
@@ -178,11 +209,12 @@ export function connectProxy(
   const ws = new WebSocket('ws://localhost/', {
     createConnection: (() => stream) as unknown as ClientOptions['createConnection'],
   });
-  const close = () => {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
     ws.terminate();
     child.stdin?.end();
-    killTreeFn(child);
-  };
+    await killTreeFn(child);
+  })();
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -191,8 +223,7 @@ export function connectProxy(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      close();
-      reject(err);
+      void close().then(() => reject(err), () => reject(err));
     };
     child.on('error', fail);
     child.once('exit', (code) => fail(new Error(`codex proxy exited (code ${code})`)));
@@ -203,9 +234,8 @@ export function connectProxy(
       clearTimeout(timer);
       child.on('error', (err) => logger.warn(`codex proxy error: ${err.message}`));
       ws.on('error', (err) => logger.warn(`codex daemon socket error: ${err.message}`));
-      if (process.platform === 'win32' && (spawnFn === defaultSpawn || /\.(cmd|bat)$/i.test(command)) && resolveCommand(command).shell) {
-        void killTreeFn.track?.(child);
-      }
+      // The snapshot taken at spawn can predate the proxy that codex.cmd starts, so record the tree again now that it answers.
+      void killTreeFn.track?.(child);
       resolve({ ws, close });
     });
   });
