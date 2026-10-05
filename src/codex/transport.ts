@@ -60,26 +60,84 @@ export const defaultSpawn: SpawnFn = (command, args) => {
   return spawn(file, args, { stdio: 'pipe', windowsHide: true });
 };
 
-export type KillTreeFn = (child: ChildProcess) => void;
+export type KillTreeFn = ((child: ChildProcess) => void) & { track?: (child: ChildProcess) => Promise<void> };
+export interface ProcessIdentity { pid: number; parentPid: number; creationTime: string }
+export type ProcessQueryFn = () => Promise<ProcessIdentity[]>;
+
+export const queryProcesses: ProcessQueryFn = () => new Promise((resolve, reject) => {
+  const script = "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    if (err) { reject(err); return; }
+    try {
+      const rows: unknown = JSON.parse(stdout);
+      if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
+        throw new Error('invalid process snapshot');
+      }
+      resolve(rows);
+    } catch (error) { reject(error); }
+  });
+});
 export type RunFn = (file: string, args: string[], options: { windowsHide: boolean }, callback: (err: Error | null) => void) => void;
 
 const runFile: RunFn = (file, args, options, callback) => {
   execFile(file, args, options, (err) => callback(err));
 };
 
-export function treeKiller(platform: NodeJS.Platform = process.platform, run: RunFn = runFile): KillTreeFn {
-  return (child) => {
-    // Once the proxy has exited, Windows may give its pid to an unrelated process.
-    if (child.exitCode !== null || child.signalCode !== null) return;
+export function treeKiller(
+  platform: NodeJS.Platform = process.platform,
+  run: RunFn = runFile,
+  query: ProcessQueryFn = queryProcesses,
+): KillTreeFn {
+  const tracked = new WeakMap<ChildProcess, Promise<ProcessIdentity[]>>();
+  const stop = (pid: number) => run('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) => {
+    if (err) logger.debug(`taskkill ${pid} failed: ${err.message}`);
+  });
+  const snapshot = async () => {
+    try { return await query(); }
+    catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return []; }
+  };
+  const killer: KillTreeFn = (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      const pending = tracked.get(child);
+      if (platform === 'win32' && pending) void pending.then(async (descendants) => {
+        if (!descendants.length) return;
+        const current = await snapshot();
+        // Creation times prevent an exited proxy's reused PID from targeting another process.
+        for (const descendant of descendants) {
+          if (current.some(row => row.pid === descendant.pid && row.creationTime === descendant.creationTime)) stop(descendant.pid);
+        }
+      });
+      return;
+    }
     if (platform !== 'win32' || child.pid === undefined) {
       child.kill();
       return;
     }
-    // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, (err) => {
-      if (err) logger.debug(`taskkill ${child.pid} failed: ${err.message}`);
-    });
+    stop(child.pid);
   };
+  killer.track = async (child) => {
+    if (platform !== 'win32' || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    if (!tracked.has(child)) tracked.set(child, (async () => {
+      const rows = await snapshot();
+      if (child.exitCode !== null || child.signalCode !== null) return [];
+      const pids = new Set([child.pid]);
+      const descendants: ProcessIdentity[] = [];
+      let found = true;
+      while (found) {
+        found = false;
+        for (const row of rows) {
+          if (!pids.has(row.pid) && pids.has(row.parentPid)) {
+            pids.add(row.pid);
+            descendants.push(row);
+            found = true;
+          }
+        }
+      }
+      return descendants;
+    })());
+    await tracked.get(child);
+  };
+  return killer;
 }
 
 export const killTree: KillTreeFn = treeKiller();
@@ -140,6 +198,9 @@ export function connectProxy(
       clearTimeout(timer);
       child.on('error', (err) => logger.warn(`codex proxy error: ${err.message}`));
       ws.on('error', (err) => logger.warn(`codex daemon socket error: ${err.message}`));
+      if (process.platform === 'win32' && (spawnFn === defaultSpawn || /\.(cmd|bat)$/i.test(command)) && resolveCommand(command).shell) {
+        void killTreeFn.track?.(child);
+      }
       resolve({ ws, close });
     });
   });

@@ -237,16 +237,17 @@ test('G3: closing an exited shell ends its lingering proxy descendant', { skip: 
   const { cmd, pidFile } = fakeCodexCmd(FAKE_PROXY, { FAKE_CODEX_CONTROL: daemon.url, FAKE_CODEX_LINGER: '1' });
   let shell: ChildProcess | undefined;
   const proxy: { pid?: number; stopped?: boolean } = {};
+  const killer = treeKiller();
   try {
-    const conn = await connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 10_000);
+    const conn = await connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 10_000, killer);
     proxy.pid = await until(() => readPid(pidFile), 5000);
     assert.equal(alive(proxy.pid), true);
+    await killer.track!(shell!);
     shell!.kill();
     await until(() => shell!.exitCode !== null || shell!.signalCode !== null, 5000);
     assert.equal(alive(proxy.pid), true);
-    treeKiller()(shell!);
     conn.close();
-    await until(() => !alive(proxy.pid!), 1000);
+    await until(() => !alive(proxy.pid!), 10_000);
     proxy.pid = undefined;
     proxy.stopped = true;
   } finally {

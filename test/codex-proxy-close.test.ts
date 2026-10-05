@@ -2,7 +2,7 @@ import './isolate-home.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { connectProxy, treeKiller, type RunFn, type SpawnFn } from '../src/codex/transport.js';
+import { connectProxy, treeKiller, type KillTreeFn, type RunFn, type SpawnFn } from '../src/codex/transport.js';
 import { logger } from '../src/shared/logger.js';
 import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
@@ -104,5 +104,104 @@ test('a handshake timeout ends the proxy tree through the same function', async 
     await until(() => spawned!.exitCode !== null || spawned!.signalCode !== null);
   } finally {
     if (spawned && spawned.exitCode === null && spawned.signalCode === null) spawned.kill();
+  }
+});
+
+
+test('recorded descendants survive shell exit and only matching creation times are killed', async () => {
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  let calls = 0;
+  const query = async () => ++calls === 1 ? [
+    { pid: 4242, parentPid: 1, creationTime: 'root' },
+    { pid: 5001, parentPid: 4242, creationTime: 'original' },
+    { pid: 5002, parentPid: 5001, creationTime: 'nested' },
+    { pid: 5003, parentPid: 4242, creationTime: 'gone' },
+    { pid: 6000, parentPid: 1, creationTime: 'unrelated' },
+  ] : [
+    { pid: 4242, parentPid: 1, creationTime: 'reused-root' },
+    { pid: 5001, parentPid: 1, creationTime: 'reused-descendant' },
+    { pid: 5002, parentPid: 1, creationTime: 'nested' },
+    { pid: 6000, parentPid: 1, creationTime: 'unrelated' },
+  ];
+  const killer = treeKiller('win32', run, query);
+  await killer.track!(asChild(child));
+  child.exitCode = 0;
+  killer(asChild(child));
+  await until(() => runs.length === 1);
+  assert.deepEqual(runs, [{ file: 'taskkill', args: ['/PID', '5002', '/T', '/F'], options: { windowsHide: true } }]);
+  assert.equal(child.kills, 0);
+});
+
+test('failed descendant queries are logged and record no processes', async (t) => {
+  const debug = t.mock.method(logger, 'debug');
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  const killer = treeKiller('win32', run, async () => { throw new Error('query failed'); });
+  await killer.track!(asChild(child));
+  child.exitCode = 0;
+  killer(asChild(child));
+  assert.deepEqual(runs, []);
+  assert.ok(debug.mock.calls.some(c => String(c.arguments[0]).includes('query failed')));
+});
+
+test('a snapshot finishing after shell exit is not recorded', async () => {
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  let finish!: (rows: Array<{ pid: number; parentPid: number; creationTime: string }>) => void;
+  const killer = treeKiller('win32', run, () => new Promise(resolve => { finish = resolve; }));
+  const pending = killer.track!(asChild(child));
+  child.exitCode = 0;
+  finish([{ pid: 5001, parentPid: 4242, creationTime: 'original' }]);
+  await pending;
+  killer(asChild(child));
+  assert.deepEqual(runs, []);
+});
+
+
+test('a failed verification query leaves recorded descendants alone', async (t) => {
+  const debug = t.mock.method(logger, 'debug');
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  let calls = 0;
+  const killer = treeKiller('win32', run, async () => {
+    if (++calls === 1) return [{ pid: 5001, parentPid: 4242, creationTime: 'original' }];
+    throw new Error('verification failed');
+  });
+  await killer.track!(asChild(child));
+  child.exitCode = 0;
+  killer(asChild(child));
+  await until(() => debug.mock.calls.some(c => String(c.arguments[0]).includes('verification failed')));
+  assert.deepEqual(runs, []);
+});
+
+test('tracking on other platforms never queries processes', async () => {
+  const child = fakeChild();
+  let queried = false;
+  const { run } = recorder();
+  const killer = treeKiller('linux', run, async () => { queried = true; return []; });
+  await killer.track!(asChild(child));
+  killer(asChild(child));
+  assert.equal(queried, false);
+  assert.equal(child.kills, 1);
+});
+
+test('a pending descendant query does not delay the handshake', { skip: process.platform !== 'win32' }, async () => {
+  const daemon = new FakeDaemon();
+  await daemon.start();
+  let spawned: ChildProcess | undefined;
+  let trackingStarted = false;
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const killer: KillTreeFn = child => { child.kill(); };
+  killer.track = () => { trackingStarted = true; return pending; };
+  try {
+    const conn = await connectProxy('fake-codex.cmd', (command, args) => (spawned = daemon.spawnFn(command, args)), 5000, killer);
+    assert.equal(trackingStarted, true);
+    conn.close();
+  } finally {
+    finish();
+    if (spawned && spawned.exitCode === null && spawned.signalCode === null) spawned.kill();
+    await daemon.stop();
   }
 });
