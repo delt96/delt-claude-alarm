@@ -704,6 +704,11 @@ export class HubServer {
           const channelWs = this.channelSockets.get(msg.sessionId);
           if (channelWs?.readyState === WebSocket.OPEN) {
             channelWs.send(JSON.stringify({ ...msg, source: 'dashboard' }));
+          } else {
+            const reason = 'the session is not connected';
+            logger.warn(`Message rejected for ${msg.sessionId}: ${reason}`);
+            const rejected: ChannelMessage = { type: 'message_rejected', sessionId: msg.sessionId, reason };
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(rejected));
           }
         } else if (msg.type === 'image_upload') {
           this.handleImageUpload(ws, msg);
@@ -836,21 +841,27 @@ export class HubServer {
   private initTelegram(config: TelegramConfig): void {
     this.telegramBot = new TelegramBot(config);
     this.telegramBot.getSessions = () => this.sessions.getAll();
-    this.telegramBot.onMessageToSession = (sessionId, content) => {
+    this.telegramBot.onMessageToSession = (sessionId, content): boolean => {
       const channelWs = this.channelSockets.get(sessionId);
-      if (channelWs?.readyState === WebSocket.OPEN) {
-        const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'telegram' };
-        channelWs.send(JSON.stringify(msg));
-        logger.info(`Telegram message forwarded to session: ${sessionId}`);
+      if (channelWs?.readyState !== WebSocket.OPEN) {
+        logger.warn(`Telegram message not delivered to ${sessionId}: the session is not connected`);
+        return false;
       }
+      const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'telegram' };
+      channelWs.send(JSON.stringify(msg));
+      logger.info(`Telegram message forwarded to session: ${sessionId}`);
+      return true;
     };
-    this.telegramBot.onImageToSession = (sessionId, imagePath, mimeType, caption) => {
+    this.telegramBot.onImageToSession = (sessionId, imagePath, mimeType, caption): boolean => {
       const channelWs = this.channelSockets.get(sessionId);
-      if (channelWs?.readyState === WebSocket.OPEN) {
-        const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption, source: 'telegram' };
-        channelWs.send(JSON.stringify(msg));
-        logger.info(`Telegram photo forwarded to session: ${sessionId}`);
+      if (channelWs?.readyState !== WebSocket.OPEN) {
+        logger.warn(`Telegram photo not delivered to ${sessionId}: the session is not connected`);
+        return false;
       }
+      const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption, source: 'telegram' };
+      channelWs.send(JSON.stringify(msg));
+      logger.info(`Telegram photo forwarded to session: ${sessionId}`);
+      return true;
     };
     this.telegramBot.onPermissionVerdict = (sessionId, requestId, behavior) => {
       if (this.forwardPermissionResponse({ sessionId, requestId, behavior })) {
