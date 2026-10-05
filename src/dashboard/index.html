@@ -2145,7 +2145,9 @@
     for (const m of restored) addPermissionRequest(m);
     if (restored.length) {
       const label = `${restored.length} approval request(s) waiting`;
-      state.notifications.unshift({ sessionId: restored[0].sessionId, title: label, message: restored.map(m => `${m.toolName}: ${m.description}`).join('\n'), level: 'warning', time: Date.now() });
+      const listed = restored.slice(0, 3).map(m => `${m.toolName}: ${m.description}`).join(' · ');
+      const message = restored.length > 3 ? `${listed} …and ${restored.length - 3} more` : listed;
+      state.notifications.unshift({ sessionId: restored[0].sessionId, title: label, message, level: 'warning', time: Date.now() });
       flashTitle(label);
     }
     renderPermissionBar();

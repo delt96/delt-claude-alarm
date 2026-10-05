@@ -51,7 +51,16 @@ test('restored approvals all join the permission bar with one notification row a
   assert.equal(n.title, '3 approval request(s) waiting');
   assert.equal(n.level, 'warning');
   assert.equal(n.sessionId, 'codex:t1');
+  assert.equal(n.message, 'Command: Run r1? · Command: Run r2? · Command: Run r3?');
   assert.deepEqual(flashes, ['3 approval request(s) waiting']);
+});
+
+test('the restored row names at most three approvals and counts the rest', () => {
+  const { ctx } = loadPermissions();
+  ctx.restorePendingRequests(['r1', 'r2', 'r3', 'r4', 'r5'].map((id) => pending('codex:t1', id)));
+  const [n] = ctx.state.notifications;
+  assert.equal(n.title, '5 approval request(s) waiting');
+  assert.equal(n.message, 'Command: Run r1? · Command: Run r2? · Command: Run r3? …and 2 more');
 });
 
 test('a single restored approval is counted the same way', () => {
