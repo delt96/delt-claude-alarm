@@ -97,6 +97,7 @@ export function treeKiller(
     catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return []; }
   };
   const killer: KillTreeFn = (child) => {
+    // Once the proxy has exited, Windows may give its pid to an unrelated process.
     if (child.exitCode !== null || child.signalCode !== null) {
       const pending = tracked.get(child);
       if (platform === 'win32' && pending) void pending.then(async (descendants) => {
@@ -113,6 +114,7 @@ export function treeKiller(
       child.kill();
       return;
     }
+    // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
     stop(child.pid);
   };
   killer.track = async (child) => {
@@ -120,14 +122,17 @@ export function treeKiller(
     if (!tracked.has(child)) tracked.set(child, (async () => {
       const rows = await snapshot();
       if (child.exitCode !== null || child.signalCode !== null) return [];
-      const pids = new Set([child.pid]);
+      const root = rows.find(row => row.pid === child.pid);
+      if (!root) return [];
+      const parents = new Map([[root.pid, root]]);
       const descendants: ProcessIdentity[] = [];
       let found = true;
       while (found) {
         found = false;
         for (const row of rows) {
-          if (!pids.has(row.pid) && pids.has(row.parentPid)) {
-            pids.add(row.pid);
+          const parent = parents.get(row.parentPid);
+          if (!parents.has(row.pid) && parent && row.creationTime >= parent.creationTime) {
+            parents.set(row.pid, row);
             descendants.push(row);
             found = true;
           }

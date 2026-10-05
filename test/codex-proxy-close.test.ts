@@ -113,16 +113,16 @@ test('recorded descendants survive shell exit and only matching creation times a
   const { runs, run } = recorder();
   let calls = 0;
   const query = async () => ++calls === 1 ? [
-    { pid: 4242, parentPid: 1, creationTime: 'root' },
-    { pid: 5001, parentPid: 4242, creationTime: 'original' },
-    { pid: 5002, parentPid: 5001, creationTime: 'nested' },
-    { pid: 5003, parentPid: 4242, creationTime: 'gone' },
-    { pid: 6000, parentPid: 1, creationTime: 'unrelated' },
+    { pid: 4242, parentPid: 1, creationTime: '2026-10-05T00:00:01.0000000Z' },
+    { pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:02.0000000Z' },
+    { pid: 5002, parentPid: 5001, creationTime: '2026-10-05T00:00:03.0000000Z' },
+    { pid: 5003, parentPid: 4242, creationTime: '2026-10-05T00:00:02.0000000Z' },
+    { pid: 6000, parentPid: 1, creationTime: '2026-10-05T00:00:01.0000000Z' },
   ] : [
-    { pid: 4242, parentPid: 1, creationTime: 'reused-root' },
-    { pid: 5001, parentPid: 1, creationTime: 'reused-descendant' },
-    { pid: 5002, parentPid: 1, creationTime: 'nested' },
-    { pid: 6000, parentPid: 1, creationTime: 'unrelated' },
+    { pid: 4242, parentPid: 1, creationTime: '2026-10-05T00:00:04.0000000Z' },
+    { pid: 5001, parentPid: 1, creationTime: '2026-10-05T00:00:04.0000000Z' },
+    { pid: 5002, parentPid: 1, creationTime: '2026-10-05T00:00:03.0000000Z' },
+    { pid: 6000, parentPid: 1, creationTime: '2026-10-05T00:00:01.0000000Z' },
   ];
   const killer = treeKiller('win32', run, query);
   await killer.track!(asChild(child));
@@ -141,6 +141,7 @@ test('failed descendant queries are logged and record no processes', async (t) =
   await killer.track!(asChild(child));
   child.exitCode = 0;
   killer(asChild(child));
+  await new Promise<void>(resolve => setImmediate(resolve));
   assert.deepEqual(runs, []);
   assert.ok(debug.mock.calls.some(c => String(c.arguments[0]).includes('query failed')));
 });
@@ -148,14 +149,21 @@ test('failed descendant queries are logged and record no processes', async (t) =
 test('a snapshot finishing after shell exit is not recorded', async () => {
   const child = fakeChild();
   const { runs, run } = recorder();
-  let finish!: (rows: Array<{ pid: number; parentPid: number; creationTime: string }>) => void;
-  const killer = treeKiller('win32', run, () => new Promise(resolve => { finish = resolve; }));
+  const rows = [
+    { pid: 4242, parentPid: 1, creationTime: '2026-10-05T00:00:01.0000000Z' },
+    { pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:02.0000000Z' },
+  ];
+  let calls = 0;
+  let finish!: (rows: typeof rows) => void;
+  const killer = treeKiller('win32', run, () => ++calls === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(rows));
   const pending = killer.track!(asChild(child));
   child.exitCode = 0;
-  finish([{ pid: 5001, parentPid: 4242, creationTime: 'original' }]);
+  finish(rows);
   await pending;
   killer(asChild(child));
+  await new Promise<void>(resolve => setImmediate(resolve));
   assert.deepEqual(runs, []);
+  assert.equal(calls, 1);
 });
 
 
@@ -165,7 +173,7 @@ test('a failed verification query leaves recorded descendants alone', async (t) 
   const { runs, run } = recorder();
   let calls = 0;
   const killer = treeKiller('win32', run, async () => {
-    if (++calls === 1) return [{ pid: 5001, parentPid: 4242, creationTime: 'original' }];
+    if (++calls === 1) return [{ pid: 4242, parentPid: 1, creationTime: '2026-10-05T00:00:01.0000000Z' }, { pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:02.0000000Z' }];
     throw new Error('verification failed');
   });
   await killer.track!(asChild(child));
@@ -204,4 +212,40 @@ test('a pending descendant query does not delay the handshake', { skip: process.
     if (spawned && spawned.exitCode === null && spawned.signalCode === null) spawned.kill();
     await daemon.stop();
   }
+});
+
+
+test('older processes naming reused parent PIDs are excluded at every level', async () => {
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  const rows = [
+    { pid: 4242, parentPid: 1, creationTime: '2026-10-05T00:00:02.0000000Z' },
+    { pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:01.0000000Z' },
+    { pid: 5002, parentPid: 5001, creationTime: '2026-10-05T00:00:04.0000000Z' },
+    { pid: 5003, parentPid: 4242, creationTime: '2026-10-05T00:00:03.0000000Z' },
+    { pid: 5004, parentPid: 5003, creationTime: '2026-10-05T00:00:02.0000000Z' },
+    { pid: 5005, parentPid: 5003, creationTime: '2026-10-05T00:00:03.0000000Z' },
+  ];
+  const killer = treeKiller('win32', run, async () => rows);
+  await killer.track!(asChild(child));
+  child.exitCode = 0;
+  killer(asChild(child));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(runs.map(row => row.args[1]), ['5003', '5005']);
+});
+
+test('a snapshot missing the shell row records nothing', async () => {
+  const child = fakeChild();
+  const { runs, run } = recorder();
+  let calls = 0;
+  const killer = treeKiller('win32', run, async () => {
+    calls++;
+    return [{ pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:03.0000000Z' }];
+  });
+  await killer.track!(asChild(child));
+  child.exitCode = 0;
+  killer(asChild(child));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(runs, []);
+  assert.equal(calls, 1);
 });
