@@ -1106,3 +1106,70 @@ test('an approval that cannot be relayed falls back to the Codex warning without
     dash.ws.close();
   }
 });
+
+const waiting = { type: 'active', activeFlags: ['waitingOnApproval'] };
+const WAITING_NOTICE = 'Codex is waiting for an approval or input. Answer it first, then send the message again.';
+
+test('an approval that starts while a message is being prepared gets no steer', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/turns/list', () => {
+      dm.notify('thread/status/changed', { threadId: 't1', status: waiting });
+      return { data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null };
+    });
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'also this' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Not delivered');
+    assert.equal(n.level, 'warning');
+    assert.equal(n.message, WAITING_NOTICE);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.calls('turn/steer').length, 0);
+    assert.equal(d.calls('turn/start').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('an approval that starts while a message is being prepared gets no new turn either', async () => {
+  const d = await startAdapter([thread('t1')], (dm) => {
+    dm.handle('thread/turns/list', () => {
+      dm.notify('thread/status/changed', { threadId: 't1', status: waiting });
+      return { data: [], nextCursor: null };
+    });
+  });
+  await session('codex:t1');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'hello' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Not delivered');
+    assert.equal(n.message, WAITING_NOTICE);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(d.calls('turn/start').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a message refused at the last moment does not leave the conversation marked busy', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], (dm) => {
+    dm.handle('thread/turns/list', () => {
+      dm.notify('thread/started', { thread: thread('t1', { status: waiting }) });
+      return { data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null };
+    });
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    dash.ws.send(JSON.stringify({ type: 'message_to_session', sessionId: 'codex:t1', content: 'also this' }));
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.sessionId === 'codex:t1'));
+    assert.equal(n.title, 'Not delivered');
+    assert.equal((adapter as any).threads.get('t1').pendingTurn, false);
+    assert.equal(d.calls('turn/steer').length, 0);
+  } finally {
+    dash.ws.close();
+  }
+});

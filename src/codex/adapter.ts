@@ -514,7 +514,7 @@ export class CodexAdapter {
     if (this.threads.get(threadId) !== t) return;
     // A steer is accepted while an approval is pending but read only after it is answered, which reads like an answer.
     if (hubStatus(t.thread.status) === 'waiting_input') {
-      this.notify(threadId, 'Not delivered', 'Codex is waiting for an approval or input. Answer it first, then send the message again.', 'warning');
+      this.refuseWhileWaiting(threadId);
       return;
     }
     let input: UserInput[];
@@ -536,6 +536,12 @@ export class CodexAdapter {
       const unsubscribed = !t.subscribed;
       const running = await this.runningTurn(rpc, threadId);
       if (this.threads.get(threadId) !== t) return;
+      // An approval can start while the input is built and the turn looked up; the check at the top cannot see it.
+      if (hubStatus(t.thread.status) === 'waiting_input') {
+        this.abandonDelivery(t, wasUnrelayed);
+        this.refuseWhileWaiting(threadId);
+        return;
+      }
       if (unsubscribed) t.unrelayed = true;
       if (running) {
         await rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
@@ -544,11 +550,19 @@ export class CodexAdapter {
       }
       await rpc.request('turn/start', { threadId, input });
     } catch (err) {
-      t.pendingTurn = false;
-      t.unrelayed = wasUnrelayed;
-      this.releaseLater(t);
+      this.abandonDelivery(t, wasUnrelayed);
       this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
     }
+  }
+
+  private abandonDelivery(t: Tracked, wasUnrelayed: boolean): void {
+    t.pendingTurn = false;
+    t.unrelayed = wasUnrelayed;
+    this.releaseLater(t);
+  }
+
+  private refuseWhileWaiting(threadId: string): void {
+    this.notify(threadId, 'Not delivered', 'Codex is waiting for an approval or input. Answer it first, then send the message again.', 'warning');
   }
 
   // The list is unavailable before a new conversation's first turn; starting a turn is safe then, since turn/start steers a running turn.
