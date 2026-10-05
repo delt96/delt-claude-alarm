@@ -230,8 +230,7 @@ test('closing a connection to a codex.cmd proxy also ends the proxy under the sh
   }
 });
 
-
-test('G3: closing an exited shell ends its lingering proxy descendant', { skip: process.platform !== 'win32' }, async () => {
+test('closing a connection whose shell has exited still ends the proxy that outlived it', { skip: process.platform !== 'win32' }, async () => {
   const daemon = new FakeDaemon();
   await daemon.start();
   const { cmd, pidFile } = fakeCodexCmd(FAKE_PROXY, { FAKE_CODEX_CONTROL: daemon.url, FAKE_CODEX_LINGER: '1' });

@@ -107,7 +107,6 @@ test('a handshake timeout ends the proxy tree through the same function', async 
   }
 });
 
-
 test('recorded descendants survive shell exit and only matching creation times are killed', async () => {
   const child = fakeChild();
   const { runs, run } = recorder();
@@ -143,7 +142,7 @@ test('failed descendant queries are logged and record no processes', async (t) =
   killer(asChild(child));
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.deepEqual(runs, []);
-  assert.ok(debug.mock.calls.some(c => String(c.arguments[0]).includes('query failed')));
+  assert.equal(debug.mock.calls.some(c => String(c.arguments[0]).includes('query failed')), true);
 });
 
 test('a snapshot finishing after shell exit is not recorded', async () => {
@@ -165,7 +164,6 @@ test('a snapshot finishing after shell exit is not recorded', async () => {
   assert.deepEqual(runs, []);
   assert.equal(calls, 1);
 });
-
 
 test('a failed verification query leaves recorded descendants alone', async (t) => {
   const debug = t.mock.method(logger, 'debug');
@@ -213,7 +211,6 @@ test('a pending descendant query does not delay the handshake', { skip: process.
     await daemon.stop();
   }
 });
-
 
 test('older processes naming reused parent PIDs are excluded at every level', async () => {
   const child = fakeChild();
