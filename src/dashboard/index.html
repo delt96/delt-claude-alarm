@@ -1477,27 +1477,7 @@
         renderNotifications();
         break;
       case 'permission_request':
-        if (!state.permissionRequests[msg.sessionId]) state.permissionRequests[msg.sessionId] = [];
-        state.permissionRequests[msg.sessionId].unshift({
-          requestId: msg.requestId,
-          toolName: msg.toolName,
-          description: msg.description,
-          inputPreview: msg.inputPreview,
-          timestamp: msg.timestamp,
-          resolved: false,
-          behavior: null,
-          choices: msg.choices || null,
-          sent: null,
-          outcome: null,
-        });
-        // Auto-select session if none selected
-        if (!state.selectedSession && state.sessions[msg.sessionId]) selectSession(msg.sessionId);
-        if (state.selectedSession === msg.sessionId) { renderMessages(); renderPermissionBar(); }
-        // Also show in notifications with permission info
-        state.notifications.unshift({ sessionId: msg.sessionId, title: 'Permission Request', message: `${msg.toolName}: ${msg.description}`, level: 'warning', time: msg.timestamp, permRequestId: msg.requestId });
-        renderNotifications();
-        // Play notification sound effect via title flash
-        flashTitle('Permission Request');
+        showPermissionRequest(msg);
         break;
       case 'permission_response':
         // Another source (Telegram, other dashboard) resolved a permission request
@@ -1511,11 +1491,7 @@
         }
         break;
       case 'permission_pending':
-        for (const m of applyPendingChoices(state.permissionRequests, msg.requests || [])) {
-          handleMessage({ type: 'permission_request', ...m });
-        }
-        renderPermissionBar();
-        renderNotifications();
+        restorePendingRequests(msg.requests || []);
         break;
       case 'codex_adapters': {
         state.codexAdapters = msg.adapters || [];
@@ -2138,6 +2114,44 @@
     return missing;
   }
 
+  function addPermissionRequest(msg) {
+    if (!state.permissionRequests[msg.sessionId]) state.permissionRequests[msg.sessionId] = [];
+    state.permissionRequests[msg.sessionId].unshift({
+      requestId: msg.requestId,
+      toolName: msg.toolName,
+      description: msg.description,
+      inputPreview: msg.inputPreview,
+      timestamp: msg.timestamp,
+      resolved: false,
+      behavior: null,
+      choices: msg.choices || null,
+      sent: null,
+      outcome: null,
+    });
+    if (!state.selectedSession && state.sessions[msg.sessionId]) selectSession(msg.sessionId);
+    if (state.selectedSession === msg.sessionId) { renderMessages(); renderPermissionBar(); }
+  }
+
+  function showPermissionRequest(msg) {
+    addPermissionRequest(msg);
+    state.notifications.unshift({ sessionId: msg.sessionId, title: 'Permission Request', message: `${msg.toolName}: ${msg.description}`, level: 'warning', time: msg.timestamp, permRequestId: msg.requestId });
+    renderNotifications();
+    flashTitle('Permission Request');
+  }
+
+  // A reconnect can bring back many requests at once; one row and one flash keep them from burying the notifications.
+  function restorePendingRequests(requests) {
+    const restored = applyPendingChoices(state.permissionRequests, requests);
+    for (const m of restored) addPermissionRequest(m);
+    if (restored.length) {
+      const label = `${restored.length} approval request(s) waiting`;
+      state.notifications.unshift({ sessionId: restored[0].sessionId, title: label, message: restored.map(m => `${m.toolName}: ${m.description}`).join('\n'), level: 'warning', time: Date.now() });
+      flashTitle(label);
+    }
+    renderPermissionBar();
+    renderNotifications();
+  }
+
   function sendPermissionChoice(sessionId, requestId, choiceId) {
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
     state.ws.send(JSON.stringify({ type: 'permission_response', sessionId, requestId, choiceId }));
@@ -2221,23 +2235,28 @@
   }, true);
 
   // Flash title for attention
-  let flashInterval = null;
+  let flash = null;
   function flashTitle(msg) {
-    const original = document.title;
-    let on = true;
-    clearInterval(flashInterval);
-    flashInterval = setInterval(() => {
-      document.title = on ? `** ${msg} **` : original;
-      on = !on;
-    }, 500);
-    const stopFlash = () => {
-      clearInterval(flashInterval);
-      flashInterval = null;
-      document.title = original;
-      window.removeEventListener('focus', stopFlash);
+    // While flashing, document.title may hold the flash text, so only a flash that starts from rest reads the real title.
+    if (flash) {
+      flash.msg = msg;
+      return;
+    }
+    const current = { msg, original: document.title, on: true, interval: null, timeout: null };
+    const stop = () => {
+      clearInterval(current.interval);
+      clearTimeout(current.timeout);
+      window.removeEventListener('focus', stop);
+      document.title = current.original;
+      flash = null;
     };
-    window.addEventListener('focus', stopFlash);
-    setTimeout(stopFlash, 30000);
+    current.interval = setInterval(() => {
+      document.title = current.on ? `** ${current.msg} **` : current.original;
+      current.on = !current.on;
+    }, 500);
+    current.timeout = setTimeout(stop, 30000);
+    window.addEventListener('focus', stop);
+    flash = current;
   }
 
   // Clear all notifications
