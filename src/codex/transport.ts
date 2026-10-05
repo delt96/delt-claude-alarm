@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
@@ -60,10 +60,39 @@ export const defaultSpawn: SpawnFn = (command, args) => {
   return spawn(file, args, { stdio: 'pipe', windowsHide: true });
 };
 
+export type KillTreeFn = (child: ChildProcess) => void;
+export type RunFn = (file: string, args: string[], options: { windowsHide: boolean }, callback: (err: Error | null) => void) => void;
+
+const runFile: RunFn = (file, args, options, callback) => {
+  execFile(file, args, options, (err) => callback(err));
+};
+
+export function treeKiller(platform: NodeJS.Platform = process.platform, run: RunFn = runFile): KillTreeFn {
+  return (child) => {
+    // Once the proxy has exited, Windows may give its pid to an unrelated process.
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (platform !== 'win32' || child.pid === undefined) {
+      child.kill();
+      return;
+    }
+    // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
+    run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, (err) => {
+      if (err) logger.debug(`taskkill ${child.pid} failed: ${err.message}`);
+    });
+  };
+}
+
+export const killTree: KillTreeFn = treeKiller();
+
 // The daemon control socket speaks WebSocket, not JSONL: `codex app-server proxy` only relays bytes.
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 
-export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn, timeoutMs = HANDSHAKE_TIMEOUT_MS): Promise<ProxyConnection> {
+export function connectProxy(
+  command: string,
+  spawnFn: SpawnFn = defaultSpawn,
+  timeoutMs = HANDSHAKE_TIMEOUT_MS,
+  killTreeFn: KillTreeFn = killTree,
+): Promise<ProxyConnection> {
   const child = spawnFn(command, ['app-server', 'proxy']);
   child.stdin?.on('error', () => {});
   child.stderr?.on('data', (d) => logger.debug(`codex proxy: ${String(d).trim()}`));
@@ -88,7 +117,8 @@ export function connectProxy(command: string, spawnFn: SpawnFn = defaultSpawn, t
   });
   const close = () => {
     ws.terminate();
-    child.kill();
+    child.stdin?.end();
+    killTreeFn(child);
   };
 
   return new Promise((resolve, reject) => {
