@@ -42,7 +42,7 @@ export type ChannelMessage =
   | { type: 'register'; session: SessionInfo }
   | { type: 'status'; sessionId: string; status: SessionStatus }
   | { type: 'peer_name'; sessionId: string; peerName?: string }
-  | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel }
+  | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel; to?: MessageSource }
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }
   | { type: 'image_upload'; sessionId: string; imageData: string; mimeType: string; originalName?: string; content?: string }

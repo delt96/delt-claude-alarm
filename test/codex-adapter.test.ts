@@ -1173,3 +1173,75 @@ test('a message refused at the last moment does not leave the conversation marke
     dash.ws.close();
   }
 });
+
+function hubSends(threadId: string): any[] {
+  const link = (adapter as any).threads.get(threadId).hub;
+  const sent: any[] = [];
+  const send = link.send.bind(link);
+  link.send = (m: any) => {
+    sent.push(m);
+    return send(m);
+  };
+  return sent;
+}
+
+const steering = (dm: FakeDaemon) =>
+  dm.handle('thread/turns/list', () => ({ data: [{ id: 'u9', status: 'inProgress', items: [] }], nextCursor: null }));
+
+test('the Queued notice is addressed to where the message came from', async () => {
+  await startAdapter([thread('t1', { status: active })], steering);
+  await session('codex:t1', (s) => s.status === 'working');
+  const toHub = hubSends('t1');
+  for (const source of ['telegram', 'api', 'dashboard']) {
+    (adapter as any).onHubMessage('t1', { type: 'message_to_session', sessionId: 'codex:t1', content: `from ${source}`, source });
+  }
+  const queued = await until(() => {
+    const q = toHub.filter((m) => m.type === 'notify' && m.title === 'Queued');
+    return q.length === 3 && q;
+  });
+  assert.deepEqual(queued.map((m) => m.to), ['telegram', 'api', 'dashboard']);
+});
+
+test('a Queued notice for a message from Telegram does not reach the dashboard', async () => {
+  const d = await startAdapter([thread('t1', { status: active })], steering);
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    (adapter as any).onHubMessage('t1', { type: 'message_to_session', sessionId: 'codex:t1', content: 'from phone', source: 'telegram' });
+    await until(() => d.calls('turn/steer').length === 1);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(dash.inbox.filter((m) => m.type === 'notification' && m.title === 'Queued'), []);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('a Queued notice for a message without a source still goes everywhere', async () => {
+  await startAdapter([thread('t1', { status: active })], steering);
+  await session('codex:t1', (s) => s.status === 'working');
+  const dash = await openDashboard();
+  try {
+    const toHub = hubSends('t1');
+    (adapter as any).onHubMessage('t1', { type: 'message_to_session', sessionId: 'codex:t1', content: 'from an old hub' });
+    const n = await until(() => dash.inbox.find((m) => m.type === 'notification' && m.title === 'Queued'));
+    assert.equal(n.level, 'info');
+    assert.equal('to' in toHub.find((m) => m.type === 'notify'), false);
+  } finally {
+    dash.ws.close();
+  }
+});
+
+test('other notices stay unaddressed even for a message from Telegram', async () => {
+  await startAdapter([thread('t1', { status: active })], (dm) => {
+    steering(dm);
+    dm.handle('turn/steer', () => {
+      throw new Error('no active turn to steer');
+    });
+  });
+  await session('codex:t1', (s) => s.status === 'working');
+  const toHub = hubSends('t1');
+  (adapter as any).onHubMessage('t1', { type: 'message_to_session', sessionId: 'codex:t1', content: 'from phone', source: 'telegram' });
+  const n = await until(() => toHub.find((m) => m.type === 'notify'));
+  assert.equal(n.title, 'Not delivered');
+  assert.equal('to' in n, false);
+});

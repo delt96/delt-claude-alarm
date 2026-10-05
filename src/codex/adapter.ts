@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
-import type { ChannelMessage, CodexCall, NotifyLevel, SessionInfo } from '../shared/types.js';
+import type { ChannelMessage, CodexCall, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { imageInput, textInput, type UserInput } from './inputs.js';
 import { RpcClient, type RpcId } from './rpc.js';
@@ -490,9 +490,9 @@ export class CodexAdapter {
 
   private onHubMessage(threadId: string, msg: ChannelMessage): void {
     if (msg.type === 'message_to_session') {
-      this.enqueue(threadId, async () => textInput(msg.content, msg.source));
+      this.enqueue(threadId, async () => textInput(msg.content, msg.source), msg.source);
     } else if (msg.type === 'image_to_session') {
-      this.enqueue(threadId, () => imageInput(msg.imagePath, msg.mimeType, msg.content, msg.source));
+      this.enqueue(threadId, () => imageInput(msg.imagePath, msg.mimeType, msg.content, msg.source), msg.source);
     } else if (msg.type === 'permission_response') {
       this.answer(threadId, msg.requestId, msg.choiceId);
     } else if (msg.type === 'codex_close') {
@@ -501,15 +501,15 @@ export class CodexAdapter {
   }
 
   // One message at a time per conversation, so a message right behind another sees the turn the first one started.
-  private enqueue(threadId: string, build: () => Promise<UserInput[]>): void {
+  private enqueue(threadId: string, build: () => Promise<UserInput[]>, source?: MessageSource): void {
     const t = this.threads.get(threadId);
     if (!t) return;
     t.sending = t.sending
-      .then(() => this.deliver(t, build))
+      .then(() => this.deliver(t, build, source))
       .catch((err) => logger.warn(`Codex delivery for ${threadId} failed: ${(err as Error).message}`));
   }
 
-  private async deliver(t: Tracked, build: () => Promise<UserInput[]>): Promise<void> {
+  private async deliver(t: Tracked, build: () => Promise<UserInput[]>, source?: MessageSource): Promise<void> {
     const threadId = t.thread.id;
     if (this.threads.get(threadId) !== t) return;
     // A steer is accepted while an approval is pending but read only after it is answered, which reads like an answer.
@@ -545,7 +545,7 @@ export class CodexAdapter {
       if (unsubscribed) t.unrelayed = true;
       if (running) {
         await rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
-        this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info');
+        this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info', source);
         return;
       }
       await rpc.request('turn/start', { threadId, input });
@@ -652,7 +652,7 @@ export class CodexAdapter {
     this.threads.get(a.threadId)?.hub.send({ type: 'permission_resolved', sessionId: codexSessionId(a.threadId), requestId, state });
   }
 
-  private notify(threadId: string, title: string, message: string, level: NotifyLevel): void {
-    this.threads.get(threadId)?.hub.send({ type: 'notify', sessionId: codexSessionId(threadId), title, message, level });
+  private notify(threadId: string, title: string, message: string, level: NotifyLevel, to?: MessageSource): void {
+    this.threads.get(threadId)?.hub.send({ type: 'notify', sessionId: codexSessionId(threadId), title, message, level, ...(to ? { to } : {}) });
   }
 }

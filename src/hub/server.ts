@@ -484,7 +484,17 @@ export class HubServer {
         this.sessions.updateActivity(msg.sessionId);
         const notifySession = this.sessions.get(msg.sessionId);
         const notifyLabel = this.getSessionLabel(notifySession);
-        this.notifier.notifyWithSession(msg.sessionId, notifyLabel, `[${notifyLabel}] ${msg.title}`, msg.message, msg.level ?? 'info');
+        const notifyTitle = `[${notifyLabel}] ${msg.title}`;
+        if (msg.to === 'api') {
+          logger.info(`${notifyTitle}: ${msg.message}`);
+          break;
+        }
+        if (msg.to === 'telegram') {
+          void this.telegramBot?.sendNotification(msg.sessionId, notifyLabel, notifyTitle, msg.message);
+          break;
+        }
+        // A `to` this hub does not know comes from a newer adapter; sending it everywhere loses nothing.
+        if (msg.to !== 'dashboard') this.notifier.notifyWithSession(msg.sessionId, notifyLabel, notifyTitle, msg.message, msg.level ?? 'info');
         this.broadcastToDashboards({
           type: 'notification',
           sessionId: msg.sessionId,

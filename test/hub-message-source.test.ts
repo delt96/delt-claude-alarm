@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { HubServer } from '../src/hub/server.js';
 import { saveConfig } from '../src/shared/config.js';
 import { logger } from '../src/shared/logger.js';
+import { until } from './helpers/fake-codex-daemon.js';
 
 const PORT = 7995;
 const TG_PORT = 7991;
@@ -128,5 +129,104 @@ test('Telegram callbacks say whether the session got the message', async (t) => 
     ch.ws.close();
   } finally {
     await tg.hub.stop();
+  }
+});
+
+const notice = (ch: { ws: WebSocket }, sessionId: string, title: string, to?: string) =>
+  ch.ws.send(JSON.stringify({ type: 'notify', sessionId, title, message: 'body', level: 'info', ...(to ? { to } : {}) }));
+
+async function noticeSetup(port: number, id: string) {
+  const ch = await open('/ws/channel', port);
+  register(ch.ws, id);
+  await settle();
+  const dash = await open('/ws/dashboard', port);
+  return { ch, dash, close: () => { dash.ws.close(); ch.ws.close(); } };
+}
+
+const dashNotices = (dash: { inbox: any[] }) => dash.inbox.filter((m) => m.type === 'notification');
+
+test('a notice addressed to the dashboard goes only to dashboards', async (t) => {
+  const tg = await telegramHub(t);
+  const notify = t.mock.method((tg.hub as any).notifier, 'notifyWithSession');
+  try {
+    const r = await noticeSetup(TG_PORT, 'route-dash');
+    notice(r.ch, 'route-dash', 'Route dash', 'dashboard');
+    await until(() => dashNotices(r.dash).find((m) => m.title === 'Route dash'));
+    await settle();
+    assert.equal(notify.mock.callCount(), 0);
+    assert.deepEqual(tg.sent.filter((text) => text.includes('Route dash')), []);
+    r.close();
+  } finally {
+    await tg.hub.stop();
+  }
+});
+
+test('a notice addressed to Telegram goes only to the bot, and a reply to it reaches the session', async (t) => {
+  const tg = await telegramHub(t);
+  const notify = t.mock.method((tg.hub as any).notifier, 'notifyWithSession');
+  try {
+    const r = await noticeSetup(TG_PORT, 'route-tg');
+    notice(r.ch, 'route-tg', 'Route tg', 'telegram');
+    await until(() => tg.sent.find((text) => text.includes('[route-tg] Route tg')));
+    await settle();
+    assert.equal(notify.mock.callCount(), 0);
+    assert.deepEqual(dashNotices(r.dash), []);
+    const messageId = 101 + tg.sent.findIndex((text) => text.includes('[route-tg] Route tg'));
+    await (tg.hub as any).telegramBot.handleIncomingMessage({ message_id: 900, chat: { id: 111 }, text: 'and then?', reply_to_message: { message_id: messageId } });
+    const got = await until(() => r.ch.inbox.find((m) => m.type === 'message_to_session'));
+    assert.equal(got.content, 'and then?');
+    assert.equal(got.source, 'telegram');
+    r.close();
+  } finally {
+    await tg.hub.stop();
+  }
+});
+
+test('a notice addressed to the API sender is only logged', async (t) => {
+  const tg = await telegramHub(t);
+  const notify = t.mock.method((tg.hub as any).notifier, 'notifyWithSession');
+  const info = t.mock.method(logger, 'info');
+  try {
+    const r = await noticeSetup(TG_PORT, 'route-api');
+    notice(r.ch, 'route-api', 'Route api', 'api');
+    await until(() => info.mock.calls.find((c) => String(c.arguments[0]).includes('[route-api] Route api')));
+    await settle();
+    assert.equal(notify.mock.callCount(), 0);
+    assert.deepEqual(dashNotices(r.dash), []);
+    assert.deepEqual(tg.sent.filter((text) => text.includes('Route api')), []);
+    r.close();
+  } finally {
+    await tg.hub.stop();
+  }
+});
+
+for (const [name, to] of [['without an address', undefined], ['with an address this hub does not know', 'pager']] as const) {
+  test(`a notice ${name} goes everywhere, as before`, async (t) => {
+    const tg = await telegramHub(t);
+    const notify = t.mock.method((tg.hub as any).notifier, 'notifyWithSession');
+    try {
+      const r = await noticeSetup(TG_PORT, 'route-all');
+      notice(r.ch, 'route-all', 'Route all', to);
+      await until(() => dashNotices(r.dash).find((m) => m.title === 'Route all'));
+      await until(() => tg.sent.find((text) => text.includes('[route-all] Route all')));
+      assert.equal(notify.mock.callCount(), 1);
+      r.close();
+    } finally {
+      await tg.hub.stop();
+    }
+  });
+}
+
+test('a notice addressed to Telegram goes nowhere when no bot is set up', async (t) => {
+  const notify = t.mock.method((hub as any).notifier, 'notifyWithSession');
+  const r = await noticeSetup(PORT, 'route-nobot');
+  try {
+    notice(r.ch, 'route-nobot', 'Route nobot', 'telegram');
+    await settle();
+    await settle();
+    assert.equal(notify.mock.callCount(), 0);
+    assert.deepEqual(dashNotices(r.dash), []);
+  } finally {
+    r.close();
   }
 });
