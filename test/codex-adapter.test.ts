@@ -2,7 +2,7 @@
 import './isolate-home.js';
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -1244,4 +1244,46 @@ test('other notices stay unaddressed even for a message from Telegram', async ()
   const n = await until(() => toHub.find((m) => m.type === 'notify'));
   assert.equal(n.title, 'Not delivered');
   assert.equal('to' in n, false);
+});
+
+function holdClose(conn: { close(): Promise<void> }): () => void {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const close = conn.close;
+  conn.close = () => close().then(() => gate);
+  return finish;
+}
+
+async function stopsOnlyAfter(release: () => void): Promise<void> {
+  let stopped = false;
+  const stopping = adapter!.stop().then(() => { stopped = true; });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(stopped, false);
+  release();
+  await stopping;
+}
+
+test('stopping the adapter waits until its proxy connection is closed', async () => {
+  await startAdapter([]);
+  const conn = await until(() => (adapter as any).conn);
+  await stopsOnlyAfter(holdClose(conn));
+});
+
+test('stopping the adapter also waits for a proxy close that began when the daemon was lost', async () => {
+  const d = await startAdapter([]);
+  const release = holdClose(await until(() => (adapter as any).conn));
+  d.dropClient();
+  await until(() => (adapter as any).conn === undefined);
+  await stopsOnlyAfter(release);
+});
+
+test('stopping the adapter while it connects waits until that proxy is closed', async () => {
+  const d = new FakeDaemon();
+  daemon = d;
+  await d.start();
+  let spawned: ChildProcess | undefined;
+  adapter = new CodexAdapter({ command: 'codex', hub: HUB, spawnFn: (command, args) => (spawned = d.spawnFn(command, args)), reconnectMinMs: 50 });
+  adapter.start();
+  await adapter.stop();
+  assert.equal(spawned!.killed, true);
 });

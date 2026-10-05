@@ -23,12 +23,12 @@ let exiting = false;
 const shutdown = () => {
   if (exiting) return;
   exiting = true;
-  adapter?.stop();
+  // A codex.cmd proxy runs outside the job that ends this process's children on exit, so its kill must finish first.
+  const stopped = adapter?.stop();
   const exit = () => process.exit(0);
-  // server.close() waits for open control connections; a client that never finishes must not keep a stopped adapter alive.
+  // server.close() waits for open control connections and the kill for a process snapshot; neither may keep a stopped adapter alive.
   setTimeout(exit, 3000).unref();
-  if (release) release().then(exit, exit);
-  else exit();
+  Promise.all([stopped, release?.()]).then(exit, exit);
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

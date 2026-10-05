@@ -255,7 +255,7 @@ export async function runCodexTask(opts: CodexRunOptions): Promise<CodexRunResul
     };
   } finally {
     for (const t of timers) clearTimeout(t);
-    conn.close();
+    await conn.close();
   }
 }
 

@@ -68,6 +68,8 @@ interface PendingApproval {
 
 export class CodexAdapter {
   private conn?: ProxyConnection;
+  private connecting?: Promise<void>;
+  private closing = new Set<Promise<void>>();
   private rpc?: RpcClient;
   private threads = new Map<string, Tracked>();
   private approvals = new Map<string, PendingApproval>();
@@ -91,16 +93,24 @@ export class CodexAdapter {
   start(): void {
     this.stopped = false;
     this.link.connect();
-    void this.connect();
+    this.connecting = this.connect();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     this.link.disconnect();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
-    this.conn?.close();
+    this.closeConn(this.conn);
+    await this.connecting;
+    await Promise.all(this.closing);
+  }
+
+  private closeConn(conn: ProxyConnection | undefined): void {
+    if (!conn) return;
+    const closing: Promise<void> = conn.close().finally(() => this.closing.delete(closing));
+    this.closing.add(closing);
   }
 
   private async connect(): Promise<void> {
@@ -108,7 +118,7 @@ export class CodexAdapter {
     try {
       const conn = await connectProxy(this.opts.command, this.opts.spawnFn);
       if (this.stopped) {
-        conn.close();
+        this.closeConn(conn);
         return;
       }
       const live = new RpcClient(conn.ws, this.opts.rpcTimeoutMs);
@@ -140,7 +150,7 @@ export class CodexAdapter {
       });
       if (rpc && this.rpc === rpc) {
         this.rpc = undefined;
-        this.conn?.close();
+        this.closeConn(this.conn);
         this.conn = undefined;
       }
       for (const id of [...this.threads.keys()]) this.drop(id);
@@ -151,7 +161,7 @@ export class CodexAdapter {
   private onDaemonLost(): void {
     this.setReady(false);
     this.rpc = undefined;
-    this.conn?.close();
+    this.closeConn(this.conn);
     this.conn = undefined;
     for (const id of [...this.threads.keys()]) this.drop(id);
     if (!this.stopped) logger.warn('Codex daemon connection lost');
@@ -162,7 +172,7 @@ export class CodexAdapter {
     if (this.stopped || this.retryTimer) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      void this.connect();
+      this.connecting = this.connect();
     }, this.delay);
     this.delay = Math.min(this.delay * 2, this.opts.reconnectMaxMs ?? 60_000);
   }
