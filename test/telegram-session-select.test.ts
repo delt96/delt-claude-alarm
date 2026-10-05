@@ -16,7 +16,7 @@ function setup(t: any, initial: ReturnType<typeof s>[]) {
   const state = { sessions: initial };
   bot.getSessions = () => state.sessions;
   const delivered: string[] = [];
-  bot.onMessageToSession = (id, content) => { delivered.push(`${id}:${content}`); };
+  bot.onMessageToSession = (id, content) => { delivered.push(`${id}:${content}`); return true; };
   return { bot, state, delivered, calls };
 }
 

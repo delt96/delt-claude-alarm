@@ -13,6 +13,7 @@ const MAX_SELECTIONS = 20;
 const MAX_VISIBLE_CHARS = 4000;
 const TRUNCATED = '…(truncated)';
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const NO_LONGER_CONNECTED = 'the session is no longer connected';
 
 // Telegram's 4096 limit counts the text left after parsing entities: tags are free and each escape is one character.
 export function visibleLength(html: string): number {
@@ -72,9 +73,9 @@ export class TelegramBot {
   private messageSessionMap = new Map<number, string>();
 
   // Callback: when a text message arrives from Telegram for a session
-  public onMessageToSession?: (sessionId: string, content: string) => void;
+  public onMessageToSession?: (sessionId: string, content: string) => boolean;
   // Callback: when an image arrives from Telegram for a session
-  public onImageToSession?: (sessionId: string, imagePath: string, mimeType: string, caption?: string) => void;
+  public onImageToSession?: (sessionId: string, imagePath: string, mimeType: string, caption?: string) => boolean;
   // Callback: when a permission verdict arrives from Telegram
   public onPermissionVerdict?: (sessionId: string, requestId: string, behavior: 'allow' | 'deny') => void;
   // Callback: when a Codex approval choice arrives from Telegram
@@ -257,13 +258,7 @@ export class TelegramBot {
           this.selections.delete(latest);
           const session = this.pendingSession(pending, parseInt(selectMatch[1], 10) - 1);
           if (session) {
-            let delivered = true;
-            if (pending.photoFileId) {
-              delivered = await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
-            } else if (pending.text) {
-              this.deliverToSession(session.id, pending.text);
-            }
-            if (delivered) this.sendMessage(`Sent to [${this.getLabel(session)}]`);
+            if (await this.deliverPending(session.id, pending)) this.sendMessage(`Sent to [${this.getLabel(session)}]`);
           } else {
             this.sendMessage('Invalid session number.');
           }
@@ -311,10 +306,15 @@ export class TelegramBot {
     this.sendMessage('Multiple sessions active. Select one:', undefined, { inline_keyboard: rows });
   }
 
-  private deliverToSession(sessionId: string, content: string): void {
-    if (this.onMessageToSession) {
-      this.onMessageToSession(sessionId, content);
-    }
+  private deliverToSession(sessionId: string, content: string): boolean {
+    const delivered = this.onMessageToSession?.(sessionId, content) === true;
+    if (!delivered) void this.sendMessage(`Not delivered: ${NO_LONGER_CONNECTED}`);
+    return delivered;
+  }
+
+  private async deliverPending(sessionId: string, pending: PendingSelection): Promise<boolean> {
+    if (pending.photoFileId) return this.deliverPhotoToSessionByFileId(sessionId, pending.photoFileId, pending.caption);
+    return pending.text ? this.deliverToSession(sessionId, pending.text) : false;
   }
 
   private async deliverPhotoToSession(sessionId: string, photos: TelegramPhotoSize[], caption?: string): Promise<boolean> {
@@ -353,12 +353,14 @@ export class TelegramBot {
       fs.writeFileSync(filePath, buffer);
       logger.info(`Telegram photo saved: ${filename} (${buffer.length} bytes)`);
 
-      if (this.onImageToSession) {
-        this.onImageToSession(sessionId, filePath, mimeType, caption);
+      if (this.onImageToSession?.(sessionId, filePath, mimeType, caption) !== true) {
+        try { fs.unlinkSync(filePath); } catch {}
+        this.photoNotDelivered(NO_LONGER_CONNECTED);
+        return false;
       }
 
       setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, 5 * 60 * 1000).unref();
-      return this.onImageToSession !== undefined;
+      return true;
     } catch (err) {
       logger.warn(`Telegram photo download failed: ${(err as Error).message}`);
       this.photoNotDelivered('the download failed');
@@ -583,15 +585,10 @@ export class TelegramBot {
     }
     this.selections.delete(selectionId);
 
-    if (pending.photoFileId) {
-      const delivered = await this.deliverPhotoToSessionByFileId(session.id, pending.photoFileId, pending.caption);
-      if (!delivered) {
-        await this.answerCallbackQuery(query.id, 'Photo not delivered');
-        if (query.message) await this.removeButtons(query.message.chat.id, query.message.message_id);
-        return;
-      }
-    } else if (pending.text) {
-      this.deliverToSession(session.id, pending.text);
+    if (!(await this.deliverPending(session.id, pending))) {
+      await this.answerCallbackQuery(query.id, pending.photoFileId ? 'Photo not delivered' : 'Not delivered');
+      if (query.message) await this.removeButtons(query.message.chat.id, query.message.message_id);
+      return;
     }
 
     await this.answerCallbackQuery(query.id, `Sent to ${this.getLabel(session)}`);

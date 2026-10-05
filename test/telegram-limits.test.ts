@@ -25,7 +25,7 @@ function setup(t: any, sessions = [s('a')], opts: { getFile?: unknown; download?
   const bot = new TelegramBot({ botToken: 'x', chatId: '111', enabled: true } as any);
   bot.getSessions = () => sessions;
   const images: string[] = [];
-  bot.onImageToSession = (id, _path, mime) => { images.push(`${id}:${mime}`); };
+  bot.onImageToSession = (id, _path, mime) => { images.push(`${id}:${mime}`); return true; };
   return { bot, calls, images };
 }
 
