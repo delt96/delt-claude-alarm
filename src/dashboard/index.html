@@ -1286,13 +1286,20 @@
   }
 
   function showUploadRejected(msg) {
-    state.waitingReply[msg.sessionId] = false;
-    const label = msg.withText ? 'Image and message not delivered' : 'Image not delivered';
-    if (state.selectedSession === msg.sessionId) {
+    showNotDelivered(msg.sessionId, msg.withText ? 'Image and message not delivered' : 'Image not delivered', msg.reason);
+  }
+
+  function showMessageRejected(msg) {
+    showNotDelivered(msg.sessionId, 'Message not delivered', msg.reason);
+  }
+
+  function showNotDelivered(sessionId, label, reason) {
+    state.waitingReply[sessionId] = false;
+    if (state.selectedSession === sessionId) {
       renderMessages();
-      showMentionError(`${label}: ${msg.reason}`);
+      showMentionError(`${label}: ${reason}`);
     }
-    state.notifications.unshift({ sessionId: msg.sessionId, title: label, message: msg.reason, level: 'warning', time: Date.now() });
+    state.notifications.unshift({ sessionId, title: label, message: reason, level: 'warning', time: Date.now() });
     renderNotifications();
   }
 
@@ -1461,6 +1468,9 @@
         break;
       case 'upload_rejected':
         showUploadRejected(msg);
+        break;
+      case 'message_rejected':
+        showMessageRejected(msg);
         break;
       case 'notification':
         state.notifications.unshift({ sessionId: msg.sessionId, title: msg.title, message: msg.message, level: msg.level || 'info', time: msg.timestamp });
