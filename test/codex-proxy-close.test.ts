@@ -17,6 +17,8 @@ interface FakeChild {
   lingers: boolean;
   kill(): boolean;
   once(event: 'exit', listener: () => void): FakeChild;
+  removeListener(event: 'exit', listener: () => void): FakeChild;
+  exitListeners(): number;
   exit(): void;
 }
 
@@ -38,6 +40,12 @@ function fakeChild(state: Partial<Pick<FakeChild, 'pid' | 'exitCode' | 'signalCo
       onExit.push(listener);
       return child;
     },
+    removeListener: (_event, listener) => {
+      const i = onExit.indexOf(listener);
+      if (i >= 0) onExit.splice(i, 1);
+      return child;
+    },
+    exitListeners: () => onExit.length,
     exit: () => {
       child.signalCode = 'SIGTERM';
       for (const listener of onExit.splice(0)) listener();
@@ -92,6 +100,7 @@ function fakeSystem(rows: ProcessIdentity[]) {
       settle();
       return seen;
     },
+    start: (process: ProcessIdentity) => { running.push(process); },
     exit: (pid: number) => { running.splice(at(pid), 1); },
     // The process holding this PID exits and Windows gives the PID to `next`.
     reuse: (next: ProcessIdentity) => { running.splice(at(next.pid), 1, next); },
@@ -104,6 +113,7 @@ function fakeSystem(rows: ProcessIdentity[]) {
 
 const asChild = (c: FakeChild) => c as unknown as ChildProcess;
 const row = (pid: number, parentPid: number, second: number): ProcessIdentity => ({ pid, parentPid, creationTime: `2026-10-05T00:00:0${second}.0000000Z` });
+const at = (second: number) => Date.parse(`2026-10-05T00:00:0${second}.000Z`);
 const viaShell = () => true;
 const direct = () => false;
 const silentChild = () => spawn(process.execPath, ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], { stdio: 'pipe' });
@@ -151,6 +161,91 @@ test('a recorded descendant whose PID goes to a new process after the shell has 
   assert.equal(sys.isRunning(newcomer), true);
 });
 
+test('a shell that exits before the handshake still has the descendants it started after the spawn snapshot ended', async () => {
+  const sys = fakeSystem([row(4242, 1, 1), row(6000, 1, 1)]);
+  const child = fakeChild();
+  let now = at(1);
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now);
+  await killer.track!(asChild(child));
+  sys.start(row(5001, 4242, 2));
+  sys.start(row(5002, 5001, 3));
+  now = at(5);
+  child.exit();
+  sys.exit(4242);
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5002, 5001, 3), row(5001, 4242, 2)]);
+  assert.equal(sys.isRunning(row(6000, 1, 1)), true);
+  assert.equal(child.kills, 0);
+});
+
+test('after the shell has exited, a process given its PID and that process\'s children are never ended', async () => {
+  const sys = fakeSystem([row(4242, 1, 1)]);
+  const child = fakeChild();
+  let now = at(1);
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now);
+  await killer.track!(asChild(child));
+  sys.start(row(5001, 4242, 2));
+  now = at(5);
+  child.exit();
+  const newcomer = row(4242, 1, 6);
+  sys.reuse(newcomer);
+  sys.start(row(5009, 4242, 7));
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal([newcomer, row(5009, 4242, 7)].every(sys.isRunning), true);
+});
+
+test('a child the shell started in the last moments before it exited is left alone', async () => {
+  const late: ProcessIdentity = { pid: 5003, parentPid: 4242, creationTime: '2026-10-05T00:00:04.9500000Z' };
+  const sys = fakeSystem([row(4242, 1, 1)]);
+  const child = fakeChild();
+  let now = at(1);
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now);
+  await killer.track!(asChild(child));
+  sys.start(row(5001, 4242, 2));
+  sys.start(late);
+  now = at(5);
+  child.exit();
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal(sys.isRunning(late), true);
+});
+
+test('a shell that exited before any snapshot saw it alive leaves its unrecorded descendants alone', async () => {
+  const sys = fakeSystem([row(5001, 4242, 2), row(5002, 5001, 3)]);
+  const child = fakeChild();
+  let now = at(1);
+  let failing = true;
+  const killer = treeKiller('win32', sys.end, async () => { if (failing) throw new Error('query failed'); return sys.query(); }, viaShell, () => now);
+  await killer.track!(asChild(child));
+  now = at(5);
+  child.exit();
+  failing = false;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, []);
+});
+
+test('a shell that exits while the close snapshot is taken still has the children it started before then ended', async () => {
+  const sys = fakeSystem([row(4242, 1, 1)]);
+  const child = fakeChild();
+  let now = at(1);
+  let closing = false;
+  const killer = treeKiller('win32', sys.end, async () => {
+    const rows = await sys.query();
+    if (closing) {
+      now = at(5);
+      child.exit();
+    }
+    return rows;
+  }, viaShell, () => now);
+  await killer.track!(asChild(child));
+  sys.start(row(5001, 4242, 2));
+  closing = true;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal(child.kills, 0);
+});
+
 test('a live codex.cmd shell has its descendants ended by identity in one batch, then the shell itself', async () => {
   const events: string[] = [];
   const { ends, end } = recorder(undefined, events);
@@ -196,6 +291,7 @@ test('a shell that has not exited soon after it is ended still lets the kill set
   await treeKiller('win32', end, async () => [row(4242, 1, 1)], viaShell)(asChild(child));
   assert.equal(child.kills, 1);
   assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('4242')), true);
+  assert.equal(child.exitListeners(), 0);
 });
 
 test('a live shell also has its recorded descendants ended when its current tree no longer reaches them', async () => {
@@ -579,7 +675,24 @@ test('failed descendant queries are logged and record no processes', async (t) =
   assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('query failed')), true);
 });
 
-test('a snapshot finishing after shell exit is not recorded', async () => {
+test('a recording whose snapshot finishes after the shell exited keeps only the children born before the exit', async () => {
+  const child = fakeChild();
+  const { ends, end } = recorder();
+  let now = at(1);
+  let calls = 0;
+  let finish!: (rows: ProcessIdentity[]) => void;
+  const atClose = [row(4242, 1, 6), row(5001, 4242, 2), row(5009, 4242, 7)];
+  const killer = treeKiller('win32', end, () => ++calls === 1 ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(atClose), viaShell, () => now);
+  const pending = killer.track!(asChild(child));
+  now = at(5);
+  child.exit();
+  finish([row(4242, 1, 1), row(5001, 4242, 2)]);
+  await pending;
+  await killer(asChild(child));
+  assert.deepEqual(ends, [[row(5001, 4242, 2)]]);
+});
+
+test('when the shell\'s exit was not seen, a snapshot finishing after it is not recorded', async () => {
   const child = fakeChild();
   const { ends, end } = recorder();
   const rows = [row(4242, 1, 1), row(5001, 4242, 2)];

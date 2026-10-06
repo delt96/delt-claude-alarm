@@ -161,13 +161,15 @@ function readPid(file: string): number | undefined {
   }
 }
 
-function fakeCodexCmd(script: string, env: Record<string, string> = {}): { cmd: string; pidFile: string; wrapperPidFile: string } {
+function fakeCodexCmd(script: string, env: Record<string, string> = {}, waitFor?: string): { cmd: string; pidFile: string; wrapperPidFile: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-tree-'));
   const pidFile = path.join(dir, 'proxy.pid');
   const wrapperPidFile = path.join(dir, 'wrapper.pid');
   const sets = Object.entries({ ...env, FAKE_CODEX_PID_FILE: pidFile, FAKE_CODEX_WRAPPER_PID_FILE: wrapperPidFile }).map(([k, v]) => `set "${k}=${v}"`);
+  // The shell starts nothing else until the file exists.
+  const wait = waitFor ? [`"${process.execPath}" -e "const t = setInterval(() => require('fs').existsSync(process.argv[1]) && clearInterval(t), 50)" "${waitFor}"`] : [];
   const cmd = path.join(dir, 'codex.cmd');
-  fs.writeFileSync(cmd, ['@echo off', ...sets, `"${process.execPath}" "${script}" %*`, ''].join('\r\n'));
+  fs.writeFileSync(cmd, ['@echo off', ...sets, ...wait, `"${process.execPath}" "${script}" %*`, ''].join('\r\n'));
   return { cmd, pidFile, wrapperPidFile };
 }
 
@@ -316,6 +318,49 @@ test('closing a codex.cmd proxy whose wrapper exits on its own ends all of our p
     if (shell && shell.exitCode === null && shell.signalCode === null) shell.kill();
     unrelated?.kill();
     await daemon.stop();
+  }
+});
+
+test('a shell that exits before the handshake has the processes it started after the spawn snapshot ended, and nothing else', { skip: process.platform !== 'win32' }, async () => {
+  const go = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-go-')), 'go');
+  const { cmd, pidFile, wrapperPidFile } = fakeCodexCmd(FAKE_WRAPPER, { FAKE_CODEX_WRAPPED: silentProxy() }, go);
+  const real = treeKiller();
+  const recordings: Promise<void>[] = [];
+  const killer: KillTreeFn = Object.assign((child: ChildProcess) => real(child), {
+    track: (child: ChildProcess) => {
+      const recording = real.track!(child);
+      recordings.push(recording);
+      return recording;
+    },
+  });
+  let shell: ChildProcess | undefined;
+  let unrelated: ChildProcess | undefined;
+  let ours: ProcessIdentity[] = [];
+  try {
+    const pending = connectProxy(cmd, (command, args) => (shell = defaultSpawn(command, args)), 20_000, killer);
+    pending.catch(() => {});
+    await recordings[0];
+    fs.writeFileSync(go, '');
+    const wrapperPid = await until(() => readPid(wrapperPidFile), 5000);
+    const proxyPid = await until(() => readPid(pidFile), 5000);
+    unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const before = await queryProcesses();
+    const wrapper = before.find((r) => r.pid === wrapperPid);
+    const proxy = before.find((r) => r.pid === proxyPid);
+    const other = before.find((r) => r.pid === unrelated!.pid);
+    assert.deepEqual([wrapper?.parentPid, proxy?.parentPid, other === undefined], [shell!.pid, wrapperPid, false]);
+    ours = [wrapper!, proxy!];
+    shell!.kill();
+    await assert.rejects(pending, /^Error: codex proxy exited/);
+    const after = await queryProcesses();
+    const running = (p: ProcessIdentity) => after.some((r) => r.pid === p.pid && r.creationTime === p.creationTime);
+    assert.deepEqual(ours.filter(running), []);
+    ours = [];
+    assert.equal(running(other!), true);
+  } finally {
+    if (ours.length) await endProcesses(ours);
+    if (shell && shell.exitCode === null && shell.signalCode === null) shell.kill();
+    unrelated?.kill();
   }
 });
 

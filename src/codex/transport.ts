@@ -127,9 +127,7 @@ export const processEnder = (prelude = ''): ProcessEndFn => async (targets) => {
 
 export const endProcesses: ProcessEndFn = processEnder();
 
-function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] | undefined {
-  const root = rows.find(row => row.pid === rootPid);
-  if (!root) return undefined;
+function descendantsOf(root: ProcessIdentity, rows: ProcessIdentity[], childrenBornBefore?: string): Descendant[] {
   const found: Descendant[] = [];
   const seen = new Set([root.pid]);
   let level: ProcessIdentity[] = [root];
@@ -139,6 +137,7 @@ function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] |
       for (const row of rows) {
         // Windows keeps a dead parent's PID in its children, so a process older than the PID's current owner is not its child.
         if (row.parentPid !== parent.pid || seen.has(row.pid) || row.creationTime < parent.creationTime) continue;
+        if (depth === 1 && childrenBornBefore !== undefined && row.creationTime >= childrenBornBefore) continue;
         seen.add(row.pid);
         next.push(row);
         found.push({ ...row, depth });
@@ -156,26 +155,36 @@ export const PROXY_TREE_CLOSE_BUDGET_MS = 2 * POWERSHELL_TIMEOUT_MS + SHELL_EXIT
 
 const exitOf = (child: ChildProcess) => new Promise<void>((resolve) => {
   if (exited(child)) { resolve(); return; }
+  const onExit = () => {
+    clearTimeout(timer);
+    resolve();
+  };
   const timer = setTimeout(() => {
+    child.removeListener('exit', onExit);
     logger.debug(`codex proxy shell ${child.pid} has not exited yet`);
     resolve();
   }, SHELL_EXIT_WAIT_MS);
-  child.once('exit', () => {
-    clearTimeout(timer);
-    resolve();
-  });
+  child.once('exit', onExit);
 });
+
+// Where creation times are recorded to the clock tick (up to 15.6 ms), a process started after the shell's exit can read as slightly earlier.
+const EXIT_TIME_MARGIN_MS = 100;
+const asCreationTime = (ms: number) => `${new Date(ms).toISOString().slice(0, 23)}0000Z`;
 
 const merged = (before: Descendant[], found: Descendant[]) =>
   [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
+
+interface ShellRecord { creationTime?: string; childrenBornBefore?: string }
 
 export function treeKiller(
   platform: NodeJS.Platform = process.platform,
   end: ProcessEndFn = endProcesses,
   query: ProcessQueryFn = queryProcesses,
   throughShell: (child: ChildProcess) => boolean = spawnedThroughShell,
+  clock: () => number = Date.now,
 ): KillTreeFn {
   const recorded = new WeakMap<ChildProcess, Promise<Descendant[]>>();
+  const shells = new WeakMap<ChildProcess, ShellRecord>();
   // No taskkill: it ends whatever holds a PID by then, and its /T builds trees from ParentProcessId alone.
   const endByIdentity = async (descendants: Descendant[]) => {
     if (!descendants.length) return;
@@ -188,27 +197,47 @@ export function treeKiller(
     catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return undefined; }
   };
   const isShellTree = (child: ChildProcess) => platform === 'win32' && child.pid !== undefined && throughShell(child);
+  const treeOf = (child: ChildProcess, rows: ProcessIdentity[] | undefined): Descendant[] => {
+    if (!rows) return [];
+    const shell = shells.get(child);
+    if (!exited(child)) {
+      // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
+      const root = rows.find(row => row.pid === child.pid);
+      if (!root) return [];
+      if (shell) shell.creationTime ??= root.creationTime;
+      return descendantsOf(root, rows);
+    }
+    if (!shell?.childrenBornBefore) return [];
+    const bornBefore = shell.childrenBornBefore;
+    // Whoever holds the shell's PID now started either as our shell, before it exited, or after it exited.
+    shell.creationTime ??= rows.find(row => row.pid === child.pid && row.creationTime < bornBefore)?.creationTime;
+    if (!shell.creationTime) return [];
+    return descendantsOf({ pid: child.pid!, parentPid: 0, creationTime: shell.creationTime }, rows, bornBefore);
+  };
   const killer: KillTreeFn = async (child) => {
     if (!isShellTree(child)) {
       if (!exited(child)) child.kill();
       return;
     }
     // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    const [rows, before] = await Promise.all([exited(child) ? undefined : snapshot(), recorded.get(child)]);
-    // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
-    const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
-    await endByIdentity(merged(before ?? [], found));
+    const findable = !exited(child) || shells.get(child)?.childrenBornBefore !== undefined;
+    const [rows, before] = await Promise.all([findable ? snapshot() : undefined, recorded.get(child)]);
+    await endByIdentity(merged(before ?? [], treeOf(child, rows)));
     if (exited(child)) return;
     child.kill();
     await exitOf(child);
   };
   killer.track = async (child) => {
     if (!isShellTree(child) || exited(child)) return;
+    if (!shells.has(child)) {
+      const shell: ShellRecord = {};
+      shells.set(child, shell);
+      // libuv closes the shell's handle only after the 'exit' listeners have run, so its PID cannot go to another process before this moment.
+      child.once('exit', () => { shell.childrenBornBefore = asCreationTime(clock() - EXIT_TIME_MARGIN_MS); });
+    }
     const earlier = recorded.get(child);
     const latest = (async () => {
-      const rows = await snapshot();
-      // A snapshot that ends after the shell exited may show another process under the shell's reused PID.
-      const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
+      const found = treeOf(child, await snapshot());
       return merged((await earlier) ?? [], found);
     })();
     recorded.set(child, latest);
