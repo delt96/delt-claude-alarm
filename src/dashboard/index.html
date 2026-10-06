@@ -2086,7 +2086,9 @@
     const added = requests.filter(r => addQuestion(r));
     for (const r of requests) {
       const m = questionMessage(r.sessionId, r.requestId);
-      if (m && !added.includes(r)) { m.state = r.sending ? 'sending' : 'open'; if (!r.sending) m.answers = null; }
+      if (!m) continue;
+      if (!added.includes(r)) { m.state = r.sending ? 'sending' : 'open'; if (!r.sending) m.answers = null; }
+      if (r.sending && r.answers) { m.answers = r.answers; m.source = r.source || null; }
     }
     for (const [sid, msgs] of Object.entries(state.messages)) {
       for (const m of msgs) {
@@ -2124,16 +2126,25 @@
   }
 
   function resolveQuestionCard(msg) {
-    updateQuestion(msg, m => {
+    const resolved = updateQuestion(msg, m => {
       m.state = msg.state;
       if (msg.answers) m.answers = msg.answers;
       m.source = msg.source || null;
       m.error = null;
       delete state.questionDrafts[m.requestId];
     });
+    if (resolved && state.selectedSession === msg.sessionId) clearAnswerError();
+  }
+
+  // The line under the message box also carries message and upload errors, which must stay.
+  function clearAnswerError() {
+    if ($('#mentionError').textContent.startsWith('Answer not delivered')) showMentionError(null);
   }
 
   function rejectQuestionCard(msg) {
+    const current = questionMessage(msg.sessionId, msg.requestId);
+    // Another answer got there first; this card already shows it, and its own outcome follows.
+    if (current && current.state === 'sending' && msg.reason === 'the question is already being answered') return;
     const m = updateQuestion(msg, q => {
       if (q.state !== 'open' && q.state !== 'sending') return;
       q.state = 'open';
@@ -2212,6 +2223,7 @@
     m.answers = answers;
     m.source = 'dashboard';
     m.error = null;
+    clearAnswerError();
     saveMessages();
     renderMessages();
   }

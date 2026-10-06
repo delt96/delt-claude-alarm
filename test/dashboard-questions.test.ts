@@ -17,9 +17,11 @@ function section(from: string, to: string): string {
 function load(selectedSession = 's1') {
   const flashes: string[] = [];
   const sent: any[] = [];
-  const errors: string[] = [];
+  const errors: Array<string | null> = [];
+  const mention = { textContent: '' };
   const renders = { messages: 0, sessions: 0, notifications: 0 };
   const ctx: Record<string, any> = {
+    $: (sel: string) => (sel === '#mentionError' ? mention : null),
     state: { selectedSession, messages: {}, notifications: [], unread: {}, waitingReply: { s1: true }, questionDrafts: {}, composing: false, ws: { readyState: 1, send: (d: string) => sent.push(JSON.parse(d)) } },
     WebSocket: { OPEN: 1 },
     document: { activeElement: null, querySelectorAll: () => [] },
@@ -31,11 +33,11 @@ function load(selectedSession = 's1') {
     renderNotifications: () => { renders.notifications++; },
     saveMessages: () => {},
     flashTitle: (m: string) => flashes.push(m),
-    showMentionError: (m: string) => errors.push(m),
+    showMentionError: (m: string | null) => { errors.push(m); mention.textContent = m || ''; },
   };
   vm.createContext(ctx);
   vm.runInContext(section('  // --- Questions ---', '  // --- Permission relay ---'), ctx);
-  return { ctx, flashes, sent, errors, renders };
+  return { ctx, flashes, sent, errors, renders, mention };
 }
 
 const questions = [
@@ -115,6 +117,61 @@ test('sending, answered, and rejected update the card; a rejection reopens it wi
   assert.equal(ctx.state.questionDrafts.r1, undefined);
   ctx.markQuestionSending({ sessionId: 's1', requestId: 'r1', answers: { q1: 'Red', q2: 'C' }, source: 'dashboard' });
   assert.equal(card(ctx).state, 'answered');
+});
+
+test('the "Answer not delivered" line goes when a card of this session is sent again or resolved, and other lines stay', () => {
+  const { ctx, mention } = load();
+  ctx.showQuestion(ask());
+  ctx.showQuestion(ask({ requestId: 'r2' }));
+  ctx.rejectQuestionCard({ sessionId: 's1', requestId: 'r1', reason: 'busy' });
+  assert.equal(mention.textContent, 'Answer not delivered: busy');
+  ctx.sendQuestionAnswer('s1', card(ctx), { q1: 'Red', q2: 'A' });
+  assert.equal(mention.textContent, '');
+  ctx.rejectQuestionCard({ sessionId: 's1', requestId: 'r1', reason: 'busy' });
+  ctx.resolveQuestionCard({ sessionId: 's1', requestId: 'r1', state: 'closed' });
+  assert.equal(mention.textContent, '');
+  ctx.rejectQuestionCard({ sessionId: 's1', requestId: 'r2', reason: 'busy' });
+  ctx.state.messages.s2 = [{ kind: 'question', requestId: 'x', questions, state: 'open' }];
+  ctx.resolveQuestionCard({ sessionId: 's2', requestId: 'x', state: 'expired' });
+  assert.equal(mention.textContent, 'Answer not delivered: busy');
+  ctx.showMentionError('Message not delivered: the session is not connected');
+  ctx.sendQuestionAnswer('s1', card(ctx, 's1', 'r2'), { q1: 'Red', q2: 'A' });
+  ctx.resolveQuestionCard({ sessionId: 's1', requestId: 'r2', state: 'answered', answers: { q1: 'Red', q2: 'A' }, source: 'dashboard' });
+  assert.equal(mention.textContent, 'Message not delivered: the session is not connected');
+});
+
+test('an answer that lost the race to another one leaves the card sending with the winner, without a red line', () => {
+  const { ctx, errors } = load();
+  ctx.showQuestion(ask());
+  const m = card(ctx);
+  ctx.sendQuestionAnswer('s1', m, { q1: 'Red', q2: 'Mine' });
+  ctx.markQuestionSending({ sessionId: 's1', requestId: 'r1', answers: { q1: 'Blue', q2: 'Theirs' }, source: 'telegram' });
+  ctx.rejectQuestionCard({ sessionId: 's1', requestId: 'r1', reason: 'the question is already being answered' });
+  assert.equal(m.state, 'sending');
+  assert.deepEqual({ ...m.answers }, { q1: 'Blue', q2: 'Theirs' });
+  assert.equal(m.error, null);
+  assert.deepEqual(errors, []);
+  ctx.rejectQuestionCard({ sessionId: 's1', requestId: 'r1', reason: 'the session could not take the answer' });
+  assert.equal(m.state, 'open');
+  assert.deepEqual(errors, ['Answer not delivered: the session could not take the answer']);
+});
+
+test('a card restored while its answer is being sent shows that answer and where it came from', () => {
+  const { ctx } = load();
+  ctx.state.messages = { s1: [{ kind: 'question', requestId: 'known', questions, state: 'open', answers: null, source: null }] };
+  ctx.restorePendingQuestions([
+    { sessionId: 's1', requestId: 'known', questions, timestamp: 1, sending: true, answers: { q1: 'Red', q2: 'Ann' }, source: 'telegram' },
+    { sessionId: 's1', requestId: 'new', questions, timestamp: 2, sending: true, answers: { q1: 'Blue', q2: 'Bo' }, source: 'api' },
+  ]);
+  for (const [id, q1, source] of [['known', 'Red', 'telegram'], ['new', 'Blue', 'api']]) {
+    const m = card(ctx, 's1', id);
+    assert.equal(m.state, 'sending');
+    assert.equal(m.answers.q1, q1);
+    assert.equal(m.source, source);
+    const html = ctx.questionCardHtml(m);
+    assert.match(html, new RegExp(`&rarr; ${q1}`));
+    assert.match(html, /Sending…/);
+  }
 });
 
 test('a typed answer wins over a picked option, and every question needs one before sending', () => {

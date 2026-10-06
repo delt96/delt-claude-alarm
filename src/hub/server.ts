@@ -744,7 +744,7 @@ export class HubServer {
     ws.send(JSON.stringify({ type: 'codex_adapters', adapters: this.codexAdapterList() } satisfies ChannelMessage));
     const questionsMsg: ChannelMessage = {
       type: 'questions_pending',
-      requests: this.questions.all().map((q) => ({ ...q.request, sending: q.sending !== undefined })),
+      requests: this.questions.all().map((q) => ({ ...q.request, sending: q.sending !== undefined, ...q.sending })),
     };
     ws.send(JSON.stringify(questionsMsg));
 

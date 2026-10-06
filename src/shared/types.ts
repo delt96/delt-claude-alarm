@@ -88,7 +88,7 @@ export type ChannelMessage =
   | { type: 'codex_adapters'; adapters: CodexAdapterInfo[] }
   | { type: 'codex_close'; sessionId: string }
   | ({ type: 'question' } & QuestionRequest)
-  | { type: 'questions_pending'; requests: Array<QuestionRequest & { sending: boolean }> }
+  | { type: 'questions_pending'; requests: Array<QuestionRequest & { sending: boolean; answers?: QuestionAnswers; source?: MessageSource }> }
   | { type: 'question_answer'; sessionId: string; requestId: string; answers: QuestionAnswers; questions?: Question[]; source?: MessageSource }
   | { type: 'question_delivery'; sessionId: string; requestId: string; ok: boolean; reason?: string }
   | { type: 'question_sending'; sessionId: string; requestId: string; answers: QuestionAnswers; source: MessageSource }

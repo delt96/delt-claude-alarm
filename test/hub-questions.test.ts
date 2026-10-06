@@ -65,7 +65,7 @@ test('a question reaches every dashboard and the desktop, and a new dashboard ge
   const late = await open('/ws/dashboard');
   await settle();
   const [pending] = of(late.inbox, 'questions_pending');
-  assert.deepEqual(pending.requests.map((r: any) => [r.requestId, r.sending]), [['r1', false]]);
+  assert.deepEqual(pending.requests.map((r: any) => [r.requestId, r.sending, r.answers, r.source]), [['r1', false, undefined, undefined]]);
   late.ws.close();
   dash.ws.close();
   ch.ws.close();
@@ -89,7 +89,8 @@ test('an answer goes to the session with the questions and its source, and is an
   assert.deepEqual(of(other.inbox, 'question_rejected'), [{ type: 'question_rejected', sessionId: 's2', requestId: 'r2', reason: 'the question is already being answered' }]);
   const late = await open('/ws/dashboard');
   await settle();
-  assert.equal(of(late.inbox, 'questions_pending')[0].requests.find((r: any) => r.requestId === 'r2').sending, true);
+  const pendingR2 = of(late.inbox, 'questions_pending')[0].requests.find((r: any) => r.requestId === 'r2');
+  assert.deepEqual([pendingR2.sending, pendingR2.answers, pendingR2.source], [true, { q1: 'Blue', q2: 'Probe' }, 'dashboard']);
   send(ch.ws, { type: 'question_delivery', sessionId: 's2', requestId: 'r2', ok: true });
   await settle();
   assert.deepEqual(of(other.inbox, 'question_resolved'), [{ type: 'question_resolved', sessionId: 's2', requestId: 'r2', state: 'answered', answers: { q1: 'Blue', q2: 'Probe' }, source: 'dashboard' }]);
