@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex } from './shared/config.js';
 import { findCodex } from './codex/transport.js';
 import { runFromCli } from './codex/run.js';
+import { exitAfterFlush } from './codex/shutdown.js';
 import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
@@ -485,9 +486,8 @@ async function main() {
     else if (sub === 'status') process.exitCode = await adapterStatus(controlDeps(), loadConfig().codex?.enabled === true);
     else if (sub === 'run') {
       const code = await codexRun(args.slice(2));
-      // A stuck proxy can retain pipe handles after bounded cleanup fails.
-      if (code === 2) process.exit(code);
-      process.exitCode = code;
+      // A surviving proxy can retain pipe handles even after cleanup resolves.
+      exitAfterFlush(code, process.stdout, process.stderr);
     }
     else {
       console.error(`Unknown codex command: ${sub}`);

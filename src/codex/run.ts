@@ -256,7 +256,12 @@ export async function runCodexTask(opts: CodexRunOptions): Promise<CodexRunResul
     };
   } finally {
     for (const t of timers) clearTimeout(t);
-    await closeWithinLimit(() => conn.close());
+    try {
+      await closeWithinLimit(() => conn.close());
+    } catch (err) {
+      try { progress(`warning: Codex proxy cleanup failed: ${(err as Error).message}`); }
+      catch {}
+    }
   }
 }
 

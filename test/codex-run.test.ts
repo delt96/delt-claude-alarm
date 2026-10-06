@@ -331,3 +331,25 @@ test('run arguments without a brief, with unknown flags or bad numbers are rejec
   assert.throws(() => parseRunArgs(['--brief', 'b', '--timeout', 'soon']), /--timeout/);
   assert.throws(() => parseRunArgs(['--brief']), /--brief/);
 });
+
+test('cleanup failure preserves the original turn-start error', async () => {
+  const d = await startDaemon();
+  d.handle('turn/start', () => { throw new Error('thread is busy'); });
+  let kill: (() => boolean) | undefined;
+  const warnings: string[] = [];
+  try {
+    await assert.rejects(run(d, {
+      spawnFn: (command, args) => {
+        const child = d.spawnFn(command, args);
+        const originalKill = child.kill.bind(child);
+        kill = originalKill;
+        child.kill = () => { throw new Error('cleanup rejected'); };
+        return child;
+      },
+      progress: (line) => { warnings.push(line); },
+    }), /thread is busy/);
+    assert.equal(warnings.some((line) => line.includes('warning: Codex proxy cleanup failed: cleanup rejected')), true);
+  } finally {
+    kill?.();
+  }
+});
