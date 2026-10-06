@@ -483,7 +483,12 @@ async function main() {
     else if (sub === 'start') await codexStart();
     else if (sub === 'stop') process.exitCode = await stopAdapter(controlDeps(), loadConfig().codex?.enabled === true);
     else if (sub === 'status') process.exitCode = await adapterStatus(controlDeps(), loadConfig().codex?.enabled === true);
-    else if (sub === 'run') process.exitCode = await codexRun(args.slice(2));
+    else if (sub === 'run') {
+      const code = await codexRun(args.slice(2));
+      // A stuck proxy can retain pipe handles after bounded cleanup fails.
+      if (code === 2) process.exit(code);
+      process.exitCode = code;
+    }
     else {
       console.error(`Unknown codex command: ${sub}`);
       printUsage();

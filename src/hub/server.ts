@@ -178,9 +178,9 @@ export class HubServer {
   }
 
   stop(): Promise<void> {
-    return new Promise((resolve) => {
-      this.codexSupervisor?.stop();
-      this.codexSupervisor = undefined;
+    const adapterStopped = this.codexSupervisor?.stop();
+    this.codexSupervisor = undefined;
+    const serverStopped = new Promise<void>((resolve) => {
       // Stop heartbeat
       if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
 
@@ -208,6 +208,7 @@ export class HubServer {
         resolve();
       }, 3000);
     });
+    return Promise.all([serverStopped, adapterStopped]).then(() => {});
   }
 
   // --- HTTP Handler ---

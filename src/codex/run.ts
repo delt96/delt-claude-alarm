@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { closeWithinLimit } from './shutdown.js';
 import { connectProxy, defaultSpawn, type SpawnFn } from './transport.js';
 import { RpcClient, type RpcId } from './rpc.js';
 import { finalAnswer, type AgentMessage } from './mapping.js';
@@ -255,7 +256,7 @@ export async function runCodexTask(opts: CodexRunOptions): Promise<CodexRunResul
     };
   } finally {
     for (const t of timers) clearTimeout(t);
-    await conn.close();
+    await closeWithinLimit(() => conn.close());
   }
 }
 

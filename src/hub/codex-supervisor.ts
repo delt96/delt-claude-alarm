@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../shared/logger.js';
+import { SUPERVISOR_STOP_GRACE_MS } from '../codex/shutdown.js';
 
 export type SupervisorSpawn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
@@ -42,7 +43,7 @@ export class CodexSupervisor {
     this.spawnFn = opts.spawnFn ?? spawn;
     this.minDelayMs = opts.minDelayMs ?? 2000;
     this.maxDelayMs = opts.maxDelayMs ?? 60_000;
-    this.stopGraceMs = opts.stopGraceMs ?? 3000;
+    this.stopGraceMs = opts.stopGraceMs ?? SUPERVISOR_STOP_GRACE_MS;
     this.env = opts.env;
     this.delay = this.minDelayMs;
   }
@@ -52,17 +53,27 @@ export class CodexSupervisor {
     this.launch();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     const child = this.child;
     this.child = undefined;
-    if (!child) return;
-    child.stdin?.end();
-    const force = setTimeout(() => child.kill(), this.stopGraceMs);
-    force.unref();
-    child.once('exit', () => clearTimeout(force));
+    if (!child) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(force);
+        child.removeListener('exit', done);
+        resolve();
+      };
+      const force = setTimeout(() => {
+        child.kill();
+        done();
+      }, this.stopGraceMs);
+      force.unref();
+      child.once('exit', done);
+      child.stdin?.end();
+    });
   }
 
   private launch(): void {
