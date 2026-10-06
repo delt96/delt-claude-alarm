@@ -137,9 +137,11 @@ test('after the shell has exited, a recorded wrapper that exits once its child i
   const newcomer = row(5001, 1, 9);
   sys.whenEnded(row(5002, 5001, 3), () => sys.reuse(newcomer));
   const child = fakeChild();
-  const killer = treeKiller('win32', sys.end, sys.query, viaShell);
+  let now = at(1);
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now);
   await killer.track!(asChild(child));
-  child.exitCode = 0;
+  now = at(5);
+  child.exit();
   sys.exit(4242);
   await killer(asChild(child));
   assert.deepEqual(sys.ended, [row(5002, 5001, 3)]);
@@ -151,9 +153,11 @@ test('a recorded descendant whose PID goes to a new process after the shell has 
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2), row(5002, 5001, 3)]);
   const newcomer = row(5001, 1, 9);
   const child = fakeChild();
-  const killer = treeKiller('win32', sys.end, sys.query, viaShell);
+  let now = at(1);
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now);
   await killer.track!(asChild(child));
-  child.exitCode = 0;
+  now = at(5);
+  child.exit();
   sys.exit(4242);
   sys.soon(() => sys.reuse(newcomer));
   await killer(asChild(child));
