@@ -110,8 +110,6 @@ const silentChild = () => spawn(process.execPath, ['-e', 'process.stdin.resume()
 const CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'\n";
 // Whichever way the script asks for a termination, it is refused.
 const REFUSED = "Update-TypeData -TypeName System.Diagnostics.Process -MemberType ScriptMethod -MemberName Kill -Value { throw 'refused' } -Force\nfunction Stop-Process { throw 'refused' }\n";
-// Whichever way the script asks for a termination, it is accepted and never takes effect.
-const IGNORED = "Update-TypeData -TypeName System.Diagnostics.Process -MemberType ScriptMethod -MemberName Kill -Value { } -Force\nfunction Stop-Process { }\n";
 
 test('a wrapper that exits once its child is ended is not ended again after its PID goes to a new process', async () => {
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2), row(5002, 5001, 3), row(6000, 1, 1)]);
@@ -373,20 +371,29 @@ test('under Constrained Language Mode processes are still ended by identity, and
   }
 });
 
-test('ending targets that never exit gives up at the PowerShell time limit instead of waiting on', { skip: process.platform !== 'win32' }, async () => {
-  const children = Array.from({ length: 6 }, silentChild);
+test('a target whose ending runs past the time limit does not keep the others from being ended, and only by identity', { skip: process.platform !== 'win32' }, async (t) => {
+  const children = Array.from({ length: 4 }, silentChild);
+  const [stuck, first, second, other] = children;
+  const exited = (c: ChildProcess) => c.exitCode !== null || c.signalCode !== null;
   try {
-    const identities = await until(async () => {
+    const [stuckId, firstId, secondId, otherId] = await until(async () => {
       const rows = await queryProcesses();
       const found = children.map((c) => rows.find((r) => r.pid === c.pid));
       return found.every(Boolean) && (found as ProcessIdentity[]);
     }, 5000);
+    // Stop-Process never returns for `stuck`, so its turn runs into the PowerShell time limit.
+    const stalling = `function Stop-Process { [CmdletBinding()] param($InputObject, [switch]$Force) if ($InputObject.Id -eq ${stuck.pid}) { Start-Sleep 30 } else { Microsoft.PowerShell.Management\\Stop-Process -InputObject $InputObject -Force } }\n`;
+    const debug = t.mock.method(logger, 'debug');
     const started = Date.now();
-    await assert.rejects(processEnder(IGNORED)(identities));
+    const outcome = await processEnder(stalling)([stuckId, firstId, secondId, { ...otherId, creationTime: '2000-01-01T00:00:00.0000000Z' }])
+      .then(() => 'settled', () => 'rejected');
     const elapsed = Date.now() - started;
-    assert.equal(elapsed >= 4500 && elapsed < 8000, true, `gave up after ${elapsed} ms`);
+    await until(() => exited(first) && exited(second), 2000);
+    assert.deepEqual([exited(stuck), exited(other), outcome], [false, false, 'settled']);
+    assert.equal(elapsed < 8000, true, `took ${elapsed} ms`);
+    assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes(`${stuck.pid} failed: timed out`)), true);
   } finally {
-    for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill();
+    for (const c of children) if (!exited(c)) c.kill();
   }
 });
 

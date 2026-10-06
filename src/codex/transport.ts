@@ -113,9 +113,16 @@ const END_SCRIPT = [
   '}',
 ].join('\n');
 
+// Each target gets its own PowerShell and time limit, run side by side, so one that runs long cannot use up the others' turn.
 export const processEnder = (prelude = ''): ProcessEndFn => async (targets) => {
-  const notes = await powershell(prelude + END_SCRIPT, { ...process.env, CLAUDE_ALARM_END_TARGETS: JSON.stringify(targets) });
-  for (const note of notes.split(/\r?\n/)) if (note) logger.debug(`codex process ${note}`);
+  await Promise.all(targets.map(async (target) => {
+    try {
+      const notes = await powershell(prelude + END_SCRIPT, { ...process.env, CLAUDE_ALARM_END_TARGETS: JSON.stringify([target]) });
+      for (const note of notes.split(/\r?\n/)) if (note) logger.debug(`codex process ${note}`);
+    } catch (err) {
+      logger.debug(`ending codex process ${target.pid} failed: ${(err as { killed?: boolean }).killed ? 'timed out' : String(err)}`);
+    }
+  }));
 };
 
 export const endProcesses: ProcessEndFn = processEnder();
