@@ -3,6 +3,7 @@ import { CONFIG_DIR } from '../shared/constants.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import { logger } from '../shared/logger.js';
 import { CodexAdapter } from './adapter.js';
+import { createAdapterShutdown } from './shutdown.js';
 import { resolveAdapterHub } from './hub-target.js';
 import { acquireLock, controlEndpoint } from './instance-lock.js';
 
@@ -19,26 +20,16 @@ const endpoint = controlEndpoint(CONFIG_DIR);
 
 let adapter: CodexAdapter | undefined;
 let release: (() => Promise<void>) | undefined;
-let exiting = false;
-const shutdown = () => {
-  if (exiting) return;
-  exiting = true;
-  // A codex.cmd proxy runs outside the job that ends this process's children on exit, so its kill must finish first.
-  const stopped = adapter?.stop();
-  const exit = () => process.exit(0);
-  // server.close() waits for open control connections and the kill for a process snapshot; neither may keep a stopped adapter alive.
-  setTimeout(exit, 3000).unref();
-  Promise.all([stopped, release?.()]).then(exit, exit);
-};
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+const shutdown = createAdapterShutdown({
+  signals: process,
+  stdin: supervised ? process.stdin : undefined,
+  stop: () => adapter?.stop(),
+  release: () => release?.(),
+  exit: () => process.exit(0),
+});
 
 // On Windows `hub stop` kills the hub without running its exit handlers, so stdin EOF is the only sign the parent is gone.
-if (supervised) {
-  process.stdin.on('end', shutdown);
-  process.stdin.on('close', shutdown);
-  process.stdin.resume();
-}
+if (supervised) process.stdin.resume();
 
 function send(message: object, then?: () => void): void {
   if (!process.send || !process.connected) {

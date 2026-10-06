@@ -152,6 +152,7 @@ function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] |
 const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
 
 const SHELL_EXIT_WAIT_MS = 1000;
+export const PROXY_TREE_CLOSE_BUDGET_MS = 2 * POWERSHELL_TIMEOUT_MS + SHELL_EXIT_WAIT_MS;
 
 const exitOf = (child: ChildProcess) => new Promise<void>((resolve) => {
   if (exited(child)) { resolve(); return; }
