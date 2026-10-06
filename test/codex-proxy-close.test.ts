@@ -199,46 +199,65 @@ test('after the shell has exited, a process given its PID and that process\'s ch
   assert.equal([newcomer, row(5009, 4242, 7)].every(sys.isRunning), true);
 });
 
-test('when the wall clock has gone back since the shell exited, a snapshot taken after the exit is not trusted', async (t) => {
-  const debug = t.mock.method(logger, 'debug');
+// The process clock (Date.now(), monotonic ticks) and the system clock that stamps creation times, moved separately.
+function clocks(sys: ReturnType<typeof fakeSystem>) {
+  const c = { now: at(1), ticks: 0, system: at(1) };
+  const query = async () => Object.assign(await sys.query(), { systemTime: { nowMs: c.system, atTicks: c.ticks } });
+  return { c, query, clock: () => c.now, ticks: () => c.ticks };
+}
+
+test('a system clock set back after the shell exited cannot make a child of the process that took its PID look like the shell\'s', async () => {
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
   const child = fakeChild();
-  let now = at(1);
-  let ticks = 0;
-  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now, () => ticks);
+  const { c, query, clock, ticks } = clocks(sys);
+  const killer = treeKiller('win32', sys.end, query, viaShell, clock, ticks);
   await killer.track!(asChild(child));
-  sys.start(row(5002, 4242, 3));
-  now = at(5);
-  ticks = 10_000;
+  sys.start(row(5002, 4242, 2));
+  Object.assign(c, { now: at(5), ticks: 10_000, system: at(5) });
   child.exit();
-  sys.reuse(row(4242, 1, 6));
-  now = at(3);
-  ticks = 12_000;
+  // The system clock goes back 2 s; Date.now() keeps following the monotonic clock until V8 resyncs it.
+  sys.reuse(row(4242, 1, 4));
   sys.start(row(5009, 4242, 4));
+  Object.assign(c, { now: at(6), ticks: 11_000, system: at(4) });
   await killer(asChild(child));
-  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
-  assert.equal([row(5002, 4242, 3), row(5009, 4242, 4)].every(sys.isRunning), true);
-  assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('clock')), true);
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2), row(5002, 4242, 2)]);
+  assert.equal(sys.isRunning(row(5009, 4242, 4)), true);
 });
 
-test('when Date.now() runs ahead of the clock that stamps creation times, a snapshot taken after the shell exited is not trusted', async (t) => {
-  const debug = t.mock.method(logger, 'debug');
+test('a system clock set back shortly before the shell exited, before Date.now() caught up, cannot make a later child look like the shell\'s', async () => {
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
   const child = fakeChild();
-  let now = at(1);
-  let ahead = 0;
-  const killer = treeKiller('win32', sys.end, async () => Object.assign(await sys.query(), { clockAheadMs: ahead }), viaShell, () => now);
+  const { c, query, clock, ticks } = clocks(sys);
+  const killer = treeKiller('win32', sys.end, query, viaShell, clock, ticks);
   await killer.track!(asChild(child));
-  sys.start(row(5002, 4242, 3));
-  now = at(5);
+  sys.start(row(5002, 4242, 2));
+  // Date.now() reads 2 s ahead of the system clock at the exit.
+  Object.assign(c, { now: at(6), ticks: 10_000, system: at(4) });
   child.exit();
-  sys.reuse(row(4242, 1, 6));
-  sys.start(row(5009, 4242, 4));
-  ahead = 2000;
+  sys.reuse(row(4242, 1, 5));
+  sys.start(row(5009, 4242, 5));
+  Object.assign(c, { now: at(7), ticks: 11_000, system: at(5) });
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2), row(5002, 4242, 2)]);
+  assert.equal(sys.isRunning(row(5009, 4242, 5)), true);
+});
+
+test('a system clock set forward after the shell exited cannot make a child of the process that took its PID look like the shell\'s', async () => {
+  const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
+  const child = fakeChild();
+  const { c, query, clock, ticks } = clocks(sys);
+  const killer = treeKiller('win32', sys.end, query, viaShell, clock, ticks);
+  await killer.track!(asChild(child));
+  Object.assign(c, { now: at(5), ticks: 10_000, system: at(5) });
+  child.exit();
+  const early: ProcessIdentity = { pid: 5009, parentPid: 4242, creationTime: '2026-10-05T00:00:05.5000000Z' };
+  sys.reuse(row(4242, 1, 5));
+  sys.start(early);
+  // Then the system clock goes 3 s forward.
+  Object.assign(c, { now: at(6), ticks: 11_000, system: at(9) });
   await killer(asChild(child));
   assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
-  assert.equal([row(5002, 4242, 3), row(5009, 4242, 4)].every(sys.isRunning), true);
-  assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('clock')), true);
+  assert.equal(sys.isRunning(early), true);
 });
 
 test('a snapshot begun after the shell exited never supplies the shell\'s creation time', async () => {
@@ -525,10 +544,14 @@ test('the creation time check and the termination go through the handle that was
   }
 });
 
-test('the process snapshot reports how far Date.now() runs ahead of the clock that stamps creation times', { skip: process.platform !== 'win32' }, async () => {
+test('the process snapshot reports the system time read after the processes were listed, and when it arrived', { skip: process.platform !== 'win32' }, async () => {
+  const before = { now: Date.now(), ticks: performance.now() };
   const snapshot = await queryProcesses();
-  assert.equal(typeof snapshot.clockAheadMs, 'number');
-  assert.equal(snapshot.clockAheadMs! < 50, true, `clockAheadMs ${snapshot.clockAheadMs}`);
+  const after = { now: Date.now(), ticks: performance.now() };
+  const time = snapshot.systemTime;
+  assert.equal(time !== undefined, true);
+  assert.equal(time!.nowMs >= before.now - 50 && time!.nowMs <= after.now + 50, true, `nowMs ${time!.nowMs} not in ${before.now}..${after.now}`);
+  assert.equal(time!.atTicks >= before.ticks && time!.atTicks <= after.ticks, true);
 });
 
 test('under Constrained Language Mode the process snapshot still works', { skip: process.platform !== 'win32' }, async () => {

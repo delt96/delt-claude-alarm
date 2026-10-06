@@ -68,37 +68,35 @@ export const defaultSpawn: SpawnFn = (command, args) => {
 
 export type KillTreeFn = ((child: ChildProcess) => Promise<void>) & { track?: (child: ChildProcess) => Promise<void> };
 export interface ProcessIdentity { pid: number; parentPid: number; creationTime: string }
-// clockAheadMs: how far Date.now() read ahead of the clock that stamps creation times when the snapshot was taken.
-export type ProcessSnapshot = ProcessIdentity[] & { clockAheadMs?: number };
+// systemTime: the system clock, which stamps creation times, read once the processes were listed, and performance.now() when the snapshot arrived.
+export type ProcessSnapshot = ProcessIdentity[] & { systemTime?: { nowMs: number; atTicks: number } };
 export type ProcessQueryFn = () => Promise<ProcessSnapshot>;
 export type ProcessEndFn = (targets: ProcessIdentity[]) => Promise<void>;
 type Descendant = ProcessIdentity & { depth: number };
 
 const POWERSHELL_TIMEOUT_MS = 5000;
 
-const powershell = (script: string, env?: NodeJS.ProcessEnv, started?: (pid: number | undefined) => void) => new Promise<string>((resolve, reject) => {
-  const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: POWERSHELL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout) => {
+const powershell = (script: string, env?: NodeJS.ProcessEnv) => new Promise<string>((resolve, reject) => {
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: POWERSHELL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout) => {
     if (err) reject(err);
     else resolve(stdout);
   });
-  started?.(child.pid);
 });
 
 // Select-Object rather than a [pscustomobject] cast, which Constrained Language Mode (AppLocker/WDAC) refuses.
-const QUERY_SCRIPT = "@(Get-CimInstance Win32_Process | Where-Object CreationDate | Select-Object @{ n = 'pid'; e = { [int]$_.ProcessId } }, @{ n = 'parentPid'; e = { [int]$_.ParentProcessId } }, @{ n = 'creationTime'; e = { $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
+const QUERY_SCRIPT = "$rows = @(Get-CimInstance Win32_Process | Where-Object CreationDate | Select-Object @{ n = 'pid'; e = { [int]$_.ProcessId } }, @{ n = 'parentPid'; e = { [int]$_.ParentProcessId } }, @{ n = 'creationTime'; e = { $_.CreationDate.ToUniversalTime().ToString('o') } }); @{ rows = $rows; now = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress -Depth 3";
+
+const asMs = (creationTime: string) => Date.parse(`${creationTime.slice(0, 23)}Z`);
 
 // A prelude runs first in the same PowerShell session; tests use it to switch the language mode or stand in for a cmdlet.
 export const processQuery = (prelude = ''): ProcessQueryFn => async () => {
-  let ownPid: number | undefined;
-  const startedAt = Date.now();
-  const rows: unknown = JSON.parse(await powershell(prelude + QUERY_SCRIPT, undefined, (pid) => { ownPid = pid; }));
-  if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
+  const output = await powershell(prelude + QUERY_SCRIPT);
+  const atTicks = performance.now();
+  const { rows, now } = (JSON.parse(output) ?? {}) as { rows?: unknown; now?: unknown };
+  if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string') || typeof now !== 'string') {
     throw new Error('invalid process snapshot');
   }
-  // The query's own PowerShell was created after startedAt, so a creation time earlier than that means Date.now() reads ahead.
-  const own = (rows as ProcessIdentity[]).find(row => row.pid === ownPid);
-  const clockAheadMs = own ? startedAt - Date.parse(`${own.creationTime.slice(0, 23)}Z`) : Infinity;
-  return Object.assign(rows as ProcessIdentity[], { clockAheadMs });
+  return Object.assign(rows as ProcessIdentity[], { systemTime: { nowMs: asMs(now), atTicks } });
 };
 
 export const queryProcesses: ProcessQueryFn = processQuery();
@@ -182,7 +180,7 @@ const asCreationTime = (ms: number) => `${new Date(ms).toISOString().slice(0, 23
 const merged = (before: Descendant[], found: Descendant[]) =>
   [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
 
-interface ShellExit { at: number; atTicks: number; childrenBornBefore: string }
+interface ShellExit { at: number; atTicks: number }
 interface ShellRecord { creationTime?: string; exit?: ShellExit }
 
 export function treeKiller(
@@ -218,15 +216,12 @@ export function treeKiller(
       return descendantsOf(root, rows);
     }
     if (!shell?.exit) return [];
-    const { at, atTicks, childrenBornBefore: bornBefore } = shell.exit;
-    // A clock set back could stamp a process that took the PID after the exit with an earlier time. Date.now() catches up with
-    // such a step only when V8 next resyncs it (within a minute), so look for the step both before that (Date.now() ahead of
-    // the system clock) and after it (Date.now() behind the monotonic clock since the exit).
-    const setBack = Math.max(rows.clockAheadMs ?? 0, ticks() - atTicks - (clock() - at));
-    if (setBack > EXIT_TIME_MARGIN_MS / 2) {
-      logger.debug(`the clock is off by ${Math.round(setBack)}ms since codex proxy shell ${child.pid} exited; ending only the processes recorded while it ran`);
-      return [];
-    }
+    // Two readings of the exit on the system clock that stamps creation times: Date.now() at the exit, and this snapshot's system
+    // time less the monotonic time since. A step of that clock after the exit can push only the second past the exit, and a step
+    // Date.now() has not caught up with yet (V8 resyncs it within a minute) only the first, so the earlier one is not past it.
+    const { at, atTicks } = shell.exit;
+    const bySnapshot = rows.systemTime ? rows.systemTime.nowMs - (rows.systemTime.atTicks - atTicks) : Infinity;
+    const bornBefore = asCreationTime(Math.min(at, bySnapshot) - EXIT_TIME_MARGIN_MS);
     // Only a snapshot begun before the exit can show the shell itself; whoever holds its PID started either as our shell or after the exit.
     if (begunBeforeExit) shell.creationTime ??= rows.find(row => row.pid === child.pid && row.creationTime < bornBefore)?.creationTime;
     if (!shell.creationTime) return [];
@@ -252,10 +247,7 @@ export function treeKiller(
       const shell: ShellRecord = {};
       shells.set(child, shell);
       // libuv closes the shell's handle only after the 'exit' listeners have run, so its PID cannot go to another process before this moment.
-      child.once('exit', () => {
-        const at = clock();
-        shell.exit = { at, atTicks: ticks(), childrenBornBefore: asCreationTime(at - EXIT_TIME_MARGIN_MS) };
-      });
+      child.once('exit', () => { shell.exit = { at: clock(), atTicks: ticks() }; });
     }
     const earlier = recorded.get(child);
     const latest = (async () => {
