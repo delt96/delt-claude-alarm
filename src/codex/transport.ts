@@ -81,38 +81,44 @@ const powershell = (script: string, env?: NodeJS.ProcessEnv) => new Promise<stri
   });
 });
 
-export const queryProcesses: ProcessQueryFn = async () => {
-  const script = "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
-  const rows: unknown = JSON.parse(await powershell(script));
+// Select-Object rather than a [pscustomobject] cast, which Constrained Language Mode (AppLocker/WDAC) refuses.
+const QUERY_SCRIPT = "@(Get-CimInstance Win32_Process | Where-Object CreationDate | Select-Object @{ n = 'pid'; e = { [int]$_.ProcessId } }, @{ n = 'parentPid'; e = { [int]$_.ParentProcessId } }, @{ n = 'creationTime'; e = { $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
+
+// A prelude runs first in the same PowerShell session; tests use it to switch the language mode or stand in for a cmdlet.
+export const processQuery = (prelude = ''): ProcessQueryFn => async () => {
+  const rows: unknown = JSON.parse(await powershell(prelude + QUERY_SCRIPT));
   if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
     throw new Error('invalid process snapshot');
   }
   return rows;
 };
 
+export const queryProcesses: ProcessQueryFn = processQuery();
+
 // One handle per target both proves its creation time and ends it, so a PID handed to another process meanwhile is never ended.
+// Only property reads and cmdlets touch the process: Constrained Language Mode refuses method calls on it.
 const END_SCRIPT = [
   'foreach ($t in ($env:CLAUDE_ALARM_END_TARGETS | ConvertFrom-Json)) {',
-  '  try {',
-  '    $p = [Diagnostics.Process]::GetProcessById($t.pid)',
-  // PowerShell turns a throwing property getter into $null, so get_Handle() is called as a method; StartTime, Kill and WaitForExit then reuse that handle.
-  '    $null = $p.get_Handle()',
-  '    $start = $p.get_StartTime().ToUniversalTime()',
+  '  $p = Get-Process -Id $t.pid -ErrorAction SilentlyContinue',
+  // Reading Handle opens the process once, and StartTime, Stop-Process and Wait-Process then use that handle; a getter that throws reads as $null.
+  '  if ($null -eq $p -or $null -eq $p.Handle) { "$($t.pid) is gone or cannot be opened"; continue }',
+  '  $start = $p.StartTime',
+  '  if ($null -eq $start) { "$($t.pid) has no readable creation time"; continue }',
+  '  $start = $start.ToUniversalTime()',
   // Win32_Process creation dates stop at microseconds.
-  "    if ($start.AddTicks(-($start.Ticks % 10)).ToString('o') -ne $t.creationTime) { \"$($t.pid) now belongs to another process\"; continue }",
-  '    $p.Kill()',
-  '    if (-not $p.WaitForExit(1000)) { "$($t.pid) has not exited yet" }',
-  '  } catch {',
-  '    $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }',
-  '    "$($t.pid) not ended: $($e.GetType().Name)"',
-  '  }',
+  "  if ($start.AddTicks(-($start.Ticks % 10)).ToString('o') -ne $t.creationTime) { \"$($t.pid) now belongs to another process\"; continue }",
+  '  try { Stop-Process -InputObject $p -Force -ErrorAction Stop } catch { "$($t.pid) not ended: $($_.FullyQualifiedErrorId)" }',
+  // A refused termination usually means the process is already exiting, so it is waited for all the same.
+  '  try { Wait-Process -InputObject $p -Timeout 1 -ErrorAction Stop } catch { "$($t.pid) has not exited yet" }',
   '}',
 ].join('\n');
 
-export const endProcesses: ProcessEndFn = async (targets) => {
-  const notes = await powershell(END_SCRIPT, { ...process.env, CLAUDE_ALARM_END_TARGETS: JSON.stringify(targets) });
+export const processEnder = (prelude = ''): ProcessEndFn => async (targets) => {
+  const notes = await powershell(prelude + END_SCRIPT, { ...process.env, CLAUDE_ALARM_END_TARGETS: JSON.stringify(targets) });
   for (const note of notes.split(/\r?\n/)) if (note) logger.debug(`codex process ${note}`);
 };
+
+export const endProcesses: ProcessEndFn = processEnder();
 
 function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] | undefined {
   const root = rows.find(row => row.pid === rootPid);

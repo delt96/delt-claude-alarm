@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { connectProxy, defaultSpawn, endProcesses, queryProcesses, spawnedThroughShell, treeKiller, type KillTreeFn, type ProcessEndFn, type ProcessIdentity, type SpawnFn } from '../src/codex/transport.js';
+import { connectProxy, defaultSpawn, endProcesses, processEnder, processQuery, queryProcesses, spawnedThroughShell, treeKiller, type KillTreeFn, type ProcessEndFn, type ProcessIdentity, type SpawnFn } from '../src/codex/transport.js';
 import { logger } from '../src/shared/logger.js';
 import { FakeDaemon, until } from './helpers/fake-codex-daemon.js';
 
@@ -107,6 +107,11 @@ const row = (pid: number, parentPid: number, second: number): ProcessIdentity =>
 const viaShell = () => true;
 const direct = () => false;
 const silentChild = () => spawn(process.execPath, ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], { stdio: 'pipe' });
+const CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'\n";
+// Whichever way the script asks for a termination, it is refused.
+const REFUSED = "Update-TypeData -TypeName System.Diagnostics.Process -MemberType ScriptMethod -MemberName Kill -Value { throw 'refused' } -Force\nfunction Stop-Process { throw 'refused' }\n";
+// Whichever way the script asks for a termination, it is accepted and never takes effect.
+const IGNORED = "Update-TypeData -TypeName System.Diagnostics.Process -MemberType ScriptMethod -MemberName Kill -Value { } -Force\nfunction Stop-Process { }\n";
 
 test('a wrapper that exits once its child is ended is not ended again after its PID goes to a new process', async () => {
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2), row(5002, 5001, 3), row(6000, 1, 1)]);
@@ -313,6 +318,75 @@ test('ending a process that has already exited is only logged at debug level', {
     assert.equal(warn.mock.callCount() + error.mock.callCount(), 0);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+});
+
+test('once a target is proven ours, a refused termination is still followed by a wait for that process', { skip: process.platform !== 'win32' }, async (t) => {
+  const child = silentChild();
+  try {
+    const identity = await until(async () => (await queryProcesses()).find((r) => r.pid === child.pid), 5000);
+    const debug = t.mock.method(logger, 'debug');
+    await processEnder(REFUSED)([identity]);
+    const notes = debug.mock.calls.map((c) => String(c.arguments[0]));
+    assert.equal(notes.includes(`codex process ${identity.pid} has not exited yet`), true, notes.join('\n'));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+});
+
+test('the creation time check and the termination go through the handle that was opened, not through the PID', { skip: process.platform !== 'win32' }, async () => {
+  const opened = silentChild();
+  const named = silentChild();
+  try {
+    const identity = await until(async () => (await queryProcesses()).find((r) => r.pid === opened.pid), 5000);
+    // Get-Process hands back `opened` with its handle already open, but reporting the PID of `named`, as if that PID had changed hands.
+    const swapped = [
+      'function Get-Process { [CmdletBinding()] param($Id)',
+      `  $p = [Diagnostics.Process]::GetProcessById(${opened.pid}); $null = $p.Handle`,
+      "  [Diagnostics.Process].GetField('processId', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($p, $Id); $p }",
+      '',
+    ].join('\n');
+    await processEnder(swapped)([{ ...identity, pid: named.pid! }]);
+    await until(() => opened.exitCode !== null || opened.signalCode !== null, 2000);
+    assert.equal(named.exitCode === null && named.signalCode === null, true);
+  } finally {
+    for (const c of [opened, named]) if (c.exitCode === null && c.signalCode === null) c.kill();
+  }
+});
+
+test('under Constrained Language Mode the process snapshot still works', { skip: process.platform !== 'win32' }, async () => {
+  const rows = await processQuery(CONSTRAINED)();
+  assert.equal(rows.some((r) => r.pid === process.pid && r.parentPid === process.ppid), true);
+});
+
+test('under Constrained Language Mode processes are still ended by identity, and only by identity', { skip: process.platform !== 'win32' }, async () => {
+  const child = silentChild();
+  try {
+    const identity = await until(async () => (await queryProcesses()).find((r) => r.pid === child.pid), 5000);
+    const end = processEnder(CONSTRAINED);
+    await end([{ ...identity, creationTime: '2000-01-01T00:00:00.0000000Z' }]);
+    assert.equal((await queryProcesses()).some((r) => r.pid === identity.pid && r.creationTime === identity.creationTime), true);
+    await end([identity]);
+    await until(() => child.exitCode !== null || child.signalCode !== null, 2000);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+});
+
+test('ending targets that never exit gives up at the PowerShell time limit instead of waiting on', { skip: process.platform !== 'win32' }, async () => {
+  const children = Array.from({ length: 6 }, silentChild);
+  try {
+    const identities = await until(async () => {
+      const rows = await queryProcesses();
+      const found = children.map((c) => rows.find((r) => r.pid === c.pid));
+      return found.every(Boolean) && (found as ProcessIdentity[]);
+    }, 5000);
+    const started = Date.now();
+    await assert.rejects(processEnder(IGNORED)(identities));
+    const elapsed = Date.now() - started;
+    assert.equal(elapsed >= 4500 && elapsed < 8000, true, `gave up after ${elapsed} ms`);
+  } finally {
+    for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill();
   }
 });
 
