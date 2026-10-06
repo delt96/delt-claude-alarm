@@ -81,3 +81,10 @@ test('reconnecting right after disconnect leaves no stale reconnect', async () =
     client.disconnect();
   }
 });
+
+test('send reports whether a message went out, was queued, or was dropped because the queue is full', () => {
+  const client = new HubClient('x9', 'x9', '127.0.0.1', PORT, TOKEN);
+  const msg = { type: 'status', sessionId: 'x9', status: 'idle' } as const;
+  for (let i = 0; i < 100; i++) assert.equal(client.send(msg), 'queued');
+  assert.equal(client.send(msg), 'dropped');
+});

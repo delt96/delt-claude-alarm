@@ -75,15 +75,18 @@ export class HubClient {
     }
   }
 
-  send(msg: ChannelMessage): void {
+  send(msg: ChannelMessage): 'sent' | 'queued' | 'dropped' {
     if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
-    } else {
-      if (this.queue.length < 100) {
-        this.queue.push(msg);
-      }
-      logger.debug('Hub not connected, message queued');
+      return 'sent';
     }
+    if (this.queue.length >= 100) {
+      logger.debug('Hub not connected and the queue is full, message dropped');
+      return 'dropped';
+    }
+    this.queue.push(msg);
+    logger.debug('Hub not connected, message queued');
+    return 'queued';
   }
 
   onMessage(handler: (msg: ChannelMessage) => void): void {

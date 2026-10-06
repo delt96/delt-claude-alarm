@@ -30,10 +30,12 @@ async function toolDescription(name: string): Promise<string> {
   return tool.description ?? '';
 }
 
-test('the session guidance sends a question through reply and then waits for input', () => {
+test('the session guidance sends a pick-from-options question through ask and an open one through reply', () => {
   const instructions = client.getInstructions() ?? '';
   const questions = instructions.match(/QUESTIONS:([^]*?)(?:\n\n|$)/)?.[1] ?? '';
-  assert.match(questions, /\breply\b/);
+  assert.match(questions, /picking from a few options, use ask/);
+  assert.match(questions, /"Answer to your question"/);
+  assert.match(questions, /open question, send the whole question with reply/);
   assert.match(questions, /waiting_input/);
   assert.match(questions, /never put a question only in notify/i);
 });
@@ -45,12 +47,23 @@ test('the session guidance keeps notify for events that need no answer', () => {
   assert.match(notifications, /need no answer/);
 });
 
-test('the notify tool points questions to reply', async () => {
+test('the notify tool points questions to ask or reply', async () => {
   const description = await toolDescription('notify');
   assert.doesNotMatch(description, /need user attention/);
-  assert.match(description, /ask the user something, use reply/i);
+  assert.match(description, /ask the user something, use ask or reply/i);
 });
 
-test('the reply tool says questions belong in it', async () => {
-  assert.match(await toolDescription('reply'), /question/i);
+test('the reply tool takes open questions and points option questions to ask', async () => {
+  const description = await toolDescription('reply');
+  assert.match(description, /open questions/);
+  assert.match(description, /use ask when they can pick from options/);
+});
+
+test('the ask tool is listed with its question shape', async () => {
+  const { tools } = await client.listTools();
+  const ask = tools.find((t) => t.name === 'ask');
+  assert.ok(ask, 'the ask tool is listed');
+  assert.deepEqual((ask.inputSchema as any).required, ['questions']);
+  assert.equal((ask.inputSchema as any).properties.questions.maxItems, 4);
+  assert.match(ask.description ?? '', /returns at once/);
 });
