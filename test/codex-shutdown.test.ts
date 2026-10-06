@@ -122,12 +122,13 @@ test('a supervisor given no stop grace waits SUPERVISOR_STOP_GRACE_MS before for
   assert.equal(killed, true);
 });
 
-test('a second hub stop settles at once while the first still waits for the adapter', async (t) => {
+test('a second hub stop settles only when the first one has finished waiting for the adapter', async (t) => {
   t.mock.method(globalThis, 'setTimeout', () => ({} as any));
   t.mock.method(logger, 'info', () => {});
   let finish!: () => void;
+  let stops = 0;
   const server: any = {
-    codexSupervisor: { stop: () => new Promise<void>((resolve) => { finish = resolve; }) },
+    codexSupervisor: { stop: () => { stops++; return new Promise<void>((resolve) => { finish = resolve; }); } },
     channelSockets: new Map(), dashboardSockets: new Map(), codexAdapters: new Map(),
     wssChannel: { close() {} }, wssDashboard: { close() {} }, wssCodex: { close() {} },
     httpServer: { close(callback: () => void) { callback(); } },
@@ -137,5 +138,6 @@ test('a second hub stop settles at once while the first still waits for the adap
   let secondDone = false;
   const second = HubServer.prototype.stop.call(server).then(() => { secondDone = true; });
   await flush();
-  try { assert.equal(secondDone, true); assert.equal(firstDone, false); } finally { finish(); await Promise.all([first, second]); }
+  try { assert.deepEqual([firstDone, secondDone, stops], [false, false, 1]); } finally { finish(); await Promise.all([first, second]); }
+  assert.deepEqual([firstDone, secondDone], [true, true]);
 });

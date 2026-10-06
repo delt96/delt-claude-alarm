@@ -76,6 +76,7 @@ export class HubServer {
   private token?: string;
   private codexEnabled: boolean;
   private codexSupervisor?: CodexSupervisor;
+  private stopping?: Promise<void>;
   private wssCodex: WebSocketServer;
   private codexAdapters = new Map<string, { ws: WebSocket; info: CodexAdapterInfo }>();
   private codexAlive = new WeakMap<WebSocket, boolean>();
@@ -178,6 +179,8 @@ export class HubServer {
   }
 
   stop(): Promise<void> {
+    // The caller exits the process once stop settles, so a second signal must not settle before the first stop's adapter wait.
+    if (this.stopping) return this.stopping;
     const adapterStopped = this.codexSupervisor?.stop();
     this.codexSupervisor = undefined;
     const serverStopped = new Promise<void>((resolve) => {
@@ -208,7 +211,8 @@ export class HubServer {
         resolve();
       }, 3000);
     });
-    return Promise.all([serverStopped, adapterStopped]).then(() => {});
+    this.stopping = Promise.all([serverStopped, adapterStopped]).then(() => {});
+    return this.stopping;
   }
 
   // --- HTTP Handler ---
