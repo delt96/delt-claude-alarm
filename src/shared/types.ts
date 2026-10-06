@@ -65,6 +65,7 @@ export type QuestionState = 'answered' | 'closed' | 'expired';
 /** Messages sent between channel server and hub */
 export type ChannelMessage =
   | { type: 'register'; session: SessionInfo }
+  | { type: 'hub_info'; features: string[] }
   | { type: 'status'; sessionId: string; status: SessionStatus }
   | { type: 'peer_name'; sessionId: string; peerName?: string }
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel; to?: MessageSource }

@@ -176,6 +176,27 @@ test('a question Codex shaped wrongly falls back to the old reply', async () => 
   }
 });
 
+test('a hub that does not say it supports questions gets the question as the turn reply, as before', async () => {
+  (hub as any).sendHubInfo = () => {};
+  try {
+    const d = await startAdapter([thread('t1', { status: active })]);
+    await session('codex:t1');
+    const dash = await openDashboard();
+    try {
+      d.notify('item/completed', { threadId: 't1', turnId: 'u1', completedAtMs: 0, item: asking('call_old') });
+      d.notify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'completed', items: [asking('call_old')], error: null } });
+      const reply = await until(() => of(dash.inbox, 'reply_from_session')[0]);
+      assert.equal(reply.content, asking().text);
+      await new Promise((r) => setTimeout(r, 200));
+      assert.deepEqual(of(dash.inbox, 'question'), []);
+    } finally {
+      dash.ws.close();
+    }
+  } finally {
+    delete (hub as any).sendHubInfo;
+  }
+});
+
 test('an answer is steered into the turn Codex is waiting in and confirmed without a Queued notice', async () => {
   const d = await startAdapter([thread('t1', { status: active })], (dm) => {
     dm.handle('thread/turns/list', () => ({ data: [{ id: 'u1', status: 'inProgress', items: [] }], nextCursor: null }));

@@ -12,7 +12,7 @@ import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants
 import { loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
 import { readPeerName } from './peer-name.js';
-import { ASK_DROPPED, ASK_TOOL, askRequest, askResultText } from './ask.js';
+import { ASK_DROPPED, ASK_TOOL, ASK_UNSUPPORTED, askRequest, askResultText } from './ask.js';
 import { answerText } from '../shared/questions.js';
 import type { SessionStatus, NotifyLevel } from '../shared/types.js';
 
@@ -163,6 +163,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const built = askRequest(args, sessionId, requestId);
       if (!built.ok) {
         return { content: [{ type: 'text', text: `Question not sent: ${built.error}` }], isError: true };
+      }
+      if (hubClient.isConnected() && !(await hubClient.waitForSupport('questions', 2000))) {
+        return { content: [{ type: 'text', text: ASK_UNSUPPORTED }], isError: true };
       }
       const delivery = hubClient.send({ type: 'question', ...built.request });
       if (delivery === 'dropped') {

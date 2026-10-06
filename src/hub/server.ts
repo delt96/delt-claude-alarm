@@ -13,6 +13,7 @@ import {
   WS_PATH_DASHBOARD,
   WS_PATH_CODEX,
   UPLOADS_DIR,
+  HUB_FEATURES,
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
@@ -467,6 +468,7 @@ export class HubServer {
           type: isReregister ? 'session_updated' : 'session_connected',
           session,
         });
+        this.sendHubInfo(ws);
         break;
       }
 
@@ -595,6 +597,10 @@ export class HubServer {
         break;
       }
     }
+  }
+
+  private sendHubInfo(ws: WebSocket): void {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'hub_info', features: [...HUB_FEATURES] } satisfies ChannelMessage));
   }
 
   private handleCodexConnection(ws: WebSocket, req: http.IncomingMessage): void {

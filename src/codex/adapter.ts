@@ -480,7 +480,7 @@ export class CodexAdapter {
 
   // Codex waits (sleep) for the answer inside its turn, so the question goes out now rather than with the turn's reply.
   private askIfQuestion(t: Tracked, turnId: string, item: AgentMessage): void {
-    if (typeof item.id !== 'string' || t.asked.has(item.id)) return;
+    if (typeof item.id !== 'string' || t.asked.has(item.id) || !t.hub.supports('questions')) return;
     const requestId = `codex-q:${item.id}`;
     const asked = isRequestId(requestId) ? asyncQuestions(item) : null;
     if (!asked) return;

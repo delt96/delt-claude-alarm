@@ -31,7 +31,11 @@ before(async () => {
   await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
   wss.on('connection', (ws) => {
     hubSocket = ws;
-    ws.on('message', (d) => fromChannel.push(JSON.parse(String(d))));
+    ws.on('message', (d) => {
+      const msg = JSON.parse(String(d));
+      fromChannel.push(msg);
+      if (msg.type === 'register') ws.send(JSON.stringify({ type: 'hub_info', features: ['questions'] }));
+    });
   });
   const port = (wss.address() as { port: number }).port;
   client = await spawnChannel(port);
@@ -120,8 +124,28 @@ test('with no hub the question is queued and the result says so', async () => {
   try {
     const result: any = await offline.callTool({ name: 'ask', arguments: { questions: [{ question: 'Still there?' }] } });
     assert.equal(result.isError, undefined);
-    assert.match(textOf(result), /The hub is not connected right now, so the question is queued/);
+    assert.match(textOf(result), / The hub is not connected right now, so the question is queued and shown once it reconnects\. If the answer is urgent, also ask in the terminal\. If the hub turns out to be older than this session, the question cannot be shown; ask with reply then\.$/);
   } finally {
     await offline.close();
+  }
+});
+
+test('a hub that does not say it supports questions gets no question and no status, and ask says to use reply', async () => {
+  const older = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>((resolve) => older.once('listening', () => resolve()));
+  const received: any[] = [];
+  older.on('connection', (ws) => ws.on('message', (d) => received.push(JSON.parse(String(d)))));
+  const stale = await spawnChannel((older.address() as { port: number }).port);
+  try {
+    await until(() => received.find((m) => m.type === 'register'), 15000);
+    const result: any = await stale.callTool({ name: 'ask', arguments: { questions: [{ question: 'Still there?' }] } });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), 'The hub does not support questions; it may be older than this session (restart the hub after updating claude-alarm). Ask with reply instead.');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(received.filter((m) => m.type === 'question' || m.type === 'status'), []);
+  } finally {
+    await stale.close();
+    for (const ws of older.clients) ws.terminate();
+    await new Promise<void>((resolve) => older.close(() => resolve()));
   }
 });

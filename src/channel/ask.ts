@@ -70,8 +70,10 @@ export function askRequest(args: unknown, sessionId: string, requestId: string, 
 export function askResultText(requestId: string, delivery: 'sent' | 'queued'): string {
   const sent = `Question sent (id ${requestId}). It shows in the dashboard conversation and on Telegram with buttons. Keep working on anything that does not depend on the answer; the answer arrives as a channel message starting with "Answer to your question" or "Answers to your questions".`;
   return delivery === 'queued'
-    ? `${sent} The hub is not connected right now, so the question is queued and shown once it reconnects. If the answer is urgent, also ask in the terminal.`
+    ? `${sent} The hub is not connected right now, so the question is queued and shown once it reconnects. If the answer is urgent, also ask in the terminal. If the hub turns out to be older than this session, the question cannot be shown; ask with reply then.`
     : sent;
 }
 
 export const ASK_DROPPED = 'The hub is not connected and its queue is full, so the question was not sent. Ask in the terminal or with reply.';
+
+export const ASK_UNSUPPORTED = 'The hub does not support questions; it may be older than this session (restart the hub after updating claude-alarm). Ask with reply instead.';

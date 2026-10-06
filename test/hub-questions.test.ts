@@ -30,9 +30,12 @@ function open(path: string): Promise<{ ws: WebSocket; inbox: any[] }> {
   });
 }
 
+const register = (ws: WebSocket, id: string) =>
+  ws.send(JSON.stringify({ type: 'register', session: { id, name: id, status: 'idle', connectedAt: 0, lastActivity: 0, cwd: `/w/${id}`, channelEnabled: true } }));
+
 async function channel(id: string) {
   const ch = await open('/ws/channel');
-  ch.ws.send(JSON.stringify({ type: 'register', session: { id, name: id, status: 'idle', connectedAt: 0, lastActivity: 0, cwd: `/w/${id}`, channelEnabled: true } }));
+  register(ch.ws, id);
   await settle();
   return ch;
 }
@@ -271,6 +274,17 @@ test('malformed and repeated questions are ignored, even after the first one clo
   assert.equal(of(dash.inbox, 'question').length, 1);
   dash.ws.close();
   ch.ws.close();
+});
+
+test('a registering channel is told the hub supports questions, on every register', async () => {
+  const first = await channel('s15');
+  assert.deepEqual(of(first.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions'] }]);
+  register(first.ws, 's15');
+  await settle();
+  assert.equal(of(first.inbox, 'hub_info').length, 2);
+  const second = await channel('s15');
+  assert.deepEqual(of(second.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions'] }]);
+  second.ws.close();
 });
 
 test('the question book keeps at most its limit open and remembers what it closed', () => {
