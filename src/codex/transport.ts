@@ -174,7 +174,8 @@ const asCreationTime = (ms: number) => `${new Date(ms).toISOString().slice(0, 23
 const merged = (before: Descendant[], found: Descendant[]) =>
   [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
 
-interface ShellRecord { creationTime?: string; childrenBornBefore?: string }
+interface ShellExit { at: number; atTicks: number; childrenBornBefore: string }
+interface ShellRecord { creationTime?: string; exit?: ShellExit }
 
 export function treeKiller(
   platform: NodeJS.Platform = process.platform,
@@ -182,6 +183,7 @@ export function treeKiller(
   query: ProcessQueryFn = queryProcesses,
   throughShell: (child: ChildProcess) => boolean = spawnedThroughShell,
   clock: () => number = Date.now,
+  ticks: () => number = () => performance.now(),
 ): KillTreeFn {
   const recorded = new WeakMap<ChildProcess, Promise<Descendant[]>>();
   const shells = new WeakMap<ChildProcess, ShellRecord>();
@@ -207,8 +209,13 @@ export function treeKiller(
       if (shell) shell.creationTime ??= root.creationTime;
       return descendantsOf(root, rows);
     }
-    if (!shell?.childrenBornBefore) return [];
-    const bornBefore = shell.childrenBornBefore;
+    if (!shell?.exit) return [];
+    const { at, atTicks, childrenBornBefore: bornBefore } = shell.exit;
+    // A wall clock set back since the exit could stamp a process that took the PID afterwards with an earlier time.
+    if (ticks() - atTicks - (clock() - at) > EXIT_TIME_MARGIN_MS / 2) {
+      logger.debug(`the clock went back after codex proxy shell ${child.pid} exited; ending only the processes recorded while it ran`);
+      return [];
+    }
     // Whoever holds the shell's PID now started either as our shell, before it exited, or after it exited.
     shell.creationTime ??= rows.find(row => row.pid === child.pid && row.creationTime < bornBefore)?.creationTime;
     if (!shell.creationTime) return [];
@@ -220,7 +227,7 @@ export function treeKiller(
       return;
     }
     // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    const findable = !exited(child) || shells.get(child)?.childrenBornBefore !== undefined;
+    const findable = !exited(child) || shells.get(child)?.exit !== undefined;
     const [rows, before] = await Promise.all([findable ? snapshot() : undefined, recorded.get(child)]);
     await endByIdentity(merged(before ?? [], treeOf(child, rows)));
     if (exited(child)) return;
@@ -233,7 +240,10 @@ export function treeKiller(
       const shell: ShellRecord = {};
       shells.set(child, shell);
       // libuv closes the shell's handle only after the 'exit' listeners have run, so its PID cannot go to another process before this moment.
-      child.once('exit', () => { shell.childrenBornBefore = asCreationTime(clock() - EXIT_TIME_MARGIN_MS); });
+      child.once('exit', () => {
+        const at = clock();
+        shell.exit = { at, atTicks: ticks(), childrenBornBefore: asCreationTime(at - EXIT_TIME_MARGIN_MS) };
+      });
     }
     const earlier = recorded.get(child);
     const latest = (async () => {

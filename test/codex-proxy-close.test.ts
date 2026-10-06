@@ -195,6 +195,28 @@ test('after the shell has exited, a process given its PID and that process\'s ch
   assert.equal([newcomer, row(5009, 4242, 7)].every(sys.isRunning), true);
 });
 
+test('when the wall clock has gone back since the shell exited, a snapshot taken after the exit is not trusted', async (t) => {
+  const debug = t.mock.method(logger, 'debug');
+  const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
+  const child = fakeChild();
+  let now = at(1);
+  let ticks = 0;
+  const killer = treeKiller('win32', sys.end, sys.query, viaShell, () => now, () => ticks);
+  await killer.track!(asChild(child));
+  sys.start(row(5002, 4242, 3));
+  now = at(5);
+  ticks = 10_000;
+  child.exit();
+  sys.reuse(row(4242, 1, 6));
+  now = at(3);
+  ticks = 12_000;
+  sys.start(row(5009, 4242, 4));
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal([row(5002, 4242, 3), row(5009, 4242, 4)].every(sys.isRunning), true);
+  assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('clock')), true);
+});
+
 test('a child the shell started in the last moments before it exited is left alone', async () => {
   const late: ProcessIdentity = { pid: 5003, parentPid: 4242, creationTime: '2026-10-05T00:00:04.9500000Z' };
   const sys = fakeSystem([row(4242, 1, 1)]);
