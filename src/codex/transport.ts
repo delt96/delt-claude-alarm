@@ -69,25 +69,49 @@ export const defaultSpawn: SpawnFn = (command, args) => {
 export type KillTreeFn = ((child: ChildProcess) => Promise<void>) & { track?: (child: ChildProcess) => Promise<void> };
 export interface ProcessIdentity { pid: number; parentPid: number; creationTime: string }
 export type ProcessQueryFn = () => Promise<ProcessIdentity[]>;
+export type ProcessEndFn = (targets: ProcessIdentity[]) => Promise<void>;
 type Descendant = ProcessIdentity & { depth: number };
 
-export const queryProcesses: ProcessQueryFn = () => new Promise((resolve, reject) => {
-  const script = "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-    if (err) { reject(err); return; }
-    try {
-      const rows: unknown = JSON.parse(stdout);
-      if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
-        throw new Error('invalid process snapshot');
-      }
-      resolve(rows);
-    } catch (error) { reject(error); }
+const POWERSHELL_TIMEOUT_MS = 5000;
+
+const powershell = (script: string, env?: NodeJS.ProcessEnv) => new Promise<string>((resolve, reject) => {
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: POWERSHELL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout) => {
+    if (err) reject(err);
+    else resolve(stdout);
   });
 });
-export type RunFn = (file: string, args: string[], options: { windowsHide: boolean }, callback: (err: Error | null) => void) => void;
 
-const runFile: RunFn = (file, args, options, callback) => {
-  execFile(file, args, options, (err) => callback(err));
+export const queryProcesses: ProcessQueryFn = async () => {
+  const script = "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress";
+  const rows: unknown = JSON.parse(await powershell(script));
+  if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
+    throw new Error('invalid process snapshot');
+  }
+  return rows;
+};
+
+// One handle per target both proves its creation time and ends it, so a PID handed to another process meanwhile is never ended.
+const END_SCRIPT = [
+  'foreach ($t in ($env:CLAUDE_ALARM_END_TARGETS | ConvertFrom-Json)) {',
+  '  try {',
+  '    $p = [Diagnostics.Process]::GetProcessById($t.pid)',
+  // PowerShell turns a throwing property getter into $null, so get_Handle() is called as a method; StartTime, Kill and WaitForExit then reuse that handle.
+  '    $null = $p.get_Handle()',
+  '    $start = $p.get_StartTime().ToUniversalTime()',
+  // Win32_Process creation dates stop at microseconds.
+  "    if ($start.AddTicks(-($start.Ticks % 10)).ToString('o') -ne $t.creationTime) { \"$($t.pid) now belongs to another process\"; continue }",
+  '    $p.Kill()',
+  '    if (-not $p.WaitForExit(1000)) { "$($t.pid) has not exited yet" }',
+  '  } catch {',
+  '    $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }',
+  '    "$($t.pid) not ended: $($e.GetType().Name)"',
+  '  }',
+  '}',
+].join('\n');
+
+export const endProcesses: ProcessEndFn = async (targets) => {
+  const notes = await powershell(END_SCRIPT, { ...process.env, CLAUDE_ALARM_END_TARGETS: JSON.stringify(targets) });
+  for (const note of notes.split(/\r?\n/)) if (note) logger.debug(`codex process ${note}`);
 };
 
 function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] | undefined {
@@ -114,22 +138,35 @@ function descendantsOf(rootPid: number, rows: ProcessIdentity[]): Descendant[] |
 
 const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
 
+const SHELL_EXIT_WAIT_MS = 1000;
+
+const exitOf = (child: ChildProcess) => new Promise<void>((resolve) => {
+  if (exited(child)) { resolve(); return; }
+  const timer = setTimeout(() => {
+    logger.debug(`codex proxy shell ${child.pid} has not exited yet`);
+    resolve();
+  }, SHELL_EXIT_WAIT_MS);
+  child.once('exit', () => {
+    clearTimeout(timer);
+    resolve();
+  });
+});
+
+const merged = (before: Descendant[], found: Descendant[]) =>
+  [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
+
 export function treeKiller(
   platform: NodeJS.Platform = process.platform,
-  run: RunFn = runFile,
+  end: ProcessEndFn = endProcesses,
   query: ProcessQueryFn = queryProcesses,
   throughShell: (child: ChildProcess) => boolean = spawnedThroughShell,
 ): KillTreeFn {
   const recorded = new WeakMap<ChildProcess, Promise<Descendant[]>>();
-  const stop = (pid: number) => new Promise<void>((resolve) => {
-    // No /T: taskkill builds trees from ParentProcessId alone, so it would also end older processes naming a reused PID as parent.
-    run('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true }, (err) => {
-      if (err) logger.debug(`taskkill ${pid} failed: ${err.message}`);
-      resolve();
-    });
-  });
-  const stopDeepestFirst = async (descendants: Descendant[]) => {
-    for (const descendant of [...descendants].sort((a, b) => b.depth - a.depth)) await stop(descendant.pid);
+  // No taskkill: it ends whatever holds a PID by then, and its /T builds trees from ParentProcessId alone.
+  const endDeepestFirst = async (descendants: Descendant[]) => {
+    if (!descendants.length) return;
+    try { await end([...descendants].sort((a, b) => b.depth - a.depth).map(({ depth, ...identity }) => identity)); }
+    catch (err) { logger.debug(`ending codex processes failed: ${String(err)}`); }
   };
   const snapshot = async () => {
     try { return await query(); }
@@ -142,22 +179,13 @@ export function treeKiller(
       return;
     }
     // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    if (!exited(child)) {
-      const rows = await snapshot();
-      // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
-      if (!exited(child)) {
-        const descendants = rows && descendantsOf(child.pid!, rows);
-        if (descendants) await stopDeepestFirst(descendants);
-        child.kill();
-        return;
-      }
-    }
-    const descendants = (await recorded.get(child)) ?? [];
-    if (!descendants.length) return;
-    const current = await snapshot();
-    if (!current) return;
-    // A recorded descendant may have exited and its PID been reused; only the same creation time proves it is the same process.
-    await stopDeepestFirst(descendants.filter(d => current.some(row => row.pid === d.pid && row.creationTime === d.creationTime)));
+    const [rows, before] = await Promise.all([exited(child) ? undefined : snapshot(), recorded.get(child)]);
+    // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
+    const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
+    await endDeepestFirst(merged(before ?? [], found));
+    if (exited(child)) return;
+    child.kill();
+    await exitOf(child);
   };
   killer.track = async (child) => {
     if (!isShellTree(child) || exited(child)) return;
@@ -166,8 +194,7 @@ export function treeKiller(
       const rows = await snapshot();
       // A snapshot that ends after the shell exited may show another process under the shell's reused PID.
       const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
-      const before = (await earlier) ?? [];
-      return [...before, ...found.filter(d => !before.some(b => b.pid === d.pid && b.creationTime === d.creationTime))];
+      return merged((await earlier) ?? [], found);
     })();
     recorded.set(child, latest);
     await latest;
