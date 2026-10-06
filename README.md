@@ -86,7 +86,18 @@ Open `http://127.0.0.1:7900` in your browser.
 |------|-------------|
 | `notify` | Send a desktop notification (title, message, level) |
 | `reply` | Send a message to the dashboard |
+| `ask` | Ask the user with buttons; the answer arrives as a channel message |
 | `status` | Update session status (idle, working, waiting_input) |
+
+### Questions
+
+A question from `ask` (or from Codex, below) appears as a card in the session's conversation on the dashboard and as a message with a button per option on Telegram.
+
+- One question: click an option, or type your own answer and press **Enter**. Several questions: answer each one, then click **Send**.
+- On Telegram, tap an option, or reply to the question message to type your own answer.
+- Sending the session a plain message instead closes its open questions.
+- A question counts as answered once the session confirms it took the answer; if it could not, the card opens again with the reason.
+- After updating claude-alarm, restart the hub (`claude-alarm hub stop`, then `claude-alarm hub start`) so the sessions and the hub run the same version. An older hub cannot show questions; `ask` then tells Claude to ask with `reply` instead.
 
 ## Configuration
 
@@ -191,7 +202,7 @@ claude-alarm hub start
 - Images work the same way: paste, drag & drop or 📎 on the dashboard, or send a photo to the Telegram bot (PNG, JPEG, GIF or WebP). The Codex adapter must run on the same PC as the hub to read them.
 - Approvals for commands, file changes and MCP tools can be answered from the dashboard or Telegram with the choices Codex offers (for example **Allow once**, **Always allow this command**, **Cancel task**). Whoever answers first wins, in Codex or here; the other buttons close as **Resolved**, which does not say what was chosen. Buttons from before a hub or adapter restart show **Expired**; if Codex is still waiting, a new request appears.
 - After updating claude-alarm, reload open dashboard tabs so they pick up the changes.
-- Questions Codex asks you (not approvals) still have to be answered in Codex; claude-alarm tells you one is waiting.
+- Questions Codex asks during a task (app-server 0.160) show as question cards on the dashboard and with buttons on Telegram (see [Questions](#questions)); the answer goes back into that task, or starts a new one if it has ended. Questions Codex asks through `requestUserInput` still have to be answered in Codex; claude-alarm tells you one is waiting.
 - A conversation is followed only while Codex is working on it, so a closed Codex window drops off the dashboard about a minute later. If a reply could not be picked up, you get a **Reply not relayed** warning; read it in the Codex window. Conversations created from the dashboard are the exception (below).
 - If Codex runs on another PC, run `claude-alarm codex start` there. It reads the hub address and token from that PC's `~/.claude-alarm/config.json` (`hub.host`, `hub.port`, `hub.token`) or from `CLAUDE_ALARM_HUB_HOST`, `CLAUDE_ALARM_HUB_PORT` and `CLAUDE_ALARM_HUB_TOKEN`; the remote-hub answers you give `claude-alarm init` go only into that project's `.mcp.json` and do not apply here. `codex start` says whether it reached Codex and the hub. Keep claude-alarm at the same version on both PCs; an older hub cannot show Codex's choices.
 - Only one Codex adapter runs per user. A second one finds the first and stops (`codex start` says `already running`); an adapter the hub starts waits instead and takes over shortly after the other one stops. `claude-alarm codex stop` stops the adapter that is running now. If that was the hub's own adapter, the hub does not start it again until you restart the hub; to turn Codex off for good, use `codex disable` and restart the hub. claude-alarm 1.2.0 and earlier tracked the adapter in `~/.claude-alarm/codex.pid`; that file is no longer used, and `codex start` and `codex status` point it out if it names a running process.
