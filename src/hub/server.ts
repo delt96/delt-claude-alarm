@@ -584,7 +584,9 @@ export class HubServer {
         this.sessions.updateActivity(request.sessionId);
         this.broadcastToDashboards({ type: 'question', ...request });
         const label = this.getSessionLabel(this.sessions.get(request.sessionId));
+        // The bot sends the question with its own buttons, so the desktop notice leaves Telegram out.
         void this.notifier.notifyWithSession(undefined, undefined, `[${label}] Question`, questionSummary(request), 'warning');
+        void this.telegramBot?.sendQuestion(request.sessionId, label, request);
         break;
       }
 
@@ -835,7 +837,9 @@ export class HubServer {
       return;
     }
     open.sending = undefined;
-    this.broadcastToDashboards({ type: 'question_rejected', sessionId, requestId, reason: reason || 'the session could not take the answer' });
+    const why = reason || 'the session could not take the answer';
+    this.broadcastToDashboards({ type: 'question_rejected', sessionId, requestId, reason: why });
+    void this.telegramBot?.reopenQuestion(sessionId, requestId, why);
   }
 
   // A plain message closes the questions it overtakes; one already being answered waits for its own outcome.
@@ -849,6 +853,7 @@ export class HubServer {
 
   private announceQuestion(sessionId: string, requestId: string, state: QuestionState, answers?: QuestionAnswers, source?: MessageSource): void {
     this.broadcastToDashboards({ type: 'question_resolved', sessionId, requestId, state, ...(answers ? { answers } : {}), ...(source ? { source } : {}) });
+    void this.telegramBot?.resolveQuestion(sessionId, requestId, state, answers, source);
   }
 
   private broadcastToDashboards(msg: ChannelMessage): void {
@@ -970,6 +975,7 @@ export class HubServer {
       // Also notify dashboards so they can dismiss the permission bar
       this.broadcastToDashboards({ type: 'permission_response', sessionId, requestId, behavior });
     };
+    bot.onQuestionAnswer = (sessionId, requestId, answers) => this.answerQuestion(sessionId, requestId, answers, 'telegram');
     bot.onChoiceVerdict = (sessionId, requestId, choiceId) => {
       if (this.forwardPermissionResponse({ sessionId, requestId, choiceId })) {
         logger.info(`Telegram choice [${requestId}]: ${choiceId} -> session ${sessionId}`);

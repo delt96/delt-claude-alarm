@@ -287,3 +287,38 @@ test('the question book keeps at most its limit open and remembers what it close
   assert.deepEqual(book.add(req('a')), []);
   assert.deepEqual(book.all().map((q) => q.request.requestId), ['a']);
 });
+
+test('questions, results and reopenings reach Telegram, and a Telegram answer goes to the session', async () => {
+  const calls: string[] = [];
+  const bot: any = {
+    sendQuestion: async (sessionId: string, label: string, request: any) => { calls.push(`send ${sessionId} ${label} ${request.requestId}`); },
+    resolveQuestion: async (sessionId: string, requestId: string, state: string, answers?: any, source?: string) => { calls.push(`resolve ${requestId} ${state} ${JSON.stringify(answers ?? null)} ${source ?? '-'}`); },
+    reopenQuestion: async (sessionId: string, requestId: string, reason: string) => { calls.push(`reopen ${requestId} ${reason}`); },
+  };
+  (hub as any).telegramBot = bot;
+  (hub as any).wireTelegram(bot);
+  const ch = await channel('s14');
+  try {
+    ask(ch.ws, 's14', 'r14');
+    await settle();
+    assert.equal(bot.onQuestionAnswer('s14', 'r14', { q1: 'Red' }), 'question q2 has no answer');
+    assert.equal(bot.onQuestionAnswer('s14', 'r14', { q1: 'Red', q2: 'From phone' }), 'ok');
+    await settle();
+    assert.equal(of(ch.inbox, 'question_answer')[0].source, 'telegram');
+    send(ch.ws, { type: 'question_delivery', sessionId: 's14', requestId: 'r14', ok: false, reason: 'busy' });
+    await settle();
+    assert.equal(bot.onQuestionAnswer('s14', 'r14', { q1: 'Blue', q2: 'Again' }), 'ok');
+    await settle();
+    send(ch.ws, { type: 'question_delivery', sessionId: 's14', requestId: 'r14', ok: true });
+    await settle();
+    assert.deepEqual(calls, [
+      'send s14 s14 r14',
+      'reopen r14 busy',
+      'resolve r14 answered {"q1":"Blue","q2":"Again"} telegram',
+    ]);
+  } finally {
+    (hub as any).telegramBot = undefined;
+    (hub as any).notifier.telegramBot = undefined;
+    ch.ws.close();
+  }
+});
