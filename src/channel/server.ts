@@ -44,9 +44,11 @@ ROUTING: If a dashboard message has lines like [claude-alarm] @X = SendMessage t
 
 STATUS: Call status("working") before starting a long task, status("waiting_input") when blocked on user input, status("idle") when finished responding.
 
+QUESTIONS: When you need the user's decision or answer, send the whole question with reply: the context, the options and your recommendation. Then call status("waiting_input"). Never put a question only in notify: a notification is not part of the session's conversation, so the user has no place there to read the context and answer. reply already reaches the dashboard conversation and, where enabled, the desktop and Telegram.
+
 NOTIFICATIONS:
-- Use notify only for key events: task completion, errors, or when user attention is needed. Not for intermediate steps or simple acknowledgments.
-- Pick level: success=completion, error=failure, warning=attention needed, info=neutral status.`,
+- Use notify only for key events that need no answer: task completion and errors. Not for intermediate steps, simple acknowledgments or questions.
+- Pick level: success=completion, error=failure, warning=a problem the user should look at, info=neutral status.`,
   },
 );
 
@@ -73,7 +75,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'notify',
       description:
-        'Send a desktop notification to the user. Use this when you complete a task, encounter an error, or need user attention. The notification will appear as a system toast/popup.',
+        'Send a desktop notification to the user for an event that needs no answer, such as a finished task or an error. It appears as a system toast/popup and in the dashboard\'s notification list, not in the session\'s conversation. To ask the user something, use reply instead.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -91,7 +93,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'Send a message to the web dashboard. Use this to communicate status updates, results, or any information the user should see in the monitoring dashboard.',
+        'Send a message to the web dashboard. Use this to communicate status updates, results, questions that need the user\'s answer, or any information the user should see in the monitoring dashboard. It appears in the session\'s conversation and, where enabled, is also forwarded as a desktop and Telegram notification.',
       inputSchema: {
         type: 'object' as const,
         properties: {
