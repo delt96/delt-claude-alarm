@@ -68,17 +68,20 @@ export const defaultSpawn: SpawnFn = (command, args) => {
 
 export type KillTreeFn = ((child: ChildProcess) => Promise<void>) & { track?: (child: ChildProcess) => Promise<void> };
 export interface ProcessIdentity { pid: number; parentPid: number; creationTime: string }
-export type ProcessQueryFn = () => Promise<ProcessIdentity[]>;
+// clockAheadMs: how far Date.now() read ahead of the clock that stamps creation times when the snapshot was taken.
+export type ProcessSnapshot = ProcessIdentity[] & { clockAheadMs?: number };
+export type ProcessQueryFn = () => Promise<ProcessSnapshot>;
 export type ProcessEndFn = (targets: ProcessIdentity[]) => Promise<void>;
 type Descendant = ProcessIdentity & { depth: number };
 
 const POWERSHELL_TIMEOUT_MS = 5000;
 
-const powershell = (script: string, env?: NodeJS.ProcessEnv) => new Promise<string>((resolve, reject) => {
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: POWERSHELL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout) => {
+const powershell = (script: string, env?: NodeJS.ProcessEnv, started?: (pid: number | undefined) => void) => new Promise<string>((resolve, reject) => {
+  const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: POWERSHELL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env }, (err, stdout) => {
     if (err) reject(err);
     else resolve(stdout);
   });
+  started?.(child.pid);
 });
 
 // Select-Object rather than a [pscustomobject] cast, which Constrained Language Mode (AppLocker/WDAC) refuses.
@@ -86,11 +89,16 @@ const QUERY_SCRIPT = "@(Get-CimInstance Win32_Process | Where-Object CreationDat
 
 // A prelude runs first in the same PowerShell session; tests use it to switch the language mode or stand in for a cmdlet.
 export const processQuery = (prelude = ''): ProcessQueryFn => async () => {
-  const rows: unknown = JSON.parse(await powershell(prelude + QUERY_SCRIPT));
+  let ownPid: number | undefined;
+  const startedAt = Date.now();
+  const rows: unknown = JSON.parse(await powershell(prelude + QUERY_SCRIPT, undefined, (pid) => { ownPid = pid; }));
   if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string')) {
     throw new Error('invalid process snapshot');
   }
-  return rows;
+  // The query's own PowerShell was created after startedAt, so a creation time earlier than that means Date.now() reads ahead.
+  const own = (rows as ProcessIdentity[]).find(row => row.pid === ownPid);
+  const clockAheadMs = own ? startedAt - Date.parse(`${own.creationTime.slice(0, 23)}Z`) : Infinity;
+  return Object.assign(rows as ProcessIdentity[], { clockAheadMs });
 };
 
 export const queryProcesses: ProcessQueryFn = processQuery();
@@ -199,7 +207,7 @@ export function treeKiller(
     catch (err) { logger.debug(`codex process query failed: ${String(err)}`); return undefined; }
   };
   const isShellTree = (child: ChildProcess) => platform === 'win32' && child.pid !== undefined && throughShell(child);
-  const treeOf = (child: ChildProcess, rows: ProcessIdentity[] | undefined): Descendant[] => {
+  const treeOf = (child: ChildProcess, rows: ProcessSnapshot | undefined, begunBeforeExit: boolean): Descendant[] => {
     if (!rows) return [];
     const shell = shells.get(child);
     if (!exited(child)) {
@@ -211,13 +219,16 @@ export function treeKiller(
     }
     if (!shell?.exit) return [];
     const { at, atTicks, childrenBornBefore: bornBefore } = shell.exit;
-    // A wall clock set back since the exit could stamp a process that took the PID afterwards with an earlier time.
-    if (ticks() - atTicks - (clock() - at) > EXIT_TIME_MARGIN_MS / 2) {
-      logger.debug(`the clock went back after codex proxy shell ${child.pid} exited; ending only the processes recorded while it ran`);
+    // A clock set back could stamp a process that took the PID after the exit with an earlier time. Date.now() catches up with
+    // such a step only when V8 next resyncs it (within a minute), so look for the step both before that (Date.now() ahead of
+    // the system clock) and after it (Date.now() behind the monotonic clock since the exit).
+    const setBack = Math.max(rows.clockAheadMs ?? 0, ticks() - atTicks - (clock() - at));
+    if (setBack > EXIT_TIME_MARGIN_MS / 2) {
+      logger.debug(`the clock is off by ${Math.round(setBack)}ms since codex proxy shell ${child.pid} exited; ending only the processes recorded while it ran`);
       return [];
     }
-    // Whoever holds the shell's PID now started either as our shell, before it exited, or after it exited.
-    shell.creationTime ??= rows.find(row => row.pid === child.pid && row.creationTime < bornBefore)?.creationTime;
+    // Only a snapshot begun before the exit can show the shell itself; whoever holds its PID started either as our shell or after the exit.
+    if (begunBeforeExit) shell.creationTime ??= rows.find(row => row.pid === child.pid && row.creationTime < bornBefore)?.creationTime;
     if (!shell.creationTime) return [];
     return descendantsOf({ pid: child.pid!, parentPid: 0, creationTime: shell.creationTime }, rows, bornBefore);
   };
@@ -227,9 +238,10 @@ export function treeKiller(
       return;
     }
     // An npm codex.cmd runs the proxy under cmd.exe, and child.kill() would end only cmd.exe.
-    const findable = !exited(child) || shells.get(child)?.exit !== undefined;
+    const begunBeforeExit = !exited(child);
+    const findable = begunBeforeExit || shells.get(child)?.exit !== undefined;
     const [rows, before] = await Promise.all([findable ? snapshot() : undefined, recorded.get(child)]);
-    await endByIdentity(merged(before ?? [], treeOf(child, rows)));
+    await endByIdentity(merged(before ?? [], treeOf(child, rows, begunBeforeExit)));
     if (exited(child)) return;
     child.kill();
     await exitOf(child);
@@ -247,7 +259,7 @@ export function treeKiller(
     }
     const earlier = recorded.get(child);
     const latest = (async () => {
-      const found = treeOf(child, await snapshot());
+      const found = treeOf(child, await snapshot(), true);
       return merged((await earlier) ?? [], found);
     })();
     recorded.set(child, latest);

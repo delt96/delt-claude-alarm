@@ -217,6 +217,40 @@ test('when the wall clock has gone back since the shell exited, a snapshot taken
   assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('clock')), true);
 });
 
+test('when Date.now() runs ahead of the clock that stamps creation times, a snapshot taken after the shell exited is not trusted', async (t) => {
+  const debug = t.mock.method(logger, 'debug');
+  const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
+  const child = fakeChild();
+  let now = at(1);
+  let ahead = 0;
+  const killer = treeKiller('win32', sys.end, async () => Object.assign(await sys.query(), { clockAheadMs: ahead }), viaShell, () => now);
+  await killer.track!(asChild(child));
+  sys.start(row(5002, 4242, 3));
+  now = at(5);
+  child.exit();
+  sys.reuse(row(4242, 1, 6));
+  sys.start(row(5009, 4242, 4));
+  ahead = 2000;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal([row(5002, 4242, 3), row(5009, 4242, 4)].every(sys.isRunning), true);
+  assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('clock')), true);
+});
+
+test('a snapshot begun after the shell exited never supplies the shell\'s creation time', async () => {
+  const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
+  const child = fakeChild();
+  let now = at(1);
+  let failing = true;
+  const killer = treeKiller('win32', sys.end, async () => { if (failing) throw new Error('query failed'); return sys.query(); }, viaShell, () => now);
+  await killer.track!(asChild(child));
+  now = at(5);
+  child.exit();
+  failing = false;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, []);
+});
+
 test('a child the shell started in the last moments before it exited is left alone', async () => {
   const late: ProcessIdentity = { pid: 5003, parentPid: 4242, creationTime: '2026-10-05T00:00:04.9500000Z' };
   const sys = fakeSystem([row(4242, 1, 1)]);
@@ -485,6 +519,12 @@ test('the creation time check and the termination go through the handle that was
   } finally {
     for (const c of [opened, named]) if (c.exitCode === null && c.signalCode === null) c.kill();
   }
+});
+
+test('the process snapshot reports how far Date.now() runs ahead of the clock that stamps creation times', { skip: process.platform !== 'win32' }, async () => {
+  const snapshot = await queryProcesses();
+  assert.equal(typeof snapshot.clockAheadMs, 'number');
+  assert.equal(snapshot.clockAheadMs! < 50, true, `clockAheadMs ${snapshot.clockAheadMs}`);
 });
 
 test('under Constrained Language Mode the process snapshot still works', { skip: process.platform !== 'win32' }, async () => {
