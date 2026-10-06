@@ -1,11 +1,15 @@
 import type { EventEmitter } from 'node:events';
 import type { Writable } from 'node:stream';
 import { logger } from '../shared/logger.js';
+import { HANDSHAKE_TIMEOUT_MS, PROXY_TREE_CLOSE_BUDGET_MS } from './transport.js';
 
-// Adapter stop may await the 10s handshake before the 11s tree cleanup; leave scheduling headroom.
-export const ADAPTER_SHUTDOWN_MS = 25_000;
-export const RUN_CLOSE_MS = 15_000;
-export const SUPERVISOR_STOP_GRACE_MS = 30_000;
+// Under load timers fire late, and a PowerShell ended at its time limit still has to exit.
+const CLOSE_SLACK_MS = 4000;
+export const RUN_CLOSE_MS = PROXY_TREE_CLOSE_BUDGET_MS + CLOSE_SLACK_MS;
+// Adapter stop may first wait out a handshake in progress, then close the proxy tree.
+export const ADAPTER_SHUTDOWN_MS = HANDSHAKE_TIMEOUT_MS + RUN_CLOSE_MS;
+// The hub's force kill must never cut short a shutdown the adapter would finish by its own deadline.
+export const SUPERVISOR_STOP_GRACE_MS = ADAPTER_SHUTDOWN_MS + 5000;
 export const CLI_EXIT_FLUSH_MS = 1000;
 
 interface ShutdownOptions {

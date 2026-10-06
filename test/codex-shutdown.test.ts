@@ -2,6 +2,11 @@ import './isolate-home.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { acquireLock, controlEndpoint, requestStop } from '../src/codex/instance-lock.js';
+import { until } from './helpers/fake-codex-daemon.js';
 import { createAdapterShutdown, closeWithinLimit, ADAPTER_SHUTDOWN_MS, RUN_CLOSE_MS, SUPERVISOR_STOP_GRACE_MS } from '../src/codex/shutdown.js';
 import { HANDSHAKE_TIMEOUT_MS, PROXY_TREE_CLOSE_BUDGET_MS } from '../src/codex/transport.js';
 import { shutdownClock, flush } from './helpers/shutdown-clock.js';
@@ -11,8 +16,8 @@ import { logger } from '../src/shared/logger.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-for (const path of ['SIGINT', 'SIGTERM', 'end', 'close', 'control']) {
-  test(`${path} waits for a kill longer than the old three-second limit`, async (t) => {
+for (const trigger of ['SIGINT', 'SIGTERM', 'end', 'close']) {
+  test(`${trigger} waits for a kill longer than the old three-second limit`, async (t) => {
     const clock = shutdownClock(t);
     const signals = new EventEmitter();
     const stdin = new EventEmitter();
@@ -24,8 +29,7 @@ for (const path of ['SIGINT', 'SIGTERM', 'end', 'close', 'control']) {
       release: async () => { throw new Error('lock release failed'); },
       exit: () => { assert.equal(killed, true); exits++; },
     });
-    if (path === 'control') shutdown();
-    else (path === 'end' || path === 'close' ? stdin : signals).emit(path);
+    (trigger === 'end' || trigger === 'close' ? stdin : signals).emit(trigger);
     await clock.tick(3050);
     assert.equal(exits, 0);
     await clock.tick(250);
@@ -34,6 +38,31 @@ for (const path of ['SIGINT', 'SIGTERM', 'end', 'close', 'control']) {
     assert.equal(exits, 1);
   });
 }
+
+test('codex stop reaches the adapter shutdown through the instance lock, which exits only after the kill', async () => {
+  const endpoint = controlEndpoint(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-stop-lock-')));
+  let shutdown: (() => void) | undefined;
+  const lock = await acquireLock(endpoint, { pid: process.pid, token: 'stop-token', onStop: () => shutdown?.() });
+  assert.equal(lock.kind, 'owner');
+  if (lock.kind !== 'owner') return;
+  let finishKill: (() => void) | undefined;
+  let exits = 0;
+  shutdown = createAdapterShutdown({
+    signals: new EventEmitter(),
+    stop: () => new Promise<void>((resolve) => { finishKill = resolve; }),
+    release: lock.close,
+    exit: () => { exits++; },
+  });
+  try {
+    assert.deepEqual(await requestStop(endpoint, 'stop-token'), { state: 'stopping', pid: process.pid });
+    await until(() => finishKill !== undefined);
+    await sleep(50);
+    assert.equal(exits, 0);
+  } finally {
+    finishKill?.();
+  }
+  await until(() => exits === 1);
+});
 
 test('stuck shutdown and run close reach their stated bounds, and the adapter warns as it exits at its deadline', async (t) => {
   const clock = shutdownClock(t);
