@@ -449,6 +449,10 @@ export class HubServer {
       if (holder && holder !== ws) {
         this.socketOwners.delete(holder);
         holder.terminate();
+        // The old socket's close no longer matches this session, so an answer sent on it would stay "sending" for good.
+        for (const q of this.questions.forSession(id)) {
+          if (q.sending) this.finishQuestionDelivery(id, q.request.requestId, false, 'the session reconnected before it confirmed the answer');
+        }
       }
       this.socketOwners.set(ws, id);
     } else if ('sessionId' in msg && this.socketOwners.get(ws) !== msg.sessionId) {

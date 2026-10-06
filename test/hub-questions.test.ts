@@ -244,6 +244,26 @@ test('the same session reconnecting on a new socket keeps its questions', async 
   second.ws.close();
 });
 
+test('a session that reconnects while its answer is in flight reopens the question, and a new answer goes to the new socket', async () => {
+  const first = await channel('s16');
+  const dash = await open('/ws/dashboard');
+  ask(first.ws, 's16', 'r16');
+  await settle();
+  send(dash.ws, { type: 'question_answer', sessionId: 's16', requestId: 'r16', answers: { q1: 'Red', q2: 'A' } });
+  await settle();
+  assert.equal(of(first.inbox, 'question_answer').length, 1);
+  const second = await channel('s16');
+  assert.deepEqual(of(dash.inbox, 'question_rejected'), [{ type: 'question_rejected', sessionId: 's16', requestId: 'r16', reason: 'the session reconnected before it confirmed the answer' }]);
+  send(dash.ws, { type: 'question_answer', sessionId: 's16', requestId: 'r16', answers: { q1: 'Blue', q2: 'B' } });
+  await settle();
+  assert.deepEqual(of(second.inbox, 'question_answer').map((m) => m.answers), [{ q1: 'Blue', q2: 'B' }]);
+  send(second.ws, { type: 'question_delivery', sessionId: 's16', requestId: 'r16', ok: true });
+  await settle();
+  assert.deepEqual(of(dash.inbox, 'question_resolved').map((m) => [m.requestId, m.state]), [['r16', 'answered']]);
+  dash.ws.close();
+  second.ws.close();
+});
+
 test("another session's socket cannot ask or confirm for this session", async () => {
   const mine = await channel('s12');
   const intruder = await channel('s12-other');
