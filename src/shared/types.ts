@@ -37,6 +37,31 @@ export interface SessionInfo {
   closable?: boolean;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface Question {
+  id: string;
+  header?: string;
+  question: string;
+  options: QuestionOption[] | null;
+  allowOther: boolean;
+}
+
+export interface QuestionRequest {
+  sessionId: string;
+  requestId: string;
+  context?: string;
+  questions: Question[];
+  timestamp: number;
+}
+
+export type QuestionAnswers = Record<string, string>;
+
+export type QuestionState = 'answered' | 'closed' | 'expired';
+
 /** Messages sent between channel server and hub */
 export type ChannelMessage =
   | { type: 'register'; session: SessionInfo }
@@ -61,6 +86,13 @@ export type ChannelMessage =
   | { type: 'permission_pending'; requests: PendingChoiceRequest[] }
   | { type: 'codex_adapters'; adapters: CodexAdapterInfo[] }
   | { type: 'codex_close'; sessionId: string }
+  | ({ type: 'question' } & QuestionRequest)
+  | { type: 'questions_pending'; requests: Array<QuestionRequest & { sending: boolean }> }
+  | { type: 'question_answer'; sessionId: string; requestId: string; answers: QuestionAnswers; questions?: Question[]; source?: MessageSource }
+  | { type: 'question_delivery'; sessionId: string; requestId: string; ok: boolean; reason?: string }
+  | { type: 'question_sending'; sessionId: string; requestId: string; answers: QuestionAnswers; source: MessageSource }
+  | { type: 'question_resolved'; sessionId: string; requestId: string; state: QuestionState; answers?: QuestionAnswers; source?: MessageSource }
+  | { type: 'question_rejected'; sessionId: string; requestId: string; reason: string }
   | { type: 'error'; message: string };
 
 export interface CodexAdapterInfo {
