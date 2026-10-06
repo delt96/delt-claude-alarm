@@ -84,7 +84,8 @@ const powershell = (script: string, env?: NodeJS.ProcessEnv) => new Promise<stri
 });
 
 // Select-Object rather than a [pscustomobject] cast, which Constrained Language Mode (AppLocker/WDAC) refuses.
-const QUERY_SCRIPT = "$rows = @(Get-CimInstance Win32_Process | Where-Object CreationDate | Select-Object @{ n = 'pid'; e = { [int]$_.ProcessId } }, @{ n = 'parentPid'; e = { [int]$_.ParentProcessId } }, @{ n = 'creationTime'; e = { $_.CreationDate.ToUniversalTime().ToString('o') } }); @{ rows = $rows; now = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress -Depth 3";
+// The clock is read last, after the rows are serialized, so that little time separates the reading from the snapshot's arrival.
+const QUERY_SCRIPT = "$rows = @(Get-CimInstance Win32_Process | Where-Object CreationDate | Select-Object @{ n = 'pid'; e = { [int]$_.ProcessId } }, @{ n = 'parentPid'; e = { [int]$_.ParentProcessId } }, @{ n = 'creationTime'; e = { $_.CreationDate.ToUniversalTime().ToString('o') } }); $json = ConvertTo-Json -InputObject $rows -Compress; '{\"rows\":' + $json + ',\"now\":\"' + [DateTime]::UtcNow.ToString('o') + '\"}'";
 
 const asMs = (creationTime: string) => Date.parse(`${creationTime.slice(0, 23)}Z`);
 
@@ -93,7 +94,7 @@ export const processQuery = (prelude = ''): ProcessQueryFn => async () => {
   const output = await powershell(prelude + QUERY_SCRIPT);
   const atTicks = performance.now();
   const { rows, now } = (JSON.parse(output) ?? {}) as { rows?: unknown; now?: unknown };
-  if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string') || typeof now !== 'string') {
+  if (!Array.isArray(rows) || rows.some(row => !Number.isInteger(row.pid) || !Number.isInteger(row.parentPid) || typeof row.creationTime !== 'string') || typeof now !== 'string' || !Number.isFinite(asMs(now))) {
     throw new Error('invalid process snapshot');
   }
   return Object.assign(rows as ProcessIdentity[], { systemTime: { nowMs: asMs(now), atTicks } });
@@ -216,9 +217,10 @@ export function treeKiller(
       return descendantsOf(root, rows);
     }
     if (!shell?.exit) return [];
-    // Two readings of the exit on the system clock that stamps creation times: Date.now() at the exit, and this snapshot's system
-    // time less the monotonic time since. A step of that clock after the exit can push only the second past the exit, and a step
-    // Date.now() has not caught up with yet (V8 resyncs it within a minute) only the first, so the earlier one is not past it.
+    // Two readings of the exit by the system clock that stamps creation times: Date.now() at the exit, and this snapshot's clock
+    // reading less the monotonic time from the exit to the snapshot's arrival. One step of that clock can push only one of them past
+    // the exit: a step after the exit only the second, a step before it that Date.now() has not caught up with (V8 resyncs it within a
+    // minute) only the first. A snapshot that read the clock before the exit holds no process started after it, whatever the readings.
     const { at, atTicks } = shell.exit;
     const bySnapshot = rows.systemTime ? rows.systemTime.nowMs - (rows.systemTime.atTicks - atTicks) : Infinity;
     const bornBefore = asCreationTime(Math.min(at, bySnapshot) - EXIT_TIME_MARGIN_MS);

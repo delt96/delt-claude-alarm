@@ -260,6 +260,47 @@ test('a system clock set forward after the shell exited cannot make a child of t
   assert.equal(sys.isRunning(early), true);
 });
 
+test('a close snapshot that read the system clock before the shell exited and arrived after it still has the shell\'s children ended', async () => {
+  const sys = fakeSystem([row(4242, 1, 1)]);
+  const child = fakeChild();
+  const c = { now: at(1), ticks: 0 };
+  let closing = false;
+  const query = async () => {
+    const rows = await sys.query();
+    const systemTime = { nowMs: at(5), atTicks: 11_000 };
+    if (closing) {
+      Object.assign(c, { now: at(6), ticks: 10_500 });
+      child.exit();
+    }
+    return Object.assign(rows, { systemTime });
+  };
+  const killer = treeKiller('win32', sys.end, query, viaShell, () => c.now, () => c.ticks);
+  await killer.track!(asChild(child));
+  sys.start(row(5001, 4242, 2));
+  closing = true;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5001, 4242, 2)]);
+  assert.equal(child.kills, 0);
+});
+
+test('the time a snapshot took to arrive after reading the system clock only moves the bound earlier', async () => {
+  const sooner: ProcessIdentity = { pid: 5001, parentPid: 4242, creationTime: '2026-10-05T00:00:04.5000000Z' };
+  const later: ProcessIdentity = { pid: 5002, parentPid: 4242, creationTime: '2026-10-05T00:00:04.8000000Z' };
+  const sys = fakeSystem([row(4242, 1, 1)]);
+  const child = fakeChild();
+  const c = { now: at(1), ticks: 0 };
+  const query = async () => Object.assign(await sys.query(), { systemTime: { nowMs: at(5), atTicks: c.ticks + 300 } });
+  const killer = treeKiller('win32', sys.end, query, viaShell, () => c.now, () => c.ticks);
+  await killer.track!(asChild(child));
+  sys.start(sooner);
+  sys.start(later);
+  Object.assign(c, { now: at(5), ticks: 10_000 });
+  child.exit();
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [sooner]);
+  assert.equal(sys.isRunning(later), true);
+});
+
 test('a snapshot begun after the shell exited never supplies the shell\'s creation time', async () => {
   const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2)]);
   const child = fakeChild();
