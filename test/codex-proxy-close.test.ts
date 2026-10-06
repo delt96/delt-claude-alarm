@@ -151,7 +151,7 @@ test('a recorded descendant whose PID goes to a new process after the shell has 
   assert.equal(sys.isRunning(newcomer), true);
 });
 
-test('a live codex.cmd shell has its descendants ended by identity, deepest first, then the shell itself', async () => {
+test('a live codex.cmd shell has its descendants ended by identity in one batch, then the shell itself', async () => {
   const events: string[] = [];
   const { ends, end } = recorder(undefined, events);
   const child = fakeChild({}, events);
@@ -207,6 +207,23 @@ test('a live shell also has its recorded descendants ended when its current tree
   await killer(asChild(child));
   assert.deepEqual(sys.ended, [row(5002, 5001, 3)]);
   assert.equal(child.kills, 1);
+});
+
+test('a live shell whose snapshot fails at close still has its recorded descendants ended by identity', async (t) => {
+  const debug = t.mock.method(logger, 'debug');
+  const sys = fakeSystem([row(4242, 1, 1), row(5001, 4242, 2), row(5002, 5001, 3)]);
+  const newcomer = row(5001, 1, 9);
+  const child = fakeChild();
+  let failing = false;
+  const killer = treeKiller('win32', sys.end, async () => { if (failing) throw new Error('query failed'); return sys.query(); }, viaShell);
+  await killer.track!(asChild(child));
+  sys.reuse(newcomer);
+  failing = true;
+  await killer(asChild(child));
+  assert.deepEqual(sys.ended, [row(5002, 5001, 3)]);
+  assert.equal(sys.isRunning(newcomer), true);
+  assert.equal(child.kills, 1);
+  assert.equal(debug.mock.calls.some((c) => String(c.arguments[0]).includes('query failed')), true);
 });
 
 test('when the process snapshot fails, only the shell is ended and the failure is logged', async (t) => {

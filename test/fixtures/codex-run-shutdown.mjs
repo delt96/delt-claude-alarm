@@ -3,6 +3,7 @@ import path from 'node:path';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { FakeDaemon } from '../helpers/fake-codex-daemon.js';
+import { RUN_CLOSE_MS } from '../../src/codex/shutdown.ts';
 
 const mode = process.argv[2];
 const daemon = new FakeDaemon();
@@ -20,11 +21,12 @@ childProcess.spawn = (_command, _args, _options) => {
   child.kill = () => true;
   return child;
 };
+// Survivor takes the direct codex.exe path, whose close only calls child.kill(); stuck takes the codex.cmd shell path, whose process snapshot never answers.
+fs.writeFileSync(path.join(process.env.USERPROFILE, mode === 'stuck' ? 'codex.cmd' : 'codex.exe'), '');
+process.env.PATH = process.env.USERPROFILE;
 if (mode === 'stuck') {
   const schedule = globalThis.setTimeout;
-  globalThis.setTimeout = (fn, ms, ...args) => schedule(fn, ms === 15_000 ? 20 : ms, ...args);
-  fs.writeFileSync(path.join(process.env.USERPROFILE, 'codex.cmd'), '');
-  process.env.PATH = process.env.USERPROFILE;
+  globalThis.setTimeout = (fn, ms, ...args) => schedule(fn, ms === RUN_CLOSE_MS ? 20 : ms, ...args);
   childProcess.execFile = () => ({});
 }
 syncBuiltinESMExports();

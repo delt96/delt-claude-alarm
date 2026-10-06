@@ -1,5 +1,6 @@
 import type { EventEmitter } from 'node:events';
 import type { Writable } from 'node:stream';
+import { logger } from '../shared/logger.js';
 
 // Adapter stop may await the 10s handshake before the 11s tree cleanup; leave scheduling headroom.
 export const ADAPTER_SHUTDOWN_MS = 25_000;
@@ -21,7 +22,10 @@ export function createAdapterShutdown(opts: ShutdownOptions): () => void {
     if (exiting) return;
     exiting = true;
     // A codex.cmd proxy runs outside the job that ends this process's children on exit, so its kill must finish first.
-    const timer = setTimeout(opts.exit, ADAPTER_SHUTDOWN_MS);
+    const timer = setTimeout(() => {
+      logger.warn(`Codex adapter shutdown did not finish within ${ADAPTER_SHUTDOWN_MS}ms; exiting`);
+      opts.exit();
+    }, ADAPTER_SHUTDOWN_MS);
     const stopped = Promise.resolve().then(opts.stop);
     const released = Promise.resolve().then(opts.release);
     void Promise.allSettled([stopped, released]).then(() => {

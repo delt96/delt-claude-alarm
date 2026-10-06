@@ -177,8 +177,9 @@ export function treeKiller(
 ): KillTreeFn {
   const recorded = new WeakMap<ChildProcess, Promise<Descendant[]>>();
   // No taskkill: it ends whatever holds a PID by then, and its /T builds trees from ParentProcessId alone.
-  const endDeepestFirst = async (descendants: Descendant[]) => {
+  const endByIdentity = async (descendants: Descendant[]) => {
     if (!descendants.length) return;
+    // The default ender ends all targets at once, so this order is not kept; that is safe because each target's identity is checked as it is ended.
     try { await end([...descendants].sort((a, b) => b.depth - a.depth).map(({ depth, ...identity }) => identity)); }
     catch (err) { logger.debug(`ending codex processes failed: ${String(err)}`); }
   };
@@ -196,7 +197,7 @@ export function treeKiller(
     const [rows, before] = await Promise.all([exited(child) ? undefined : snapshot(), recorded.get(child)]);
     // Until Node sees the shell exit it holds the shell's handle, so the shell's PID cannot have been reused during the snapshot.
     const found = rows && !exited(child) ? descendantsOf(child.pid!, rows) ?? [] : [];
-    await endDeepestFirst(merged(before ?? [], found));
+    await endByIdentity(merged(before ?? [], found));
     if (exited(child)) return;
     child.kill();
     await exitOf(child);

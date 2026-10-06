@@ -1,4 +1,4 @@
-﻿import type { TestContext } from 'node:test';
+import type { TestContext } from 'node:test';
 
 export const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 

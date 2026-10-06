@@ -67,6 +67,7 @@ export class CodexSupervisor {
         resolve();
       };
       const force = setTimeout(() => {
+        logger.warn(`Codex adapter did not exit within ${this.stopGraceMs}ms of stop; killing it`);
         child.kill();
         done();
       }, this.stopGraceMs);
