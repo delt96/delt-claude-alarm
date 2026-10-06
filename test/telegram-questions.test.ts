@@ -203,6 +203,33 @@ test('a long context still leaves room for the result line within the message li
   assert.equal(visibleLength(edits(calls)[0].text) <= 4000, true);
 });
 
+test('option descriptions show as one line per option under the question', async (t) => {
+  const { bot, calls } = setup(t);
+  const described = { ...color, options: [{ label: 'Red', description: 'warm & <bold>' }, { label: 'Blue' }] };
+  await bot.sendQuestion('s1', 'proj', request([described]));
+  await bot.sendQuestion('s1', 'proj', request([described, fixed], { requestId: 'r2' }));
+  const [single, , first, second] = sends(calls);
+  const lines = '\n\n• <b>Red</b> — warm &amp; &lt;bold&gt;\n• <b>Blue</b>\n\n<i>Or reply';
+  assert.match(single.text, new RegExp(`Which color do you prefer\\?${lines}`));
+  assert.match(first.text, new RegExp(`^<b>1/2</b> <b>\\[Color\\]</b> Which color do you prefer\\?${lines}`));
+  assert.doesNotMatch(second.text, /•/);
+});
+
+test('option lines that would not fit are left out whole, and the message stays within its budget', async (t) => {
+  const { bot, calls } = setup(t);
+  const options = Array.from({ length: 10 }, (_, i) => ({ label: `Option ${i}`, description: 'd'.repeat(500) }));
+  const long = { id: 'q1', question: 'Which one?', options, allowOther: true };
+  await bot.sendQuestion('s1', 'proj', request([long]));
+  await bot.sendQuestion('s1', 'proj', request([long, fixed], { requestId: 'r2' }));
+  const [single, , first] = sends(calls);
+  for (const msg of [single, first]) {
+    assert.doesNotMatch(msg.text, /•|ddd|truncated/);
+    assert.match(msg.text, /Which one\?\n\n<i>Or reply to this message with your own answer\.<\/i>$/);
+    assert.equal(visibleLength(msg.text) <= 4000 - 400, true);
+  }
+  assert.equal(buttonsOf(single).length, 10);
+});
+
 test('only the latest 100 requests keep working buttons', async (t) => {
   const { bot, calls } = setup(t);
   for (let i = 0; i < 101; i++) await bot.sendQuestion('s1', 'proj', request([fixed], { requestId: `r${i}` }));

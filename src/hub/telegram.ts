@@ -585,12 +585,17 @@ export class TelegramBot {
       const heading = await this.sendMessage(this.fit((body) => (body ? `${head}\n\n${this.mdToHtml(body)}` : head), context));
       if (heading) this.rememberSession(heading.message_id, sessionId);
     }
+    const budget = MAX_VISIBLE_CHARS - QUESTION_EDIT_ROOM;
     for (const [i, q] of request.questions.entries()) {
       const hint = q.options ? (q.allowOther ? 'Or reply to this message with your own answer.' : '') : 'Reply to this message with your answer.';
-      const body = `${q.header ? `<b>[${this.escHtml(q.header)}]</b> ` : ''}${this.mdToHtml(q.question)}${hint ? `\n\n<i>${hint}</i>` : ''}`;
-      const html = count === 1
-        ? this.fit((ctx) => `${head}${ctx ? `\n\n${this.mdToHtml(ctx)}` : ''}\n\n${body}`, context, MAX_VISIBLE_CHARS - QUESTION_EDIT_ROOM)
-        : this.fit((text) => `<b>${i + 1}/${count}</b> ${text}`, body, MAX_VISIBLE_CHARS - QUESTION_EDIT_ROOM);
+      const bodyWith = (lines: string) => `${q.header ? `<b>[${this.escHtml(q.header)}]</b> ` : ''}${this.mdToHtml(q.question)}${lines}${hint ? `\n\n<i>${hint}</i>` : ''}`;
+      const render = (body: string) => count === 1
+        ? this.fit((ctx) => `${head}${ctx ? `\n\n${this.mdToHtml(ctx)}` : ''}\n\n${body}`, context, budget)
+        : this.fit((text) => `<b>${i + 1}/${count}</b> ${text}`, body, budget);
+      const lines = this.optionLines(q);
+      const described = lines ? render(bodyWith(lines)) : '';
+      // Option lines are kept whole or left out; fit would otherwise cut them mid-list.
+      const html = described && visibleLength(described) <= budget && described.includes(bodyWith(lines)) ? described : render(bodyWith(''));
       const keyboard = q.options && entry.state !== 'done' ? q.options.map((o) => {
         const token = randomUUID().replace(/-/g, '').slice(0, 16);
         this.questionTokens.set(token, { key, qid: q.id, label: o.label });
@@ -608,6 +613,12 @@ export class TelegramBot {
         this.questionReplies.set(sent.message_id, { key, qid: q.id });
       }
     }
+  }
+
+  private optionLines(q: Question): string {
+    if (!q.options?.some((o) => o.description)) return '';
+    const lines = q.options.map((o) => `• <b>${this.escHtml(o.label)}</b>${o.description ? ` — ${this.escHtml(o.description)}` : ''}`);
+    return `\n\n${lines.join('\n')}`;
   }
 
   async resolveQuestion(sessionId: string, requestId: string, state: QuestionState, answers?: QuestionAnswers, source?: MessageSource): Promise<void> {
