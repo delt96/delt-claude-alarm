@@ -324,6 +324,28 @@
     margin-top: 4px;
   }
 
+  /* Question cards */
+  .message.question-card { max-width: 90%; border-color: var(--yellow); }
+  .question-context { margin-bottom: 10px; }
+  .question-item { padding: 8px 0; border-top: 1px solid var(--border); }
+  .question-item:first-child { border-top: none; padding-top: 0; }
+  .question-header { display: inline-block; margin-bottom: 4px; padding: 0 6px; border: 1px solid var(--yellow); border-radius: 4px; color: var(--yellow); font-size: 11px; font-weight: 600; }
+  .question-text { margin-bottom: 6px; }
+  .question-options { display: flex; flex-direction: column; gap: 6px; }
+  .question-option { padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .question-option:hover { border-color: var(--yellow); }
+  .question-option.selected { border-color: var(--accent); background: rgba(224,168,109,0.12); }
+  .question-option-desc { display: block; margin-top: 2px; color: var(--text-dim); font-size: 11px; }
+  .question-other { width: 100%; margin-top: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  .question-other:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .question-answer { margin-top: 2px; font-weight: 500; }
+  .question-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .question-send { padding: 6px 16px; border: none; border-radius: 6px; background: var(--accent); color: #1a1d27; font: inherit; font-weight: 600; cursor: pointer; }
+  .question-send:disabled { opacity: 0.4; cursor: default; }
+  .question-status { color: var(--text-dim); font-size: 12px; }
+  .question-status.answered { color: var(--green); }
+  .question-error { margin-top: 6px; color: var(--red); font-size: 12px; }
+
   /* Typing indicator */
   .typing-indicator {
     display: none;
@@ -1094,6 +1116,8 @@
     codexAdapters: [],
     pendingSelect: null,
     closeArmed: null,
+    questionDrafts: {},  // requestId -> { questionId: { choice, other } }
+    composing: false,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -1490,6 +1514,21 @@
           renderNotifications();
         }
         break;
+      case 'question':
+        showQuestion(msg);
+        break;
+      case 'questions_pending':
+        restorePendingQuestions(msg.requests || []);
+        break;
+      case 'question_sending':
+        markQuestionSending(msg);
+        break;
+      case 'question_resolved':
+        resolveQuestionCard(msg);
+        break;
+      case 'question_rejected':
+        rejectQuestionCard(msg);
+        break;
       case 'permission_pending':
         restorePendingRequests(msg.requests || []);
         break;
@@ -1709,14 +1748,21 @@
     header.textContent = s ? sessionDisplayName(s) : state.selectedSession.slice(0, 12);
 
     const msgs = state.messages[state.selectedSession] || [];
+    const focus = captureQuestionFocus();
     if (!msgs.length) {
       el.innerHTML = '<div class="empty-state">No messages yet</div>';
       return;
     }
 
     el.innerHTML = msgs.map(m => {
-      const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
       const timeStr = relativeTime(m.time);
+      if (m.kind === 'question') {
+        return `<div class="message from-session question-card" data-request="${esc(m.requestId)}">
+        <div class="message-meta">${agentName(s)} &middot; ${timeStr} &middot; Question</div>
+        <div class="message-body">${questionCardHtml(m)}</div>
+      </div>`;
+      }
+      const cls = m.from === 'session' ? 'from-session' : 'from-dashboard';
       let content;
       if (m.imageData) {
         content = `<img src="${m.imageData}" alt="${esc(m.imageName || 'image')}">`;
@@ -1733,6 +1779,9 @@
     if (state.waitingReply[state.selectedSession]) {
       el.innerHTML += '<div class="typing-indicator active"><div class="typing-dots"><span></span><span></span><span></span></div></div>';
     }
+    // Bound after the typing indicator: appending to innerHTML re-creates the cards and drops their listeners.
+    bindQuestionCards(el);
+    restoreQuestionFocus(focus);
     renderPermissionBar();
     // Only auto-scroll if user is near the bottom (within 150px)
     setTimeout(() => {
@@ -1985,6 +2034,262 @@
     html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
     return html;
+  }
+
+  // --- Questions ---
+  const QUESTION_STATUS = {
+    sending: 'Sending…',
+    closed: 'Closed — a message was sent instead',
+    expired: 'Expired — the session ended',
+    gone: 'No longer open',
+  };
+  const SOURCE_NAMES = { dashboard: 'Dashboard', telegram: 'Telegram', api: 'API' };
+
+  function questionMessage(sessionId, requestId) {
+    return (state.messages[sessionId] || []).find(m => m.kind === 'question' && m.requestId === requestId);
+  }
+
+  function firstQuestionLine(req) {
+    const first = ((req.questions[0] && req.questions[0].question) || '').split('\n')[0].trim();
+    const more = req.questions.length - 1;
+    return more > 0 ? `${first} (+${more} more)` : first;
+  }
+
+  // Returns true when this dashboard did not have the question yet.
+  function addQuestion(req) {
+    const sid = req.sessionId;
+    if (!state.messages[sid]) state.messages[sid] = [];
+    if (questionMessage(sid, req.requestId)) return false;
+    state.messages[sid].push({
+      from: 'session', kind: 'question', requestId: req.requestId, context: req.context || '',
+      questions: req.questions, state: req.sending ? 'sending' : 'open', answers: null, source: null, error: null,
+      time: req.timestamp || Date.now(),
+    });
+    state.waitingReply[sid] = false;
+    if (state.selectedSession !== sid) state.unread[sid] = (state.unread[sid] || 0) + 1;
+    return true;
+  }
+
+  function showQuestion(msg) {
+    if (!addQuestion(msg)) return;
+    saveMessages();
+    state.notifications.unshift({ sessionId: msg.sessionId, title: 'Question', message: firstQuestionLine(msg), level: 'warning', time: Date.now() });
+    flashTitle('Question');
+    renderSessions();
+    renderNotifications();
+    if (state.selectedSession === msg.sessionId) renderMessages();
+  }
+
+  // After a reconnect the hub lists the questions still open; any other open card here closed while this page was away.
+  function restorePendingQuestions(requests) {
+    const live = new Set(requests.map(r => r.sessionId + '\n' + r.requestId));
+    const added = requests.filter(r => addQuestion(r));
+    for (const r of requests) {
+      const m = questionMessage(r.sessionId, r.requestId);
+      if (m && !added.includes(r)) { m.state = r.sending ? 'sending' : 'open'; if (!r.sending) m.answers = null; }
+    }
+    for (const [sid, msgs] of Object.entries(state.messages)) {
+      for (const m of msgs) {
+        if (m.kind === 'question' && (m.state === 'open' || m.state === 'sending') && !live.has(sid + '\n' + m.requestId)) m.state = 'gone';
+      }
+    }
+    if (added.length) {
+      const label = `${added.length} question(s) waiting`;
+      state.notifications.unshift({ sessionId: added[0].sessionId, title: label, message: added.slice(0, 3).map(firstQuestionLine).join(' · '), level: 'warning', time: Date.now() });
+      flashTitle(label);
+    }
+    saveMessages();
+    renderSessions();
+    renderNotifications();
+    renderMessages();
+  }
+
+  function updateQuestion(msg, change) {
+    const m = questionMessage(msg.sessionId, msg.requestId);
+    if (!m) return null;
+    change(m);
+    saveMessages();
+    if (state.selectedSession === msg.sessionId) renderMessages();
+    return m;
+  }
+
+  function markQuestionSending(msg) {
+    updateQuestion(msg, m => {
+      if (m.state !== 'open' && m.state !== 'sending') return;
+      m.state = 'sending';
+      m.answers = msg.answers;
+      m.source = msg.source;
+      m.error = null;
+    });
+  }
+
+  function resolveQuestionCard(msg) {
+    updateQuestion(msg, m => {
+      m.state = msg.state;
+      if (msg.answers) m.answers = msg.answers;
+      m.source = msg.source || null;
+      m.error = null;
+      delete state.questionDrafts[m.requestId];
+    });
+  }
+
+  function rejectQuestionCard(msg) {
+    const m = updateQuestion(msg, q => {
+      if (q.state !== 'open' && q.state !== 'sending') return;
+      q.state = 'open';
+      q.answers = null;
+      q.error = msg.reason;
+    });
+    if (m && state.selectedSession === msg.sessionId) showMentionError(`Answer not delivered: ${msg.reason}`);
+  }
+
+  function questionDraft(requestId) {
+    if (!state.questionDrafts[requestId]) state.questionDrafts[requestId] = {};
+    return state.questionDrafts[requestId];
+  }
+
+  // A typed answer wins over a picked option; picking an option clears the typed one.
+  function draftAnswer(d) {
+    if (!d) return '';
+    const typed = (d.other || '').trim();
+    return typed || d.choice || '';
+  }
+
+  function readyAnswers(m) {
+    const d = state.questionDrafts[m.requestId] || {};
+    const answers = {};
+    for (const q of m.questions) {
+      const a = draftAnswer(d[q.id]);
+      if (!a) return null;
+      answers[q.id] = a;
+    }
+    return answers;
+  }
+
+  function questionCardHtml(m) {
+    const open = m.state === 'open';
+    const d = state.questionDrafts[m.requestId] || {};
+    const single = m.questions.length === 1;
+    let html = m.context ? `<div class="question-context">${renderMarkdown(m.context)}</div>` : '';
+    for (const q of m.questions) {
+      const qd = d[q.id] || {};
+      html += `<div class="question-item" data-q="${esc(q.id)}">`;
+      if (q.header) html += `<span class="question-header">${esc(q.header)}</span>`;
+      html += `<div class="question-text">${renderMarkdown(q.question)}</div>`;
+      if (open) {
+        if (q.options) {
+          const picked = !(qd.other || '').trim() ? qd.choice : null;
+          html += '<div class="question-options">' + q.options.map((o, i) =>
+            `<button type="button" class="question-option${picked === o.label ? ' selected' : ''}" data-q="${esc(q.id)}" data-i="${i}">${esc(o.label)}${o.description ? `<span class="question-option-desc">${esc(o.description)}</span>` : ''}</button>`
+          ).join('') + '</div>';
+        }
+        if (q.allowOther) {
+          const hint = (q.options ? 'Or type your own answer' : 'Type your answer') + (single ? ' (Enter to send)' : '');
+          html += `<input type="text" class="question-other" data-q="${esc(q.id)}" placeholder="${esc(hint)}">`;
+        }
+      } else if (m.answers && m.answers[q.id]) {
+        html += `<div class="question-answer">&rarr; ${esc(m.answers[q.id])}</div>`;
+      }
+      html += '</div>';
+    }
+    if (m.error) html += `<div class="question-error">${esc(m.error)}</div>`;
+    let status;
+    if (open) status = single ? '' : `<button type="button" class="question-send"${readyAnswers(m) ? '' : ' disabled'}>Send</button>`;
+    else if (m.state === 'answered') status = `<span class="question-status answered">Answered &middot; ${esc(SOURCE_NAMES[m.source] || 'Dashboard')}</span>`;
+    else status = `<span class="question-status">${esc(QUESTION_STATUS[m.state] || '')}</span>`;
+    if (status) html += `<div class="question-actions">${status}</div>`;
+    return html;
+  }
+
+  function sendQuestionAnswer(sessionId, m, answers) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      m.error = 'Not connected to the hub';
+      renderMessages();
+      return;
+    }
+    state.ws.send(JSON.stringify({ type: 'question_answer', sessionId, requestId: m.requestId, answers }));
+    m.state = 'sending';
+    m.answers = answers;
+    m.source = 'dashboard';
+    m.error = null;
+    saveMessages();
+    renderMessages();
+  }
+
+  // Updates the picked button and Send without re-rendering, so the box being typed in keeps its focus.
+  function refreshQuestionCard(card, m) {
+    const d = state.questionDrafts[m.requestId] || {};
+    card.querySelectorAll('.question-option').forEach(btn => {
+      const q = m.questions.find(x => x.id === btn.dataset.q);
+      const qd = d[q.id] || {};
+      const picked = !(qd.other || '').trim() ? qd.choice : null;
+      btn.classList.toggle('selected', picked === q.options[Number(btn.dataset.i)].label);
+    });
+    const send = card.querySelector('.question-send');
+    if (send) send.disabled = !readyAnswers(m);
+  }
+
+  function bindQuestionCards(el) {
+    const sid = state.selectedSession;
+    el.querySelectorAll('.question-card').forEach(card => {
+      const m = questionMessage(sid, card.dataset.request);
+      if (!m || m.state !== 'open') return;
+      const d = questionDraft(m.requestId);
+      const single = m.questions.length === 1;
+      card.querySelectorAll('.question-option').forEach(btn => btn.addEventListener('click', () => {
+        const q = m.questions.find(x => x.id === btn.dataset.q);
+        const label = q.options[Number(btn.dataset.i)].label;
+        if (single) { sendQuestionAnswer(sid, m, { [q.id]: label }); return; }
+        d[q.id] = { choice: label, other: '' };
+        const input = card.querySelector(`.question-other[data-q="${CSS.escape(q.id)}"]`);
+        if (input) input.value = '';
+        refreshQuestionCard(card, m);
+      }));
+      card.querySelectorAll('.question-other').forEach(input => {
+        const qid = input.dataset.q;
+        input.value = (d[qid] && d[qid].other) || '';
+        input.addEventListener('compositionstart', () => { state.composing = true; });
+        input.addEventListener('compositionend', () => { state.composing = false; });
+        input.addEventListener('input', () => {
+          const prev = d[qid] || {};
+          d[qid] = { choice: input.value.trim() ? '' : (prev.choice || ''), other: input.value };
+          refreshQuestionCard(card, m);
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' || e.isComposing) return;
+          e.preventDefault();
+          const answers = readyAnswers(m);
+          if (answers) sendQuestionAnswer(sid, m, answers);
+        });
+      });
+      const send = card.querySelector('.question-send');
+      if (send) send.addEventListener('click', () => {
+        const answers = readyAnswers(m);
+        if (answers) sendQuestionAnswer(sid, m, answers);
+      });
+    });
+  }
+
+  function captureQuestionFocus() {
+    const a = document.activeElement;
+    if (!a || !a.classList || !a.classList.contains('question-other')) return null;
+    const card = a.closest('.question-card');
+    return card ? { request: card.dataset.request, q: a.dataset.q, start: a.selectionStart, end: a.selectionEnd } : null;
+  }
+
+  function restoreQuestionFocus(saved) {
+    if (!saved) return;
+    const card = [...document.querySelectorAll('.question-card')].find(c => c.dataset.request === saved.request);
+    const input = card && card.querySelector(`.question-other[data-q="${CSS.escape(saved.q)}"]`);
+    if (!input) return;
+    input.focus();
+    try { input.setSelectionRange(saved.start, saved.end); } catch {}
+  }
+
+  // The 30 s time refresh re-renders the conversation; skipping it while an answer is typed keeps the IME and the caret intact.
+  function typingInQuestion() {
+    const a = document.activeElement;
+    return state.composing || !!(a && a.classList && a.classList.contains('question-other'));
   }
 
   // --- Permission relay ---
@@ -2626,7 +2931,7 @@
   });
 
   // Refresh relative times every 30s
-  setInterval(() => { renderMessages(); renderNotifications(); }, 30000);
+  setInterval(() => { if (!typingInQuestion()) renderMessages(); renderNotifications(); }, 30000);
 
   // Mobile tabs
   document.querySelectorAll('#mobileTabs button').forEach(btn => {
