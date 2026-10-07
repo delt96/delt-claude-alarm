@@ -12,6 +12,8 @@ import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants
 import { loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
 import { readPeerName } from './peer-name.js';
+import { ASK_DROPPED, ASK_TOOL, ASK_UNSUPPORTED, askRequest, askResultText } from './ask.js';
+import { answerText } from '../shared/questions.js';
 import type { SessionStatus, NotifyLevel } from '../shared/types.js';
 
 const sessionId = randomUUID();
@@ -44,9 +46,11 @@ ROUTING: If a dashboard message has lines like [claude-alarm] @X = SendMessage t
 
 STATUS: Call status("working") before starting a long task, status("waiting_input") when blocked on user input, status("idle") when finished responding.
 
+QUESTIONS: When the user can answer by picking from a few options, use ask: it shows the question with buttons in the dashboard conversation and on Telegram, and sets waiting_input for you. Its answer arrives later as a channel message starting with "Answer to your question" or "Answers to your questions". For an open question, send the whole question with reply (the context, what you need, your recommendation) and call status("waiting_input"). Never put a question only in notify: a notification is not part of the session's conversation, so the user has no place there to read the context and answer.
+
 NOTIFICATIONS:
-- Use notify only for key events: task completion, errors, or when user attention is needed. Not for intermediate steps or simple acknowledgments.
-- Pick level: success=completion, error=failure, warning=attention needed, info=neutral status.`,
+- Use notify only for key events that need no answer: task completion and errors. Not for intermediate steps, simple acknowledgments or questions.
+- Pick level: success=completion, error=failure, warning=a problem the user should look at, info=neutral status.`,
   },
 );
 
@@ -73,7 +77,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'notify',
       description:
-        'Send a desktop notification to the user. Use this when you complete a task, encounter an error, or need user attention. The notification will appear as a system toast/popup.',
+        'Send a desktop notification to the user for an event that needs no answer, such as a finished task or an error. It appears as a system toast/popup and in the dashboard\'s notification list, not in the session\'s conversation. To ask the user something, use ask or reply instead.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -91,7 +95,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'Send a message to the web dashboard. Use this to communicate status updates, results, or any information the user should see in the monitoring dashboard.',
+        'Send a message to the web dashboard. Use this to communicate status updates, results, open questions that need the user\'s answer (use ask when they can pick from options), or any information the user should see in the monitoring dashboard. It appears in the session\'s conversation and, where enabled, is also forwarded as a desktop and Telegram notification.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -100,6 +104,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['content'],
       },
     },
+    ASK_TOOL,
     {
       name: 'status',
       description:
@@ -151,6 +156,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{ type: 'text', text: 'Message sent to dashboard.' }],
       };
+    }
+
+    case 'ask': {
+      const requestId = randomUUID();
+      const built = askRequest(args, sessionId, requestId);
+      if (!built.ok) {
+        return { content: [{ type: 'text', text: `Question not sent: ${built.error}` }], isError: true };
+      }
+      if (hubClient.isConnected() && !(await hubClient.waitForSupport('questions', 2000))) {
+        return { content: [{ type: 'text', text: ASK_UNSUPPORTED }], isError: true };
+      }
+      const delivery = hubClient.send({ type: 'question', ...built.request });
+      if (delivery === 'dropped') {
+        return { content: [{ type: 'text', text: ASK_DROPPED }], isError: true };
+      }
+      hubClient.send({ type: 'status', sessionId, status: 'waiting_input' });
+      logger.info(`Ask [${requestId}]: ${built.request.questions.length} question(s)`);
+      return { content: [{ type: 'text', text: askResultText(requestId, delivery) }] };
     }
 
     case 'status': {
@@ -245,6 +268,20 @@ async function main() {
           meta: { sender: 'dashboard', timestamp: String(Date.now()), imagePath: msg.imagePath, mimeType: msg.mimeType },
         },
       });
+    } else if (msg.type === 'question_answer' && msg.sessionId === sessionId) {
+      logger.info(`Answer for question ${msg.requestId}`);
+      try {
+        await server.notification({
+          method: 'notifications/claude/channel',
+          params: {
+            content: answerText(msg.questions ?? [], msg.answers),
+            meta: { sender: msg.source ?? 'dashboard', timestamp: String(Date.now()), questionId: msg.requestId },
+          },
+        });
+        hubClient.send({ type: 'question_delivery', sessionId, requestId: msg.requestId, ok: true });
+      } catch (err) {
+        hubClient.send({ type: 'question_delivery', sessionId, requestId: msg.requestId, ok: false, reason: (err as Error).message });
+      }
     } else if (msg.type === 'permission_response' && msg.sessionId === sessionId) {
       logger.info(`Permission verdict [${msg.requestId}]: ${msg.behavior}`);
       await server.notification({

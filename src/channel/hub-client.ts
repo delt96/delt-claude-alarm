@@ -10,6 +10,8 @@ export class HubClient {
   private queue: ChannelMessage[] = [];
   private connected = false;
   private closed = false;
+  private features: string[] | null = null;
+  private featureWaiters = new Set<(features: string[]) => void>();
 
   constructor(
     private sessionId: string,
@@ -49,6 +51,7 @@ export class HubClient {
         if (this.ws !== ws) return;
         try {
           const msg = JSON.parse(data.toString()) as ChannelMessage;
+          if (msg.type === 'hub_info') this.learnFeatures(msg.features);
           for (const handler of this.messageHandlers) {
             handler(msg);
           }
@@ -61,6 +64,7 @@ export class HubClient {
         if (this.ws !== ws) return;
         logger.info('Disconnected from hub');
         this.connected = false;
+        this.features = null;
         if (!this.closed) this.scheduleReconnect();
       });
 
@@ -75,19 +79,45 @@ export class HubClient {
     }
   }
 
-  send(msg: ChannelMessage): void {
+  send(msg: ChannelMessage): 'sent' | 'queued' | 'dropped' {
     if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
-    } else {
-      if (this.queue.length < 100) {
-        this.queue.push(msg);
-      }
-      logger.debug('Hub not connected, message queued');
+      return 'sent';
     }
+    if (this.queue.length >= 100) {
+      logger.debug('Hub not connected and the queue is full, message dropped');
+      return 'dropped';
+    }
+    this.queue.push(msg);
+    logger.debug('Hub not connected, message queued');
+    return 'queued';
   }
 
   onMessage(handler: (msg: ChannelMessage) => void): void {
     this.messageHandlers.push(handler);
+  }
+
+  isConnected(): boolean {
+    return this.connected && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  supports(feature: string): boolean {
+    return this.features?.includes(feature) ?? false;
+  }
+
+  // An older hub sends no hub_info at all, so only the timeout can tell it apart from a slow one.
+  waitForSupport(feature: string, ms: number): Promise<boolean> {
+    if (this.features) return Promise.resolve(this.features.includes(feature));
+    return new Promise((resolve) => {
+      const settle = (ok: boolean) => {
+        clearTimeout(timer);
+        this.featureWaiters.delete(onInfo);
+        resolve(ok);
+      };
+      const onInfo = (features: string[]) => settle(features.includes(feature));
+      const timer = setTimeout(() => settle(false), ms);
+      this.featureWaiters.add(onInfo);
+    });
   }
 
   disconnect(): void {
@@ -101,6 +131,12 @@ export class HubClient {
       this.ws = null;
     }
     this.connected = false;
+    this.features = null;
+  }
+
+  private learnFeatures(features: unknown): void {
+    this.features = Array.isArray(features) ? features.filter((f): f is string => typeof f === 'string') : [];
+    for (const waiter of [...this.featureWaiters]) waiter(this.features);
   }
 
   reregister(): void {

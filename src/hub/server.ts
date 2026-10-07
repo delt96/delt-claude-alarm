@@ -13,6 +13,7 @@ import {
   WS_PATH_DASHBOARD,
   WS_PATH_CODEX,
   UPLOADS_DIR,
+  HUB_FEATURES,
 } from '../shared/constants.js';
 import { SessionManager } from './session-manager.js';
 import { Notifier } from './notifier.js';
@@ -21,8 +22,10 @@ import { CodexSupervisor, adapterEnv, resolveAdapterScript } from './codex-super
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexCall, CodexLinkMessage } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexCall, CodexLinkMessage, MessageSource, QuestionAnswers, QuestionState } from '../shared/types.js';
 import { permissionKey } from '../shared/permission-key.js';
+import { normalizeQuestionRequest, questionSummary, readAnswers } from '../shared/questions.js';
+import { QuestionBook } from './questions.js';
 import { isEntryScript } from '../shared/entry.js';
 import { hubUrlHost } from '../shared/hub-url.js';
 import {
@@ -70,6 +73,7 @@ export class HubServer {
   private socketOwners = new WeakMap<WebSocket, string>();
   // Codex approvals carry their own choices; a response is forwarded only in the mode of the request it answers.
   private choiceRequests = new Map<string, { request: PendingChoiceRequest; choiceIds: Set<string> }>();
+  private questions = new QuestionBook();
 
   private host: string;
   private port: number;
@@ -261,6 +265,7 @@ export class HubServer {
       this.localChannels.delete(sessionId);
       this.channelAlive.delete(sessionId);
       this.expireChoices(sessionId);
+      this.closeQuestions(sessionId, 'expired');
       if (session) {
         this.broadcastToDashboards({ type: 'session_disconnected', sessionId });
         this.jsonResponse(res, 200, { ok: true });
@@ -364,6 +369,7 @@ export class HubServer {
 
     const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'api' };
     ws.send(JSON.stringify(msg));
+    this.closeQuestions(sessionId, 'closed');
     this.jsonResponse(res, 200, { ok: true });
   }
 
@@ -420,6 +426,7 @@ export class HubServer {
           this.localChannels.delete(sessionId);
           this.channelAlive.delete(sessionId);
           this.expireChoices(sessionId);
+          this.closeQuestions(sessionId, 'expired');
           logger.info(`Channel disconnected: ${sessionId}`);
           this.broadcastToDashboards({
             type: 'session_disconnected',
@@ -446,6 +453,10 @@ export class HubServer {
       if (holder && holder !== ws) {
         this.socketOwners.delete(holder);
         holder.terminate();
+        // The old socket's close no longer matches this session, so an answer sent on it would stay "sending" for good.
+        for (const q of this.questions.forSession(id)) {
+          if (q.sending) this.finishQuestionDelivery(id, q.request.requestId, false, 'the session reconnected before it confirmed the answer');
+        }
       }
       this.socketOwners.set(ws, id);
     } else if ('sessionId' in msg && this.socketOwners.get(ws) !== msg.sessionId) {
@@ -465,6 +476,7 @@ export class HubServer {
           type: isReregister ? 'session_updated' : 'session_connected',
           session,
         });
+        this.sendHubInfo(ws);
         break;
       }
 
@@ -569,7 +581,34 @@ export class HubServer {
         this.resolveChoice(msg.sessionId, msg.requestId, msg.state === 'expired' ? 'expired' : 'resolved');
         break;
       }
+
+      case 'question': {
+        const request = normalizeQuestionRequest(msg);
+        if (!request) {
+          logger.warn(`Invalid question from ${msg.sessionId}`);
+          break;
+        }
+        const evicted = this.questions.add(request);
+        if (!evicted) break;
+        for (const old of evicted) this.announceQuestion(old.sessionId, old.requestId, 'expired');
+        this.sessions.updateActivity(request.sessionId);
+        this.broadcastToDashboards({ type: 'question', ...request });
+        const label = this.getSessionLabel(this.sessions.get(request.sessionId));
+        // The bot sends the question with its own buttons, so the desktop notice leaves Telegram out.
+        void this.notifier.notifyWithSession(undefined, undefined, `[${label}] Question`, questionSummary(request), 'warning');
+        void this.telegramBot?.sendQuestion(request.sessionId, label, request);
+        break;
+      }
+
+      case 'question_delivery': {
+        this.finishQuestionDelivery(msg.sessionId, msg.requestId, msg.ok === true, typeof msg.reason === 'string' ? msg.reason : undefined);
+        break;
+      }
     }
+  }
+
+  private sendHubInfo(ws: WebSocket): void {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'hub_info', features: [...HUB_FEATURES] } satisfies ChannelMessage));
   }
 
   private handleCodexConnection(ws: WebSocket, req: http.IncomingMessage): void {
@@ -711,6 +750,11 @@ export class HubServer {
     };
     ws.send(JSON.stringify(pendingMsg));
     ws.send(JSON.stringify({ type: 'codex_adapters', adapters: this.codexAdapterList() } satisfies ChannelMessage));
+    const questionsMsg: ChannelMessage = {
+      type: 'questions_pending',
+      requests: this.questions.all().map((q) => ({ ...q.request, sending: q.sending !== undefined, ...q.sending })),
+    };
+    ws.send(JSON.stringify(questionsMsg));
 
     ws.on('message', (data) => {
       try {
@@ -719,6 +763,7 @@ export class HubServer {
           const channelWs = this.channelSockets.get(msg.sessionId);
           if (channelWs?.readyState === WebSocket.OPEN) {
             channelWs.send(JSON.stringify({ ...msg, source: 'dashboard' }));
+            this.closeQuestions(msg.sessionId, 'closed');
           } else {
             const reason = 'the session is not connected';
             logger.warn(`Message rejected for ${msg.sessionId}: ${reason}`);
@@ -727,6 +772,11 @@ export class HubServer {
           }
         } else if (msg.type === 'image_upload') {
           this.handleImageUpload(ws, msg);
+        } else if (msg.type === 'question_answer') {
+          const outcome = this.answerQuestion(msg.sessionId, msg.requestId, msg.answers, 'dashboard');
+          if (outcome !== 'ok' && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'question_rejected', sessionId: msg.sessionId, requestId: msg.requestId, reason: outcome } satisfies ChannelMessage));
+          }
         } else if (msg.type === 'permission_response') {
           if (this.forwardPermissionResponse(msg)) {
             const verdict = msg.choiceId !== undefined ? `choice ${msg.choiceId}` : msg.behavior;
@@ -773,6 +823,51 @@ export class HubServer {
     for (const pending of [...this.choiceRequests.values()]) {
       if (pending.request.sessionId === sessionId) this.resolveChoice(sessionId, pending.request.requestId, 'expired');
     }
+  }
+
+  // "Answered" waits for the session to take the answer (a Claude channel notification, a Codex steer or turn), not for the model to read it.
+  private answerQuestion(sessionId: string, requestId: string, raw: unknown, source: MessageSource): string {
+    const open = this.questions.get(sessionId, requestId);
+    if (!open) return 'the question is no longer open';
+    if (open.sending) return 'the question is already being answered';
+    const read = readAnswers(open.request.questions, raw);
+    if (!read.ok) return read.error;
+    const channelWs = this.channelSockets.get(sessionId);
+    if (channelWs?.readyState !== WebSocket.OPEN) return 'the session is not connected';
+    open.sending = { answers: read.answers, source };
+    const out: ChannelMessage = { type: 'question_answer', sessionId, requestId, answers: read.answers, questions: open.request.questions, source };
+    channelWs.send(JSON.stringify(out));
+    this.broadcastToDashboards({ type: 'question_sending', sessionId, requestId, answers: read.answers, source });
+    return 'ok';
+  }
+
+  private finishQuestionDelivery(sessionId: string, requestId: string, ok: boolean, reason?: string): void {
+    const open = this.questions.get(sessionId, requestId);
+    if (!open?.sending) return;
+    const { answers, source } = open.sending;
+    if (ok) {
+      this.questions.take(sessionId, requestId);
+      this.announceQuestion(sessionId, requestId, 'answered', answers, source);
+      return;
+    }
+    open.sending = undefined;
+    const why = reason || 'the session could not take the answer';
+    this.broadcastToDashboards({ type: 'question_rejected', sessionId, requestId, reason: why });
+    void this.telegramBot?.reopenQuestion(sessionId, requestId, why);
+  }
+
+  // A plain message closes the questions it overtakes; one already being answered waits for its own outcome.
+  private closeQuestions(sessionId: string, state: 'closed' | 'expired'): void {
+    for (const q of this.questions.forSession(sessionId)) {
+      if (state === 'closed' && q.sending) continue;
+      this.questions.take(sessionId, q.request.requestId);
+      this.announceQuestion(sessionId, q.request.requestId, state);
+    }
+  }
+
+  private announceQuestion(sessionId: string, requestId: string, state: QuestionState, answers?: QuestionAnswers, source?: MessageSource): void {
+    this.broadcastToDashboards({ type: 'question_resolved', sessionId, requestId, state, ...(answers ? { answers } : {}), ...(source ? { source } : {}) });
+    void this.telegramBot?.resolveQuestion(sessionId, requestId, state, answers, source);
   }
 
   private broadcastToDashboards(msg: ChannelMessage): void {
@@ -833,6 +928,7 @@ export class HubServer {
       source: 'dashboard',
     };
     channelWs.send(JSON.stringify(forwardMsg));
+    this.closeQuestions(sessionId, 'closed');
     logger.info(`Image saved and forwarded: ${filename} (${buffer.length} bytes)`);
 
     // Cleanup after 5 minutes
@@ -855,8 +951,14 @@ export class HubServer {
 
   private initTelegram(config: TelegramConfig): void {
     this.telegramBot = new TelegramBot(config);
-    this.telegramBot.getSessions = () => this.sessions.getAll();
-    this.telegramBot.onMessageToSession = (sessionId, content): boolean => {
+    this.wireTelegram(this.telegramBot);
+    this.telegramBot.startPolling();
+    logger.info('Telegram bot initialized');
+  }
+
+  private wireTelegram(bot: TelegramBot): void {
+    bot.getSessions = () => this.sessions.getAll();
+    bot.onMessageToSession = (sessionId, content): boolean => {
       const channelWs = this.channelSockets.get(sessionId);
       if (channelWs?.readyState !== WebSocket.OPEN) {
         logger.warn(`Telegram message not delivered to ${sessionId}: the session is not connected`);
@@ -864,10 +966,11 @@ export class HubServer {
       }
       const msg: ChannelMessage = { type: 'message_to_session', sessionId, content, source: 'telegram' };
       channelWs.send(JSON.stringify(msg));
+      this.closeQuestions(sessionId, 'closed');
       logger.info(`Telegram message forwarded to session: ${sessionId}`);
       return true;
     };
-    this.telegramBot.onImageToSession = (sessionId, imagePath, mimeType, caption): boolean => {
+    bot.onImageToSession = (sessionId, imagePath, mimeType, caption): boolean => {
       const channelWs = this.channelSockets.get(sessionId);
       if (channelWs?.readyState !== WebSocket.OPEN) {
         logger.warn(`Telegram photo not delivered to ${sessionId}: the session is not connected`);
@@ -875,24 +978,24 @@ export class HubServer {
       }
       const msg: ChannelMessage = { type: 'image_to_session', sessionId, imagePath, mimeType, content: caption, source: 'telegram' };
       channelWs.send(JSON.stringify(msg));
+      this.closeQuestions(sessionId, 'closed');
       logger.info(`Telegram photo forwarded to session: ${sessionId}`);
       return true;
     };
-    this.telegramBot.onPermissionVerdict = (sessionId, requestId, behavior) => {
+    bot.onPermissionVerdict = (sessionId, requestId, behavior) => {
       if (this.forwardPermissionResponse({ sessionId, requestId, behavior })) {
         logger.info(`Telegram permission verdict [${requestId}]: ${behavior} -> session ${sessionId}`);
       }
       // Also notify dashboards so they can dismiss the permission bar
       this.broadcastToDashboards({ type: 'permission_response', sessionId, requestId, behavior });
     };
-    this.telegramBot.onChoiceVerdict = (sessionId, requestId, choiceId) => {
+    bot.onQuestionAnswer = (sessionId, requestId, answers) => this.answerQuestion(sessionId, requestId, answers, 'telegram');
+    bot.onChoiceVerdict = (sessionId, requestId, choiceId) => {
       if (this.forwardPermissionResponse({ sessionId, requestId, choiceId })) {
         logger.info(`Telegram choice [${requestId}]: ${choiceId} -> session ${sessionId}`);
       }
     };
-    this.notifier.configure({ telegramBot: this.telegramBot });
-    this.telegramBot.startPolling();
-    logger.info('Telegram bot initialized');
+    this.notifier.configure({ telegramBot: bot });
   }
 
   private async handleTelegramSave(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

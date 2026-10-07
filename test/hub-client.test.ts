@@ -81,3 +81,55 @@ test('reconnecting right after disconnect leaves no stale reconnect', async () =
     client.disconnect();
   }
 });
+
+test('the hub tells the client it supports questions, and the client forgets it on disconnect', async () => {
+  const client = new HubClient('x5', 'x5', '127.0.0.1', PORT, TOKEN);
+  assert.equal(client.supports('questions'), false);
+  client.connect();
+  try {
+    assert.equal(await client.waitForSupport('questions', 5000), true);
+    assert.equal(client.supports('questions'), true);
+    assert.equal(client.supports('time-travel'), false);
+    assert.equal(await client.waitForSupport('time-travel', 5000), false);
+  } finally {
+    client.disconnect();
+  }
+  assert.equal(client.supports('questions'), false);
+});
+
+test('a hub that never says what it supports leaves questions unsupported once the wait runs out', async () => {
+  (hub as any).sendHubInfo = () => {};
+  const client = new HubClient('x6', 'x6', '127.0.0.1', PORT, TOKEN);
+  client.connect();
+  try {
+    await until(async () => (await sessions()).find((s) => s.id === 'x6'));
+    const started = Date.now();
+    assert.equal(await client.waitForSupport('questions', 300), false);
+    assert.equal(Date.now() - started >= 250, true);
+    assert.equal(client.supports('questions'), false);
+  } finally {
+    client.disconnect();
+    delete (hub as any).sendHubInfo;
+  }
+});
+
+test('a hub that lists other features answers the wait at once with false', async () => {
+  (hub as any).sendHubInfo = (ws: any) => ws.send(JSON.stringify({ type: 'hub_info', features: ['something-else'] }));
+  const client = new HubClient('x7', 'x7', '127.0.0.1', PORT, TOKEN);
+  client.connect();
+  try {
+    const started = Date.now();
+    assert.equal(await client.waitForSupport('questions', 10000), false);
+    assert.equal(Date.now() - started < 5000, true);
+  } finally {
+    client.disconnect();
+    delete (hub as any).sendHubInfo;
+  }
+});
+
+test('send reports whether a message went out, was queued, or was dropped because the queue is full', () => {
+  const client = new HubClient('x9', 'x9', '127.0.0.1', PORT, TOKEN);
+  const msg = { type: 'status', sessionId: 'x9', status: 'idle' } as const;
+  for (let i = 0; i < 100; i++) assert.equal(client.send(msg), 'queued');
+  assert.equal(client.send(msg), 'dropped');
+});

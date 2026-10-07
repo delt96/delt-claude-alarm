@@ -1,4 +1,5 @@
-import type { MessageSource, SessionStatus } from '../shared/types.js';
+import type { MessageSource, Question, SessionStatus } from '../shared/types.js';
+import { QUESTION_LIMITS, parseQuestions } from '../shared/questions.js';
 
 export type CodexThreadStatus =
   | { type: 'notLoaded' | 'idle' | 'systemError' }
@@ -14,9 +15,17 @@ export interface CodexThread {
   ephemeral?: boolean;
 }
 
+export interface AsyncQuestion {
+  title: string;
+  options: string[] | null;
+}
+
 export interface AgentMessage {
+  id?: string;
   text: string;
   phase?: string | null;
+  delivery?: string | null;
+  questions?: AsyncQuestion[] | null;
 }
 
 const TITLE_MAX = 30;
@@ -59,4 +68,46 @@ export function finalAnswer(messages: AgentMessage[]): string | null {
 export function cleanFolder(input: string): string {
   const s = input.trim();
   return s.length >= 2 && s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1).trim() : s;
+}
+
+const LIST_LINE = /^\s*(?:[-*]|\d+[.)])\s+(.*)$/;
+
+// Codex 0.160 asks with an agentMessage whose `questions` repeat what its text already lists; the card shows only the rest.
+export function asyncQuestions(item: AgentMessage): { questions: Question[]; context?: string } | null {
+  if (!Array.isArray(item.questions) || item.questions.length === 0) return null;
+  const parsed = parseQuestions(item.questions.map((q, i) => ({
+    id: `q${i + 1}`,
+    question: q?.title,
+    options: Array.isArray(q?.options) ? q.options.map((label) => ({ label })) : null,
+    allowOther: true,
+  })));
+  if (!parsed.ok) return null;
+  const titles = new Set(parsed.questions.map((q) => q.question));
+  const labels = new Set(parsed.questions.flatMap((q) => (q.options ?? []).map((o) => o.label)));
+  const rest = (item.text ?? '').split('\n').filter((line) => {
+    if (titles.has(line.trim())) return false;
+    const listed = LIST_LINE.exec(line);
+    return !(listed && labels.has(listed[1].trim()));
+  });
+  const context = rest.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!context) return { questions: parsed.questions };
+  const clipped = context.length > QUESTION_LIMITS.context ? `${context.slice(0, QUESTION_LIMITS.context - 1)}…` : context;
+  return { questions: parsed.questions, context: clipped };
+}
+
+// Logs what a request_user_input asked without the full prompt text, so the format can be relayed once it is seen.
+export function userInputShape(params: any): string {
+  const questions = Array.isArray(params?.questions) ? params.questions : [];
+  const shape = {
+    isBlocking: params?.isBlocking,
+    questions: questions.map((q: any) => ({
+      id: q?.id,
+      header: q?.header,
+      question: typeof q?.question === 'string' ? q.question.slice(0, 200) : q?.question,
+      options: Array.isArray(q?.options) ? q.options.map((o: any) => o?.label) : q?.options,
+      isOther: q?.isOther,
+      isSecret: q?.isSecret,
+    })),
+  };
+  return JSON.stringify(shape).slice(0, 2000);
 }

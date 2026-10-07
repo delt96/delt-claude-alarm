@@ -3,9 +3,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../shared/logger.js';
 import { UPLOADS_DIR } from '../shared/constants.js';
-import type { TelegramConfig, SessionInfo, PermissionChoice } from '../shared/types.js';
+import type { TelegramConfig, SessionInfo, PermissionChoice, MessageSource, Question, QuestionAnswers, QuestionRequest, QuestionState } from '../shared/types.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { permissionKey } from '../shared/permission-key.js';
+import { readAnswers } from '../shared/questions.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_CHOICE_MESSAGES = 200;
@@ -14,6 +15,11 @@ const MAX_VISIBLE_CHARS = 4000;
 const TRUNCATED = '…(truncated)';
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const NO_LONGER_CONNECTED = 'the session is no longer connected';
+const MAX_QUESTION_REQUESTS = 100;
+const SHOWN_ANSWER = 300;
+// Room kept free in a question message for the "Selected" or result line added when it is edited.
+const QUESTION_EDIT_ROOM = 400;
+const SOURCE_NAMES: Record<MessageSource, string> = { dashboard: 'Dashboard', telegram: 'Telegram', api: 'API' };
 
 // Telegram's 4096 limit counts the text left after parsing entities: tags are free and each escape is one character.
 export function visibleLength(html: string): number {
@@ -24,6 +30,25 @@ interface ChoiceMessage {
   html: string;
   messageId?: number;
   outcome?: string;
+}
+
+type InlineKeyboard = Array<Array<{ text: string; callback_data: string }>>;
+
+interface QuestionMessage {
+  html: string;
+  keyboard: InlineKeyboard | null;
+  id?: number;
+}
+
+interface TelegramQuestion {
+  key: string;
+  sessionId: string;
+  requestId: string;
+  questions: Question[];
+  answers: Map<string, string>;
+  messages: Map<string, QuestionMessage>;
+  state: 'open' | 'sending' | 'done';
+  final?: { state: QuestionState; answers?: QuestionAnswers; source?: MessageSource };
 }
 
 interface PendingSelection {
@@ -83,6 +108,11 @@ export class TelegramBot {
   // Telegram caps callback_data at 64 bytes, so buttons carry a short token instead of the ids.
   private choiceTokens = new Map<string, { sessionId: string; requestId: string; choiceId: string; label: string }>();
   private choiceMessages = new Map<string, ChoiceMessage>();
+  // Callback: all questions of a request are answered here; returns 'ok' or why the hub refused
+  public onQuestionAnswer?: (sessionId: string, requestId: string, answers: QuestionAnswers) => string;
+  private questionRequests = new Map<string, TelegramQuestion>();
+  private questionTokens = new Map<string, { key: string; qid: string; label: string }>();
+  private questionReplies = new Map<number, { key: string; qid: string }>();
   // Callback: get current sessions list
   public getSessions?: () => SessionInfo[];
   private latestSelection: string | undefined;
@@ -101,32 +131,37 @@ export class TelegramBot {
   async sendNotification(sessionId: string, _sessionLabel: string, title: string, message: string): Promise<void> {
     const text = this.fitNotification(title, message);
     const result = await this.sendMessage(text);
-    if (result?.message_id) {
-      this.messageSessionMap.set(result.message_id, sessionId);
-      // Cleanup old mappings (keep last 200)
-      if (this.messageSessionMap.size > 200) {
-        const keys = [...this.messageSessionMap.keys()];
-        for (let i = 0; i < keys.length - 200; i++) {
-          this.messageSessionMap.delete(keys[i]);
-        }
+    if (result?.message_id) this.rememberSession(result.message_id, sessionId);
+  }
+
+  private rememberSession(messageId: number, sessionId: string): void {
+    this.messageSessionMap.set(messageId, sessionId);
+    // Cleanup old mappings (keep last 200)
+    if (this.messageSessionMap.size > 200) {
+      const keys = [...this.messageSessionMap.keys()];
+      for (let i = 0; i < keys.length - 200; i++) {
+        this.messageSessionMap.delete(keys[i]);
       }
     }
   }
 
   private fitNotification(title: string, message: string): string {
-    const render = (body: string) => `<b>${this.escHtml(title)}</b>\n${this.mdToHtml(body)}`;
-    const full = render(message);
-    if (visibleLength(full) <= MAX_VISIBLE_CHARS) return full;
+    return this.fit((body) => `<b>${this.escHtml(title)}</b>\n${this.mdToHtml(body)}`, message);
+  }
+
+  private fit(render: (body: string) => string, body: string, max = MAX_VISIBLE_CHARS): string {
+    const full = render(body);
+    if (visibleLength(full) <= max) return full;
     const cut = (n: number) => {
       // Cutting between the halves of a surrogate pair would send invalid UTF-16.
-      const end = n > 0 && /[\uD800-\uDBFF]/.test(message[n - 1]) ? n - 1 : n;
-      return render(`${message.slice(0, end)}\n${TRUNCATED}`);
+      const end = n > 0 && /[\uD800-\uDBFF]/.test(body[n - 1]) ? n - 1 : n;
+      return render(`${body.slice(0, end)}\n${TRUNCATED}`);
     };
     let lo = 0;
-    let hi = message.length;
+    let hi = body.length;
     while (lo < hi) {
       const mid = Math.ceil((lo + hi) / 2);
-      if (visibleLength(cut(mid)) <= MAX_VISIBLE_CHARS) lo = mid;
+      if (visibleLength(cut(mid)) <= max) lo = mid;
       else hi = mid - 1;
     }
     return cut(lo);
@@ -235,6 +270,9 @@ export class TelegramBot {
         return;
       }
     }
+
+    // A reply to an open question is its typed answer, not a message to the session.
+    if (msg.reply_to_message && text && !hasPhoto && (await this.answerByReply(msg.reply_to_message.message_id, text))) return;
 
     // Check if it's a reply to a known message
     if (msg.reply_to_message) {
@@ -535,6 +573,144 @@ export class TelegramBot {
     }
   }
 
+  async sendQuestion(sessionId: string, sessionLabel: string, request: QuestionRequest): Promise<void> {
+    const key = permissionKey(sessionId, request.requestId);
+    const entry: TelegramQuestion = { key, sessionId, requestId: request.requestId, questions: request.questions, answers: new Map(), messages: new Map(), state: 'open' };
+    this.questionRequests.set(key, entry);
+    this.trimQuestions();
+    const count = request.questions.length;
+    const head = `❓ <b>${count === 1 ? 'Question' : `Questions (${count})`}</b> — ${this.escHtml(sessionLabel)}`;
+    const context = request.context ?? '';
+    if (count > 1) {
+      const heading = await this.sendMessage(this.fit((body) => (body ? `${head}\n\n${this.mdToHtml(body)}` : head), context));
+      if (heading) this.rememberSession(heading.message_id, sessionId);
+    }
+    const budget = MAX_VISIBLE_CHARS - QUESTION_EDIT_ROOM;
+    for (const [i, q] of request.questions.entries()) {
+      const hint = q.options ? (q.allowOther ? 'Or reply to this message with your own answer.' : '') : 'Reply to this message with your answer.';
+      const bodyWith = (lines: string) => `${q.header ? `<b>[${this.escHtml(q.header)}]</b> ` : ''}${this.mdToHtml(q.question)}${lines}${hint ? `\n\n<i>${hint}</i>` : ''}`;
+      const render = (body: string) => count === 1
+        ? this.fit((ctx) => `${head}${ctx ? `\n\n${this.mdToHtml(ctx)}` : ''}\n\n${body}`, context, budget)
+        : this.fit((text) => `<b>${i + 1}/${count}</b> ${text}`, body, budget);
+      const lines = this.optionLines(q);
+      const described = lines ? render(bodyWith(lines)) : '';
+      // Option lines are kept whole or left out; fit would otherwise cut them mid-list.
+      const html = described && visibleLength(described) <= budget && described.includes(bodyWith(lines)) ? described : render(bodyWith(''));
+      const keyboard = q.options && entry.state !== 'done' ? q.options.map((o) => {
+        const token = randomUUID().replace(/-/g, '').slice(0, 16);
+        this.questionTokens.set(token, { key, qid: q.id, label: o.label });
+        return [{ text: o.label, callback_data: `qa:${token}` }];
+      }) : null;
+      const message: QuestionMessage = { html, keyboard };
+      entry.messages.set(q.id, message);
+      const sent = await this.sendMessage(html, undefined, keyboard ? { inline_keyboard: keyboard } : undefined);
+      if (!sent) continue;
+      message.id = sent.message_id;
+      this.rememberSession(sent.message_id, sessionId);
+      if (entry.state === 'done') {
+        await this.editMessageText(this.config.chatId, sent.message_id, this.finalHtml(entry, q.id, message));
+      } else {
+        this.questionReplies.set(sent.message_id, { key, qid: q.id });
+      }
+    }
+  }
+
+  private optionLines(q: Question): string {
+    if (!q.options?.some((o) => o.description)) return '';
+    const lines = q.options.map((o) => `• <b>${this.escHtml(o.label)}</b>${o.description ? ` — ${this.escHtml(o.description)}` : ''}`);
+    return `\n\n${lines.join('\n')}`;
+  }
+
+  async resolveQuestion(sessionId: string, requestId: string, state: QuestionState, answers?: QuestionAnswers, source?: MessageSource): Promise<void> {
+    const key = permissionKey(sessionId, requestId);
+    const entry = this.questionRequests.get(key);
+    if (!entry) return;
+    this.questionRequests.delete(key);
+    this.dropQuestionRefs(key);
+    entry.state = 'done';
+    entry.final = { state, answers, source };
+    for (const [qid, message] of entry.messages) {
+      if (message.id !== undefined) await this.editMessageText(this.config.chatId, message.id, this.finalHtml(entry, qid, message));
+    }
+  }
+
+  async reopenQuestion(sessionId: string, requestId: string, reason: string): Promise<void> {
+    const entry = this.questionRequests.get(permissionKey(sessionId, requestId));
+    if (!entry || entry.state !== 'sending') return;
+    entry.state = 'open';
+    entry.answers.clear();
+    for (const message of entry.messages.values()) {
+      if (message.id !== undefined) await this.editMessageText(this.config.chatId, message.id, message.html, message.keyboard ? { inline_keyboard: message.keyboard } : undefined);
+    }
+    await this.sendMessage(`Not delivered: ${this.escHtml(reason)}`);
+  }
+
+  private finalHtml(entry: TelegramQuestion, qid: string, message: QuestionMessage): string {
+    const final = entry.final!;
+    if (final.state === 'answered') {
+      const from = final.source && final.source !== 'telegram' ? ` (${SOURCE_NAMES[final.source]})` : '';
+      return `${message.html}\n\n✅ <b>${this.shown(final.answers?.[qid] ?? '')}</b>${from}`;
+    }
+    return `${message.html}\n\n${final.state === 'closed' ? '<i>Closed — a message was sent instead</i>' : '⌛ <b>Expired</b>'}`;
+  }
+
+  private shown(answer: string): string {
+    return this.escHtml(answer.length > SHOWN_ANSWER ? `${answer.slice(0, SHOWN_ANSWER)}…` : answer);
+  }
+
+  private async handleQuestionCallback(query: TelegramCallbackQuery): Promise<void> {
+    const token = this.questionTokens.get(query.data!.slice('qa:'.length));
+    const entry = token && this.questionRequests.get(token.key);
+    if (!token || !entry) {
+      await this.expire(query);
+      return;
+    }
+    if (entry.state !== 'open') {
+      await this.answerCallbackQuery(query.id, 'Sending…');
+      return;
+    }
+    const result = await this.recordAnswer(entry, token.qid, token.label);
+    await this.answerCallbackQuery(query.id, result === 'sending' ? 'Sending…' : result === 'failed' ? 'Not delivered' : 'Selected');
+  }
+
+  private async answerByReply(messageId: number, text: string): Promise<boolean> {
+    const ref = this.questionReplies.get(messageId);
+    const entry = ref && this.questionRequests.get(ref.key);
+    if (!ref || !entry || entry.state !== 'open') return false;
+    if (!entry.questions.find((q) => q.id === ref.qid)?.allowOther) return false;
+    await this.recordAnswer(entry, ref.qid, text);
+    return true;
+  }
+
+  private async recordAnswer(entry: TelegramQuestion, qid: string, answer: string): Promise<'selected' | 'sending' | 'failed'> {
+    entry.answers.set(qid, answer);
+    const message = entry.messages.get(qid);
+    if (message?.id !== undefined) {
+      await this.editMessageText(this.config.chatId, message.id, `${message.html}\n\n☑️ <b>Selected:</b> ${this.shown(answer)}`, message.keyboard ? { inline_keyboard: message.keyboard } : undefined);
+    }
+    if (entry.answers.size < entry.questions.length || entry.state !== 'open') return 'selected';
+    entry.state = 'sending';
+    const read = readAnswers(entry.questions, Object.fromEntries(entry.answers));
+    const outcome = read.ok ? (this.onQuestionAnswer?.(entry.sessionId, entry.requestId, read.answers) ?? 'the hub is not listening') : read.error;
+    if (outcome === 'ok') return 'sending';
+    if (entry.state === 'sending') entry.state = 'open';
+    await this.sendMessage(`Not delivered: ${this.escHtml(outcome)}`);
+    return 'failed';
+  }
+
+  private dropQuestionRefs(key: string): void {
+    for (const [token, ref] of this.questionTokens) if (ref.key === key) this.questionTokens.delete(token);
+    for (const [messageId, ref] of this.questionReplies) if (ref.key === key) this.questionReplies.delete(messageId);
+  }
+
+  private trimQuestions(): void {
+    while (this.questionRequests.size > MAX_QUESTION_REQUESTS) {
+      const oldest = this.questionRequests.keys().next().value as string;
+      this.questionRequests.delete(oldest);
+      this.dropQuestionRefs(oldest);
+    }
+  }
+
   private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
     if (!query.data) return;
     if (String(query.message?.chat.id) !== String(this.config.chatId)) return;
@@ -551,6 +727,11 @@ export class TelegramBot {
 
     if (query.data.startsWith('pc:')) {
       await this.handleChoiceCallback(query);
+      return;
+    }
+
+    if (query.data.startsWith('qa:')) {
+      await this.handleQuestionCallback(query);
       return;
     }
 
@@ -633,12 +814,13 @@ export class TelegramBot {
     }
   }
 
-  private async editMessageText(chatId: number | string, messageId: number, text: string): Promise<void> {
+  // Telegram drops the buttons of an edited message unless reply_markup is sent again.
+  private async editMessageText(chatId: number | string, messageId: number, text: string, replyMarkup?: { inline_keyboard: InlineKeyboard }): Promise<void> {
     try {
       await fetch(`${this.apiUrl}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' }),
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
       });
     } catch (err) {
       logger.warn(`Telegram editMessageText error: ${(err as Error).message}`);

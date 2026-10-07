@@ -12,16 +12,19 @@ import { imageInput, textInput, type UserInput } from './inputs.js';
 import { RpcClient, type RpcId } from './rpc.js';
 import { approvalView, fileChanges, type ApprovalChoice, type ApprovalView, type FileChange } from './approvals.js';
 import {
+  asyncQuestions,
   cleanFolder,
   codexSessionId,
   finalAnswer,
   hubStatus,
   isTrackable,
   threadTitle,
+  userInputShape,
   type AgentMessage,
   type CodexThread,
   type CodexThreadStatus,
 } from './mapping.js';
+import { answerText, isRequestId } from '../shared/questions.js';
 
 export type FirstConnect =
   | { connected: true; userAgent?: string }
@@ -53,7 +56,11 @@ interface Tracked {
   releaseTimer?: ReturnType<typeof setTimeout>;
   unrelayed: boolean;
   files: Map<string, FileChange[]>;
+  // Items relayed as questions, by item id, with the turn they belong to.
+  asked: Map<string, string>;
 }
+
+type Report = (ok: boolean, reason?: string) => void;
 
 // Requests a person must answer that claude-alarm cannot relay; the user is pointed back to Codex.
 const USER_REQUESTS = new Set(['item/tool/requestUserInput', 'item/permissions/requestApproval', 'mcpServer/elicitation/request']);
@@ -307,6 +314,7 @@ export class CodexAdapter {
         turns: new Map(),
         unrelayed: false,
         files: new Map(),
+        asked: new Map(),
       });
       hub.onMessage((msg) => this.onHubMessage(thread.id, msg));
       hub.connect();
@@ -464,9 +472,27 @@ export class CodexAdapter {
   private collect(threadId: string, turnId: string, item: AgentMessage): void {
     const t = this.threads.get(threadId);
     if (!t) return;
+    this.askIfQuestion(t, turnId, item);
     const list = t.turns.get(turnId) ?? [];
-    list.push({ text: item.text, phase: item.phase });
+    list.push({ id: item.id, text: item.text, phase: item.phase });
     t.turns.set(turnId, list);
+  }
+
+  // Codex waits (sleep) for the answer inside its turn, so the question goes out now rather than with the turn's reply.
+  private askIfQuestion(t: Tracked, turnId: string, item: AgentMessage): void {
+    if (typeof item.id !== 'string' || t.asked.has(item.id) || !t.hub.supports('questions')) return;
+    const requestId = `codex-q:${item.id}`;
+    const asked = isRequestId(requestId) ? asyncQuestions(item) : null;
+    if (!asked) return;
+    t.asked.set(item.id, turnId);
+    t.hub.send({
+      type: 'question',
+      sessionId: codexSessionId(t.thread.id),
+      requestId,
+      ...(asked.context ? { context: asked.context } : {}),
+      questions: asked.questions,
+      timestamp: Date.now(),
+    });
   }
 
   private onTurnCompleted(
@@ -481,6 +507,11 @@ export class CodexAdapter {
     const collected = t.turns.get(turn.id) ?? [];
     t.turns.delete(turn.id);
     t.files.clear();
+    // turn/completed may carry only a summary of the items, so prefer what was collected live.
+    const fromTurn = (turn.items ?? []).filter((i) => i.type === 'agentMessage');
+    for (const item of fromTurn) this.askIfQuestion(t, turn.id, item);
+    const unasked = (collected.length ? collected : fromTurn).filter((m) => !(m.id && t.asked.has(m.id)));
+    for (const [itemId, turnId] of t.asked) if (turnId === turn.id) t.asked.delete(itemId);
     // The daemon announces name changes but not preview changes, so a title taken from the folder is re-read once text exists.
     if (!t.thread.name?.trim() && !t.thread.preview?.trim()) void this.refresh(threadId);
     if (t.thread.status.type !== 'active') void this.want(threadId, false);
@@ -492,9 +523,7 @@ export class CodexAdapter {
       this.notify(threadId, 'Codex task stopped', 'The task was interrupted.', 'info');
       return;
     }
-    // turn/completed may carry only a summary of the items, so prefer what was collected live.
-    const fromTurn = (turn.items ?? []).filter((i) => i.type === 'agentMessage');
-    const text = finalAnswer(collected.length ? collected : fromTurn);
+    const text = finalAnswer(unasked);
     if (text) t.hub.send({ type: 'reply', sessionId: codexSessionId(threadId), content: text });
   }
 
@@ -507,24 +536,30 @@ export class CodexAdapter {
       this.answer(threadId, msg.requestId, msg.choiceId);
     } else if (msg.type === 'codex_close') {
       void this.close(threadId);
+    } else if (msg.type === 'question_answer') {
+      const text = answerText(msg.questions ?? [], msg.answers);
+      this.enqueue(threadId, async () => textInput(text, msg.source), msg.source, (ok, reason) => {
+        this.threads.get(threadId)?.hub.send({ type: 'question_delivery', sessionId: codexSessionId(threadId), requestId: msg.requestId, ok, ...(reason ? { reason } : {}) });
+      });
     }
   }
 
   // One message at a time per conversation, so a message right behind another sees the turn the first one started.
-  private enqueue(threadId: string, build: () => Promise<UserInput[]>, source?: MessageSource): void {
+  // With report, the outcome goes back to whoever is waiting for it (an answer card) instead of a notice.
+  private enqueue(threadId: string, build: () => Promise<UserInput[]>, source?: MessageSource, report?: Report): void {
     const t = this.threads.get(threadId);
     if (!t) return;
     t.sending = t.sending
-      .then(() => this.deliver(t, build, source))
+      .then(() => this.deliver(t, build, source, report))
       .catch((err) => logger.warn(`Codex delivery for ${threadId} failed: ${(err as Error).message}`));
   }
 
-  private async deliver(t: Tracked, build: () => Promise<UserInput[]>, source?: MessageSource): Promise<void> {
+  private async deliver(t: Tracked, build: () => Promise<UserInput[]>, source?: MessageSource, report?: Report): Promise<void> {
     const threadId = t.thread.id;
     if (this.threads.get(threadId) !== t) return;
     // A steer is accepted while an approval is pending but read only after it is answered, which reads like an answer.
     if (this.waitingForAnswer(t)) {
-      this.refuseWhileWaiting(threadId);
+      this.refuseWhileWaiting(threadId, report);
       return;
     }
     let input: UserInput[];
@@ -532,7 +567,8 @@ export class CodexAdapter {
       input = await build();
     } catch (err) {
       logger.debug(`Codex input for ${threadId} could not be built: ${(err as Error).message}`);
-      this.notify(threadId, 'Not delivered', 'The image could not be read here, so it was not delivered. Codex may be running on another PC.', 'warning');
+      if (report) report(false, 'the message could not be built');
+      else this.notify(threadId, 'Not delivered', 'The image could not be read here, so it was not delivered. Codex may be running on another PC.', 'warning');
       return;
     }
     if (this.threads.get(threadId) !== t) return;
@@ -549,19 +585,22 @@ export class CodexAdapter {
       // An approval can start while the input is built and the turn looked up; the check at the top cannot see it.
       if (this.waitingForAnswer(t)) {
         this.abandonDelivery(t, wasUnrelayed);
-        this.refuseWhileWaiting(threadId);
+        this.refuseWhileWaiting(threadId, report);
         return;
       }
       if (unsubscribed) t.unrelayed = true;
       if (running) {
         await rpc.request('turn/steer', { threadId, expectedTurnId: running, input });
-        this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info', source);
+        if (report) report(true);
+        else this.notify(threadId, 'Queued', 'Queued: Codex will read it after its current step.', 'info', source);
         return;
       }
       await rpc.request('turn/start', { threadId, input });
+      report?.(true);
     } catch (err) {
       this.abandonDelivery(t, wasUnrelayed);
-      this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
+      if (report) report(false, `Codex rejected the message: ${(err as Error).message}`);
+      else this.notify(threadId, 'Not delivered', `Codex rejected the message: ${(err as Error).message}`, 'warning');
     }
   }
 
@@ -578,8 +617,9 @@ export class CodexAdapter {
     return false;
   }
 
-  private refuseWhileWaiting(threadId: string): void {
-    this.notify(threadId, 'Not delivered', 'Codex is waiting for an approval or input. Answer it first, then send the message again.', 'warning');
+  private refuseWhileWaiting(threadId: string, report?: Report): void {
+    if (report) report(false, 'Codex is waiting for an approval or input');
+    else this.notify(threadId, 'Not delivered', 'Codex is waiting for an approval or input. Answer it first, then send the message again.', 'warning');
   }
 
   // The list is unavailable before a new conversation's first turn; starting a turn is safe then, since turn/start steers a running turn.
@@ -612,6 +652,7 @@ export class CodexAdapter {
     }
     if (!t || !view) {
       if (t && (broken || USER_REQUESTS.has(method))) {
+        if (method === 'item/tool/requestUserInput') logger.warn(`Codex requestUserInput not relayed: ${userInputShape(params)}`);
         this.waitingInCodex(t.thread.id);
       } else {
         logger.debug(`Ignoring Codex server request ${method}`);
