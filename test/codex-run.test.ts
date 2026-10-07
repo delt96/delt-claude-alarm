@@ -77,6 +77,25 @@ test('an output schema is passed to the turn and the final answer is parsed', as
   assert.deepEqual(r.result, { status: 'DONE' });
 });
 
+test('an effort is passed to the turn as given', async () => {
+  const d = await startDaemon((dd) => finishTurn(dd, 'turn-1', 'ok'));
+  await run(d, { effort: 'xhigh' });
+  assert.equal(d.calls('turn/start')[0].params.effort, 'xhigh');
+});
+
+test('without an effort the turn carries none, so the thread keeps its own', async () => {
+  const d = await startDaemon((dd) => finishTurn(dd, 'turn-1', 'ok'));
+  await run(d);
+  assert.equal('effort' in d.calls('turn/start')[0].params, false);
+});
+
+test('an effort on a follow-up goes to the new turn, not to the resume', async () => {
+  const d = await startDaemon((dd) => finishTurn(dd, 'turn-1', 'ok'));
+  await run(d, { threadId: THREAD, effort: 'low' });
+  assert.deepEqual(d.calls('thread/resume')[0].params, { threadId: THREAD });
+  assert.equal(d.calls('turn/start')[0].params.effort, 'low');
+});
+
 test('a final answer that is not JSON leaves result empty but keeps the text', async () => {
   const d = await startDaemon((dd) => finishTurn(dd, 'turn-1', 'not json'));
   const r = await run(d, { outputSchema: { type: 'object' } });
@@ -268,6 +287,7 @@ test('run arguments are parsed with minutes turned into milliseconds', () => {
   });
   assert.deepEqual(parseRunArgs(['--brief', '-']), { brief: '-' });
   assert.deepEqual(parseRunArgs(['--yolo', '--brief', 'b.md']), { brief: 'b.md', yolo: true });
+  assert.deepEqual(parseRunArgs(['--brief', 'b.md', '--effort', 'high']), { brief: 'b.md', effort: 'high' });
 });
 
 function cliIo(d: FakeDaemon | undefined, files: Record<string, string>, stdin = '') {
@@ -293,8 +313,9 @@ function cliIo(d: FakeDaemon | undefined, files: Record<string, string>, stdin =
 test('the CLI reads the brief and schema files, prints the result as JSON and exits 0 on completion', async () => {
   const d = await startDaemon((dd) => finishTurn(dd, 'turn-1', '{"status":"DONE"}'));
   const c = cliIo(d, { 'brief.md': 'Implement it', 'schema.json': '{"type":"object"}' });
-  const code = await runFromCli(['--brief', 'brief.md', '--output-schema', 'schema.json', '--cwd', 'sub', '--yolo'], c.io);
+  const code = await runFromCli(['--brief', 'brief.md', '--output-schema', 'schema.json', '--cwd', 'sub', '--yolo', '--effort', 'medium'], c.io);
   assert.equal(code, 0);
+  assert.equal(d.calls('turn/start')[0].params.effort, 'medium');
   assert.equal(d.calls('thread/start')[0].params.cwd, 'C:\\w\\proj\\sub');
   assert.equal(d.calls('thread/start')[0].params.sandbox, 'danger-full-access');
   assert.equal(d.calls('turn/start')[0].params.input[0].text, 'Implement it');

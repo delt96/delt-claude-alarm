@@ -45,8 +45,10 @@ Usage:
   claude-alarm codex stop       Stop a running Codex adapter
   claude-alarm codex status     Show Codex adapter status
   claude-alarm codex run --brief <file|-> [--cwd <dir>] [--thread <id>] [--name <title>]
-                         [--output-schema <file>] [--approval-timeout <min>] [--timeout <min>] [--yolo]
+                         [--output-schema <file>] [--effort <level>] [--approval-timeout <min>] [--timeout <min>] [--yolo]
                                 Hand a task to Codex through the shared daemon and print the result as JSON
+                                (--effort: the turn's reasoning effort, one the model offers, e.g. low, medium, high, xhigh;
+                                 it carries over to later turns on the thread)
                                 (--yolo: no sandbox and no approvals, like codex --yolo)
   claude-alarm help             Show this help
 

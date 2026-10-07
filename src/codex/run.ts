@@ -12,6 +12,7 @@ export interface CodexRunOptions {
   name?: string;
   outputSchema?: unknown;
   yolo?: boolean;
+  effort?: string;
   approvalTimeoutMs?: number;
   timeoutMs?: number;
   interruptGraceMs?: number;
@@ -181,6 +182,8 @@ export async function runCodexTask(opts: CodexRunOptions): Promise<CodexRunResul
 
     const turnStart: Record<string, unknown> = { threadId, input: [{ type: 'text', text: opts.brief }] };
     if (opts.outputSchema !== undefined) turnStart.outputSchema = opts.outputSchema;
+    // Codex validates the value against the efforts the model advertises, so it is not checked here.
+    if (opts.effort !== undefined) turnStart.effort = opts.effort;
     const { turn } = await rpc.request<{ turn: { id: string } }>('turn/start', turnStart);
     const turnId = turn.id;
     progress(`turn ${turnId} started`);
@@ -271,6 +274,7 @@ const VALUE_FLAGS: Record<string, keyof RunArgs> = {
   '--thread': 'threadId',
   '--name': 'name',
   '--output-schema': 'outputSchema',
+  '--effort': 'effort',
   '--approval-timeout': 'approvalTimeoutMs',
   '--timeout': 'timeoutMs',
 };
@@ -282,6 +286,7 @@ export interface RunArgs {
   threadId?: string;
   name?: string;
   outputSchema?: string;
+  effort?: string;
   approvalTimeoutMs?: number;
   timeoutMs?: number;
 }
@@ -332,6 +337,7 @@ export async function runFromCli(argv: string[], io: RunIo): Promise<number> {
       threadId: args.threadId,
       name: args.name,
       yolo: args.yolo,
+      effort: args.effort,
       outputSchema: args.outputSchema === undefined ? undefined : JSON.parse(await io.readFile(args.outputSchema)),
       approvalTimeoutMs: args.approvalTimeoutMs,
       timeoutMs: args.timeoutMs,
