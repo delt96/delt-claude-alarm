@@ -78,7 +78,7 @@ Open `http://127.0.0.1:7900` in your browser.
 | `claude-alarm test` | Send test notification |
 | `claude-alarm codex enable` / `disable` | Start (or stop starting) the Codex adapter with the hub |
 | `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC. `start` tells you whether the adapter reached Codex and whether the hub answers at the configured address; `stop` and `status` ask the running adapter itself |
-| `claude-alarm codex run --brief <file\|->` | Hand a task to Codex through the shared daemon and print the result as JSON (`--cwd`, `--thread`, `--name`, `--output-schema`, `--approval-timeout`, `--timeout`, `--yolo`; see `claude-alarm help`) |
+| `claude-alarm codex run --brief <file\|->` | Hand a task to Codex through the shared daemon and print the result as JSON (`--cwd`, `--thread`, `--name`, `--output-schema`, `--effort`, `--approval-timeout`, `--timeout`, `--yolo`; see `claude-alarm help`) |
 
 ## Tools Available to Claude
 
