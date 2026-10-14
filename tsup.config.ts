@@ -48,4 +48,15 @@ export default defineConfig([
       js: '#!/usr/bin/env node',
     },
   },
+  // Claude Code mod: runs inside Claude Code without Node, built next to its manifest
+  {
+    entry: { register: 'src/mod/register.ts' },
+    outDir: 'mod/hooks',
+    format: ['esm'],
+    target: 'es2022',
+    platform: 'neutral',
+    clean: false,
+    splitting: false,
+    sourcemap: false,
+  },
 ]);

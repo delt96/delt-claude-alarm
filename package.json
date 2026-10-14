@@ -21,6 +21,8 @@
   "files": [
     "dist",
     "src/dashboard/index.html",
+    "mod/.claude-plugin/plugin.json",
+    "mod/hooks",
     "README.md"
   ],
   "scripts": {

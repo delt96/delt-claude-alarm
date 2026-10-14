@@ -29,6 +29,7 @@ import { normalizeQuestionRequest, questionSummary, readAnswers } from '../share
 import { QuestionBook } from './questions.js';
 import { isEntryScript } from '../shared/entry.js';
 import { hubUrlHost } from '../shared/hub-url.js';
+import { isControlKind, isSafeId } from '../shared/control-protocol.js';
 import {
   isAuthorized,
   isCrossOrigin,
@@ -516,6 +517,19 @@ export class HubServer {
         break;
       }
 
+      case 'session_control': {
+        const updated = this.sessions.setControl(msg.sessionId, msg.control);
+        if (updated) this.broadcastToDashboards({ type: 'session_updated', session: updated });
+        break;
+      }
+
+      case 'session_command_result': {
+        if (!isSafeId(msg.requestId) || typeof msg.ok !== 'boolean') break;
+        const reason = typeof msg.reason === 'string' ? { reason: msg.reason.slice(0, 500) } : {};
+        this.broadcastToDashboards({ type: 'session_command_result', sessionId: msg.sessionId, requestId: msg.requestId, ok: msg.ok, ...reason });
+        break;
+      }
+
       case 'notify': {
         this.sessions.updateActivity(msg.sessionId);
         const notifySession = this.sessions.get(msg.sessionId);
@@ -803,6 +817,8 @@ export class HubServer {
             const verdict = msg.choiceId !== undefined ? `choice ${msg.choiceId}` : msg.behavior;
             logger.info(`Permission verdict [${msg.requestId}]: ${verdict} -> session ${msg.sessionId}`);
           }
+        } else if (msg.type === 'session_command') {
+          this.forwardSessionCommand(ws, msg);
         }
       } catch {
         logger.warn('Invalid message from dashboard');
@@ -816,6 +832,21 @@ export class HubServer {
   }
 
   // --- Helpers ---
+
+  private forwardSessionCommand(ws: WebSocket, msg: { sessionId: string; requestId: unknown; kind: unknown }): void {
+    const { sessionId, requestId, kind } = msg;
+    if (!isSafeId(requestId) || !isControlKind(kind)) return;
+    const reject = (reason: string) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'session_command_result', sessionId, requestId, ok: false, reason } satisfies ChannelMessage));
+    };
+    const control = this.sessions.get(sessionId)?.control;
+    if (!control) return reject('the session cannot run commands from the dashboard');
+    if (control.busy) return reject('the session is busy');
+    const channelWs = this.channelSockets.get(sessionId);
+    if (channelWs?.readyState !== WebSocket.OPEN) return reject('the session is not connected');
+    channelWs.send(JSON.stringify({ type: 'session_command', sessionId, requestId, kind } satisfies ChannelMessage));
+    logger.info(`Session command ${kind} [${requestId}] -> ${sessionId}`);
+  }
 
   private forwardPermissionResponse(msg: { sessionId: string; requestId: string; behavior?: unknown; choiceId?: unknown }): boolean {
     const pending = this.choiceRequests.get(permissionKey(msg.sessionId, msg.requestId));

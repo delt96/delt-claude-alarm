@@ -76,14 +76,19 @@ function readTail(file: string): Entry[] {
   }
 }
 
+export function resolveClaudeSession(env: NodeJS.ProcessEnv = process.env): { sessionId: string; cwd?: string } | undefined {
+  const lookup = { messagingSocket: env.CLAUDE_CODE_MESSAGING_SOCKET, sessionId: env.CLAUDE_CODE_SESSION_ID };
+  const found = findSession(readSessionRecords(claudeConfigDir(env)), lookup);
+  const sessionId = found?.sessionId ?? lookup.sessionId;
+  if (!sessionId || !SAFE_ID.test(sessionId)) return undefined;
+  return { sessionId, cwd: found?.cwd };
+}
+
 export function readContextTokens(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): number | null {
   try {
-    const configDir = claudeConfigDir(env);
-    const lookup = { messagingSocket: env.CLAUDE_CODE_MESSAGING_SOCKET, sessionId: env.CLAUDE_CODE_SESSION_ID };
-    const found = findSession(readSessionRecords(configDir), lookup);
-    const sessionId = found?.sessionId ?? lookup.sessionId;
-    if (!sessionId || !SAFE_ID.test(sessionId)) return null;
-    const file = transcriptPath(configDir, found?.cwd ?? cwd, sessionId);
+    const session = resolveClaudeSession(env);
+    if (!session) return null;
+    const file = transcriptPath(claudeConfigDir(env), session.cwd ?? cwd, session.sessionId);
     return file ? contextSize(readTail(file)) : null;
   } catch {
     return null;

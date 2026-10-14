@@ -1,0 +1,14 @@
+{
+  "name": "alarm-control",
+  "version": "1.0.0",
+  "description": "Runs /compact and /clear asked for from the claude-alarm dashboard (unofficial)",
+  "author": { "name": "delt96" },
+  "userConfig": {
+    "controlDir": {
+      "type": "string",
+      "title": "Control folder",
+      "description": "The claude-alarm control folder holding alive/, command/ and result/. Set by claude-alarm mod install.",
+      "default": ""
+    }
+  }
+}

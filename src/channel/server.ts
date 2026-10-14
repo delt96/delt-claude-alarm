@@ -8,11 +8,13 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../shared/logger.js';
-import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants.js';
+import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION, CONTROL_DIR } from '../shared/constants.js';
 import { loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
-import { readPeerName } from './peer-name.js';
-import { readContextTokens } from './context-tokens.js';
+import { claudeConfigDir, readPeerName } from './peer-name.js';
+import { readContextTokens, resolveClaudeSession } from './context-tokens.js';
+import { SessionControl } from './session-control.js';
+import { POLL_MS, isControlKind } from '../shared/control-protocol.js';
 import { ContextTokenReporter } from './context-reporter.js';
 import { ASK_DROPPED, ASK_TOOL, ASK_UNSUPPORTED, askRequest, askResultText } from './ask.js';
 import { answerText } from '../shared/questions.js';
@@ -253,12 +255,20 @@ async function main() {
   };
   setTimeout(refreshSessionFacts, 2_000).unref();
   setInterval(refreshSessionFacts, 30_000).unref();
+  const sessionControl = new SessionControl(hubClient, sessionId, {
+    controlDir: CONTROL_DIR,
+    adviceDir: path.join(claudeConfigDir(), 'claude-jev-advisor', 'advice'),
+    claudeSessionId: () => resolveClaudeSession()?.sessionId,
+  });
+  setInterval(() => sessionControl.refresh(), POLL_MS).unref();
 
   // Listen for messages from hub and forward to Claude via channel notification
   hubClient.onMessage(async (msg) => {
     if (msg.type === 'hub_info') {
       contextTokens.reset();
       contextTokens.refresh();
+      sessionControl.reset();
+      sessionControl.refresh();
       return;
     }
     if (msg.type === 'message_to_session' && msg.sessionId === sessionId) {
@@ -293,6 +303,11 @@ async function main() {
         hubClient.send({ type: 'question_delivery', sessionId, requestId: msg.requestId, ok: true });
       } catch (err) {
         hubClient.send({ type: 'question_delivery', sessionId, requestId: msg.requestId, ok: false, reason: (err as Error).message });
+      }
+    } else if (msg.type === 'session_command' && msg.sessionId === sessionId) {
+      if (isControlKind(msg.kind)) {
+        logger.info(`Session command ${msg.kind} [${msg.requestId}]`);
+        sessionControl.command(msg.requestId, msg.kind);
       }
     } else if (msg.type === 'permission_response' && msg.sessionId === sessionId) {
       logger.info(`Permission verdict [${msg.requestId}]: ${msg.behavior}`);
