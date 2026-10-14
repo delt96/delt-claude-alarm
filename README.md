@@ -70,11 +70,11 @@ Session cards show each Claude session's context size (for example `· 133k`; ho
 
 ### Usage limits
 
-The header shows how much of the 5-hour and weekly limits Claude and Codex have used.
+A Usage card above the notifications shows how much of the 5-hour and weekly limits Claude and Codex have used, with a bar and the reset time for each (on phones, a short line under the header).
 
 - **Claude**: run `claude-alarm statusline install` once (needs a global install). Claude Code passes its limits to the status line, which saves them for the hub; the status line itself shows `5h 42% · 7d 18%`. Values refresh when a session on this PC gets a response, and appear only for subscription accounts. An existing status line is left alone unless you pass `--replace`.
 - **Codex**: read from the newest session files in `~/.codex/sessions` (or `CODEX_HOME`); nothing to install.
-- Values come from files on the PC running the hub. Hover a value for its reset time and how old it is.
+- Values come from files on the PC running the hub. The card's last line says how old each reading is; hover a reset time for the full date.
 
 ## CLI Commands
 

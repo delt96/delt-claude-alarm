@@ -52,6 +52,7 @@
   }
   header h1 { font-size: 18px; font-weight: 600; }
   .usage-strip {
+    display: none;
     flex: 1;
     min-width: 0;
     margin: 0 16px;
@@ -65,19 +66,27 @@
   .usage-sep { margin: 0 8px; opacity: 0.5; }
   .usage-window.usage-mid { color: var(--yellow); }
   .usage-window.usage-high { color: var(--red); }
-  .usage-bar {
-    display: inline-block;
-    width: 32px;
-    height: 4px;
-    margin: 0 4px 0 2px;
-    border-radius: 2px;
-    background: var(--border);
-    vertical-align: middle;
-    overflow: hidden;
+  .usage-panel {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
   }
+  .usage-panel-title { margin-bottom: 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
+  .usage-grid { display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 6px 8px; }
+  .usage-row { display: contents; }
+  .usage-name { font-weight: 500; }
+  .usage-label, .usage-reset, .usage-age { color: var(--text-dim); }
+  .usage-pct, .usage-reset { text-align: right; font-variant-numeric: tabular-nums; }
+  .usage-track { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
   .usage-fill { display: block; height: 100%; background: var(--text-dim); }
   .usage-mid .usage-fill { background: var(--yellow); }
   .usage-high .usage-fill { background: var(--red); }
+  .usage-mid .usage-pct { color: var(--yellow); }
+  .usage-high .usage-pct { color: var(--red); }
+  .usage-age { margin-top: 8px; font-size: 11px; }
   .header-right {
     display: flex;
     align-items: center;
@@ -943,7 +952,8 @@
     }
     /* 119px = 97px + the strip's row (16px line + 6px margin); keep in step with .usage-strip */
     body:has(#usageStrip:not([hidden])) .container { height: calc(100vh - 119px); }
-    .usage-bar { display: none; }
+    .usage-strip:not([hidden]) { display: block; }
+    .usage-panel { display: none; }
     .sessions-panel, .messages-panel, .notifications-panel {
       border: none;
       display: none;
@@ -1130,6 +1140,7 @@
   </div>
 
   <div class="notifications-panel">
+    <section class="usage-panel" id="usagePanel" hidden></section>
     <div class="notif-header">
       <h2>Notifications</h2>
       <button class="notif-clear-all" id="notifClearAll">Clear all</button>
@@ -1606,14 +1617,64 @@
     return `${Math.floor(ms / 3_600_000)} h ago`;
   }
 
+  function usagePct(w) {
+    return Math.min(Math.max(Math.round(w.usedPercent), 0), 100);
+  }
+
+  function usageLevel(pct) {
+    return pct >= 90 ? ' usage-high' : pct >= 70 ? ' usage-mid' : '';
+  }
+
+  function resetTitle(ms) {
+    return ` title="${esc(`Resets ${new Date(ms).toLocaleString()}`)}"`;
+  }
+
   function usageWindowHtml(label, w, now) {
     if (!w || typeof w.usedPercent !== 'number') return '';
     if (typeof w.resetsAt === 'number' && w.resetsAt <= now) return `<span class="usage-window">${label} reset</span>`;
-    const pct = Math.min(Math.max(Math.round(w.usedPercent), 0), 100);
-    const level = pct >= 90 ? ' usage-high' : pct >= 70 ? ' usage-mid' : '';
-    const title = typeof w.resetsAt === 'number' ? ` title="${esc(`Resets ${new Date(w.resetsAt).toLocaleString()}`)}"` : '';
-    const bar = `<span class="usage-bar" aria-hidden="true"><span class="usage-fill" style="width:${pct}%"></span></span>`;
-    return `<span class="usage-window${level}"${title}>${label} ${bar}${pct}%</span>`;
+    const pct = usagePct(w);
+    const title = typeof w.resetsAt === 'number' ? resetTitle(w.resetsAt) : '';
+    return `<span class="usage-window${usageLevel(pct)}"${title}>${label} ${pct}%</span>`;
+  }
+
+  function formatReset(ms, label) {
+    const d = new Date(ms);
+    if (label === '5h') return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
+  function usageRowHtml(name, label, w, now) {
+    if (!w || typeof w.usedPercent !== 'number') return '';
+    const passed = typeof w.resetsAt === 'number' && w.resetsAt <= now;
+    const pct = passed ? 0 : usagePct(w);
+    const reset = !passed && typeof w.resetsAt === 'number'
+      ? `<span class="usage-reset"${resetTitle(w.resetsAt)}>${formatReset(w.resetsAt, label)}</span>`
+      : '<span class="usage-reset"></span>';
+    return `<div class="usage-row${passed ? '' : usageLevel(pct)}"><span class="usage-name">${esc(name)}</span><span class="usage-label">${label}</span>` +
+      `<span class="usage-track" aria-hidden="true"><span class="usage-fill" style="width:${pct}%"></span></span>` +
+      `<span class="usage-pct">${passed ? 'reset' : `${pct}%`}</span>${reset}</div>`;
+  }
+
+  function usagePanelRows(name, limits, now) {
+    if (!limits) return [];
+    const rows = [];
+    for (const [label, w] of [['5h', limits.fiveHour], ['7d', limits.sevenDay]]) {
+      const row = usageRowHtml(rows.length ? '' : name, label, w, now);
+      if (row) rows.push(row);
+    }
+    return rows;
+  }
+
+  function renderUsagePanel(limits, now) {
+    const el = $('#usagePanel');
+    const agents = [['Claude', limits.claude], ['Codex', limits.codex]]
+      .map(([name, l]) => ({ name, l, rows: usagePanelRows(name, l, now) }))
+      .filter((a) => a.rows.length);
+    const ages = agents.map((a) => `${esc(a.name)} ${typeof a.l.updatedAt === 'number' ? formatAge(now - a.l.updatedAt) : 'unknown'}`);
+    el.innerHTML = agents.length
+      ? `<div class="usage-panel-title">Usage</div><div class="usage-grid">${agents.flatMap((a) => a.rows).join('')}</div><div class="usage-age">${ages.join(' · ')}</div>`
+      : '';
+    el.hidden = !agents.length;
   }
 
   function usageAgentHtml(name, limits, now) {
@@ -1632,6 +1693,7 @@
       .join('<span class="usage-sep">│</span>');
     el.innerHTML = html;
     el.hidden = !html;
+    renderUsagePanel(limits, now);
   }
 
   function formatTokens(n) {
