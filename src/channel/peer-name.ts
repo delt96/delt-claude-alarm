@@ -28,6 +28,27 @@ export function findPeerName(records: unknown[], env: PeerLookupEnv): string | u
   return undefined;
 }
 
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
+export function readSessionRecords(configDir: string): unknown[] {
+  const dir = path.join(configDir, 'sessions');
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const records: unknown[] = [];
+  for (const f of files) {
+    try {
+      records.push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+    } catch {}
+  }
+  return records;
+}
+
 // <configDir>/sessions/<pid>.json is Claude Code's undocumented peer registry
 // (the source of ListAgents/SendMessage names, verified on 2.1.283). Its format
 // may change between releases, so every failure must degrade to "no name".
@@ -37,21 +58,5 @@ export function readPeerName(env: NodeJS.ProcessEnv = process.env): string | und
     sessionId: env.CLAUDE_CODE_SESSION_ID,
   };
   if (!lookup.messagingSocket && !lookup.sessionId) return undefined;
-
-  const configDir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  const dir = path.join(configDir, 'sessions');
-  let files: string[];
-  try {
-    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-  } catch {
-    return undefined;
-  }
-
-  const records: unknown[] = [];
-  for (const f of files) {
-    try {
-      records.push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
-    } catch {}
-  }
-  return findPeerName(records, lookup);
+  return findPeerName(readSessionRecords(claudeConfigDir(env)), lookup);
 }
