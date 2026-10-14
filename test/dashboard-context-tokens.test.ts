@@ -54,3 +54,9 @@ test('a card without a folder still shows the count', () => {
   ctx.renderSessions();
   assert.match(list.innerHTML, /class="session-tokens"[^>]*>2k</);
 });
+
+test('a card shows a dot when the advisor suggests a command', () => {
+  const { ctx, list } = load({ s1: session({ contextTokens: 2000, control: { busy: false, advice: 'compact' } }) });
+  ctx.renderSessions();
+  assert.match(list.innerHTML, /<span class="advice-dot" title="Advisor suggests \/compact">&#9679;<\/span>/);
+});
