@@ -7,7 +7,7 @@ import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodex
 import { findCodex } from './codex/transport.js';
 import { runFromCli } from './codex/run.js';
 import { exitAfterFlush } from './codex/shutdown.js';
-import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE, STATUSLINE_ORIGINAL_FILE } from './shared/constants.js';
+import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE, STATUSLINE_ORIGINAL_FILE, CONTROL_DIR, MOD_SETTINGS_BACKUP_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
@@ -17,6 +17,7 @@ import { startAdapter } from './codex/start-check.js';
 import { controlEndpoint, queryOwner, requestStop } from './codex/instance-lock.js';
 import { adapterStatus, legacyNote, stopAdapter, type ControlDeps } from './codex/control-cli.js';
 import { installStatusLine, uninstallStatusLine } from './statusline/install.js';
+import { installMod, uninstallMod } from './mod/install.js';
 import { claudeConfigDir } from './channel/peer-name.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,8 @@ Usage:
                                 (--replace: replace an existing status line; uninstall puts it back)
   claude-alarm statusline uninstall
                                 Remove the claude-alarm status line
+  claude-alarm mod install      Let the dashboard run /compact and /clear in Claude Code sessions (a Claude Code mod)
+  claude-alarm mod uninstall    Remove the claude-alarm mod from Claude Code settings
   claude-alarm help             Show this help
 
 Quick start:
@@ -269,6 +272,24 @@ async function test() {
   }
 }
 
+function modFiles() {
+  return { settingsFile: path.join(claudeConfigDir(), 'settings.json'), delimiter: path.delimiter, backupFile: MOD_SETTINGS_BACKUP_FILE };
+}
+
+function installModFromCli(): void {
+  const files = modFiles();
+  const result = installMod({ ...files, modDir: path.join(__dirname, '..', 'mod'), controlDir: CONTROL_DIR });
+  if (result.ok) {
+    console.log(`✓ claude-alarm mod ${result.action} in ${files.settingsFile}. Claude Code sessions started from now on show /compact and /clear on the dashboard.`);
+  } else if (result.reason === 'npx') {
+    console.error('Install claude-alarm globally first (npm i -g @delt/claude-alarm); an npx copy can move.');
+    process.exitCode = 1;
+  } else {
+    console.error(`${files.settingsFile} is not valid JSON; nothing was changed.`);
+    process.exitCode = 1;
+  }
+}
+
 function ask(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
@@ -347,6 +368,9 @@ async function init() {
       else setCodexEnabled(false);
     }
   }
+
+  const control = await ask('\nShow /compact and /clear buttons on the dashboard for Claude Code sessions on this PC? (Y/n): ');
+  if (control.toLowerCase() !== 'n') installModFromCli();
 
   console.log(`\nNext step:`);
   console.log(`  claude --dangerously-load-development-channels server:claude-alarm`);
@@ -536,6 +560,26 @@ async function main() {
       }
     } else {
       console.error(`Unknown statusline command: ${sub}`);
+      printUsage();
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'mod') {
+    if (sub === 'install') {
+      installModFromCli();
+    } else if (sub === 'uninstall') {
+      const files = modFiles();
+      const result = uninstallMod(files);
+      if (result.ok) {
+        console.log(result.action === 'absent' ? 'The claude-alarm mod is not installed.' : `✓ claude-alarm mod removed from ${files.settingsFile}. Open sessions keep it until they restart.`);
+      } else {
+        console.error(`${files.settingsFile} is not valid JSON; nothing was changed.`);
+        process.exitCode = 1;
+      }
+    } else {
+      console.error(`Unknown mod command: ${sub}`);
       printUsage();
       process.exit(1);
     }
