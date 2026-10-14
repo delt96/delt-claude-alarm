@@ -50,6 +50,7 @@ Usage:
                                 (--effort: the turn's reasoning effort, one the model offers, e.g. low, medium, high, xhigh;
                                  it carries over to later turns on the thread)
                                 (--yolo: no sandbox and no approvals, like codex --yolo)
+                                (claude-alarm codex run --help: every option, the result JSON and exit codes)
   claude-alarm help             Show this help
 
 Quick start:
