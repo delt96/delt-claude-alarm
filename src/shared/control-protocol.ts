@@ -1,4 +1,4 @@
-// Shared by the claude-alarm-control mod and the channel server. The mod runs without Node, so nothing here may import node:*.
+// Shared by the alarm-control mod and the channel server. The mod runs without Node, so nothing here may import node:*.
 export type ControlKind = 'compact' | 'clear';
 
 export interface AliveRecord { busy: boolean; at: number; ended?: true }
@@ -10,7 +10,7 @@ export const POLL_MS = 2_000;
 export const HEARTBEAT_MS = 15_000;
 export const ALIVE_STALE_MS = 45_000;
 export const COMMAND_TTL_MS = 30_000;
-export const MOD_PLUGIN_NAME = 'claude-alarm-control';
+export const MOD_PLUGIN_NAME = 'alarm-control';
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_REASON = 500;
