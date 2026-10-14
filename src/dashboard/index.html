@@ -3116,13 +3116,18 @@
     const chatId = $('#tgChatId').value.trim();
     const enabled = $('#tgEnabled').checked;
     if (!botToken || !chatId) { showTgStatus('Bot Token and Chat ID are required.', false); return; }
-    if (botToken.includes('...')) { showTgStatus('Bot Token is masked. Please enter the full token.', false); return; }
     try {
-      await fetch(`/api/telegram`, {
+      // A masked token ("12345678...") is sent as is: the hub keeps the stored token.
+      const res = await fetch(`/api/telegram`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ telegram: { botToken, chatId, enabled } }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showTgStatus(data.error || 'Save failed.', false);
+        return;
+      }
       showTgStatus('Saved!', true);
       setTimeout(closeSettings, 800);
     } catch { showTgStatus('Save failed.', false); }
