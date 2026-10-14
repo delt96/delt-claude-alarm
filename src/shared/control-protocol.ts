@@ -1,7 +1,7 @@
 // Shared by the alarm-control mod and the channel server. The mod runs without Node, so nothing here may import node:*.
 export type ControlKind = 'compact' | 'clear';
 
-export interface AliveRecord { busy: boolean; at: number; ended?: true }
+export interface AliveRecord { busy: boolean; at: number; ended?: true; compactAt?: number }
 export interface CommandRecord { id: string; kind: ControlKind; at: number }
 export interface ResultRecord { id: string; ok: boolean; reason?: string; at: number }
 export interface AdviceRecord { kind: ControlKind | null; at: number }
@@ -44,7 +44,9 @@ const isTime = (value: unknown): value is number => typeof value === 'number' &&
 
 export function parseAlive(raw: unknown): AliveRecord | null {
   if (!isRecord(raw) || typeof raw.busy !== 'boolean' || !isTime(raw.at)) return null;
-  return raw.ended === true ? { busy: raw.busy, at: raw.at, ended: true } : { busy: raw.busy, at: raw.at };
+  const alive: AliveRecord = raw.ended === true ? { busy: raw.busy, at: raw.at, ended: true } : { busy: raw.busy, at: raw.at };
+  if (isTime(raw.compactAt) && raw.compactAt > 0) alive.compactAt = raw.compactAt;
+  return alive;
 }
 
 export function parseCommand(raw: unknown): CommandRecord | null {

@@ -13,6 +13,28 @@ export const SESSION_CONTROL_FEATURE = 'session_control';
 const ANSWER_WAIT_MS = COMMAND_TTL_MS + 2 * POLL_MS;
 const SWEEP_AGE_MS = 24 * 60 * 60 * 1000;
 
+// Mirrors claude-jev-advisor's config-shape.ts (0.5.0): its default redRemainingPct, the config version it writes,
+// and the 0.1.x default minTokens it reads as unset in a config without that version.
+const ADVISOR_RED_REMAINING_PCT = 20;
+const ADVISOR_CONFIG_VERSION = 2;
+const ADVISOR_LEGACY_MIN_TOKENS = 100_000;
+
+interface AdvisorLevels { minTokens?: number; redRemainingPct: number }
+
+function advisorLevels(file: string | undefined): AdvisorLevels {
+  const raw = file ? readRecord(file) : undefined;
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const context = isObject(raw) && isObject(raw.context) ? raw.context : {};
+  const legacy = !isObject(raw) || raw.version !== ADVISOR_CONFIG_VERSION;
+  const { minTokens, redRemainingPct } = context;
+  const levels: AdvisorLevels = { redRemainingPct: ADVISOR_RED_REMAINING_PCT };
+  if (typeof minTokens === 'number' && Number.isFinite(minTokens) && minTokens >= 0 && !(legacy && minTokens === ADVISOR_LEGACY_MIN_TOKENS)) {
+    levels.minTokens = minTokens;
+  }
+  if (typeof redRemainingPct === 'number' && redRemainingPct >= 0 && redRemainingPct <= 100) levels.redRemainingPct = redRemainingPct;
+  return levels;
+}
+
 interface ControlHub {
   supports(feature: string): boolean;
   send(msg: ChannelMessage): unknown;
@@ -21,6 +43,7 @@ interface ControlHub {
 export interface SessionControlOptions {
   controlDir: string;
   adviceDir: string;
+  advisorConfigFile?: string;
   claudeSessionId: () => string | undefined;
   now?: () => number;
 }
@@ -141,7 +164,14 @@ export class SessionControl {
     const alive = this.aliveOf(sid, now);
     if (!alive) return null;
     const advice = parseAdvice(readRecord(path.join(this.opts.adviceDir, `${sid}.json`)));
-    return advice?.kind ? { busy: alive.busy, advice: advice.kind } : { busy: alive.busy };
+    const state: SessionControlState = advice?.kind ? { busy: alive.busy, advice: advice.kind } : { busy: alive.busy };
+    const levels = advisorLevels(this.opts.advisorConfigFile);
+    if (levels.minTokens !== undefined) state.greenFrom = levels.minTokens;
+    if (alive.compactAt !== undefined) {
+      state.compactAt = Math.round(alive.compactAt);
+      state.redFrom = Math.round(alive.compactAt * (1 - levels.redRemainingPct / 100));
+    }
+    return state;
   }
 
   private collectResults(now: number): void {

@@ -4,6 +4,7 @@ declare module 'claude-code' {
     session: {
       id(): Promise<string>;
       compact(): Promise<{ skip?: unknown } | undefined>;
+      usage(args?: { breakdown?: 'summary' | 'full' }): Promise<{ context?: { breakdown?: { autoCompactThreshold?: unknown } } }>;
     };
     command: { run(args: { command: string }): Promise<unknown> };
     fs: {

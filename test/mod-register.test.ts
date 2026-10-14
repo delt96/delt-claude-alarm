@@ -7,7 +7,7 @@ type AnyFn = (...args: any[]) => any;
 const DIR = 'D:/alarm/control';
 const flush = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
 
-function harness(opts: { dir?: string; interactive?: boolean; files?: Record<string, string>; sid?: string; compact?: () => Promise<any>; run?: () => Promise<any> } = {}) {
+function harness(opts: { dir?: string; interactive?: boolean; files?: Record<string, string>; sid?: string; compact?: () => Promise<any>; run?: () => Promise<any>; usage?: (args?: unknown) => Promise<any> } = {}) {
   const hooks = new Map<string, AnyFn>();
   const files = new Map<string, string>(Object.entries(opts.files ?? {}));
   const calls = { compact: 0, run: [] as unknown[] };
@@ -18,6 +18,7 @@ function harness(opts: { dir?: string; interactive?: boolean; files?: Record<str
     session: {
       id: async () => sid,
       compact: opts.compact ?? (async () => { calls.compact++; return undefined; }),
+      ...(opts.usage ? { usage: opts.usage } : {}),
     },
     command: { run: opts.run ?? (async (args: unknown) => { calls.run.push(args); }) },
     fs: {
@@ -66,6 +67,24 @@ test('the heartbeat is written on the first tick and then every 15 seconds', asy
   h.advance(1_000);
   await h.tick();
   assert.deepEqual(h.json(alive()), { busy: false, at: h.now() });
+});
+
+test('the heartbeat carries the auto-compact threshold when Claude Code reports one', async () => {
+  const asked: unknown[] = [];
+  const h = harness({ usage: async (args) => { asked.push(args); return { context: { tokens: 1, window: 1_000_000, breakdown: { autoCompactThreshold: 967_000 } } }; } });
+  await h.start();
+  await h.tick();
+  assert.deepEqual(h.json(alive()), { busy: false, at: h.now(), compactAt: 967_000 });
+  assert.deepEqual(asked[0], { breakdown: 'summary' });
+});
+
+test('the heartbeat leaves the threshold out when usage fails or has none', async () => {
+  for (const usage of [async () => { throw new Error('no'); }, async () => ({ context: { window: 1 } }), async () => ({ context: { breakdown: { autoCompactThreshold: 'x' } } })]) {
+    const h = harness({ usage });
+    await h.start();
+    await h.tick();
+    assert.deepEqual(h.json(alive()), { busy: false, at: h.now() });
+  }
 });
 
 test('a compact command runs once and leaves an ok result', async () => {

@@ -32,6 +32,13 @@ test('parseAlive', () => {
   for (const bad of [null, [], { busy: 'no', at: 1 }, { busy: true }, { busy: true, at: Number.NaN }]) assert.equal(parseAlive(bad), null);
 });
 
+test('parseAlive keeps the auto-compact threshold only when it is a positive number', () => {
+  assert.deepEqual(parseAlive({ busy: false, at: 5, compactAt: 967000 }), { busy: false, at: 5, compactAt: 967000 });
+  for (const bad of [0, -1, '967000', Number.NaN, Number.POSITIVE_INFINITY, null]) {
+    assert.deepEqual(parseAlive({ busy: false, at: 5, compactAt: bad }), { busy: false, at: 5 }, String(bad));
+  }
+});
+
 test('parseCommand', () => {
   assert.deepEqual(parseCommand({ id: 'r1', kind: 'clear', at: 9, extra: 1 }), { id: 'r1', kind: 'clear', at: 9 });
   for (const bad of [{ id: '../r', kind: 'clear', at: 1 }, { id: 'r', kind: 'exit', at: 1 }, { id: 'r', kind: 'clear' }]) assert.equal(parseCommand(bad), null);

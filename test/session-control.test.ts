@@ -14,11 +14,12 @@ function setup(opts: { supports?: boolean; sid?: string | undefined } = {}) {
   let now = 1_000_000;
   let sid: string | undefined = 'sid' in opts ? opts.sid : 's1';
   const hub = { supports: () => opts.supports ?? true, send: (m: unknown) => sent.push(m) };
-  const control = new SessionControl(hub, 'alarm-1', { controlDir, adviceDir, claudeSessionId: () => sid, now: () => now });
+  const advisorConfigFile = path.join(root, 'advisor', 'config.json');
+  const control = new SessionControl(hub, 'alarm-1', { controlDir, adviceDir, advisorConfigFile, claudeSessionId: () => sid, now: () => now });
   const file = (kind: string, id = 's1') => path.join(controlDir, kind, `${id}.json`);
   const put = (p: string, value: unknown) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, typeof value === 'string' ? value : JSON.stringify(value)); };
   return {
-    control, sent, file, put, adviceFile: (id = 's1') => path.join(adviceDir, `${id}.json`),
+    control, sent, file, put, advisorConfigFile, adviceFile: (id = 's1') => path.join(adviceDir, `${id}.json`),
     advance: (ms: number) => { now += ms; }, now: () => now, setSid: (next: string | undefined) => { sid = next; },
     last: () => sent[sent.length - 1],
   };
@@ -49,6 +50,45 @@ test('a fresh alive file gives the busy flag, with the advisor advice when there
   s.put(s.file('alive'), { busy: true, at: s.now() });
   s.control.refresh();
   assert.deepEqual(s.last().control, { busy: true });
+});
+
+test('the red level starts 20% below the auto-compact threshold the mod reports', () => {
+  const s = setup();
+  s.put(s.file('alive'), { busy: false, at: s.now(), compactAt: 967_000 });
+  s.control.refresh();
+  assert.deepEqual(s.last().control, { busy: false, compactAt: 967_000, redFrom: 773_600 });
+});
+
+test("the advisor's own minTokens and redRemainingPct are used when its config sets them", () => {
+  const s = setup();
+  s.put(s.advisorConfigFile, { version: 2, context: { minTokens: 120_000, redRemainingPct: 10 } });
+  s.put(s.file('alive'), { busy: false, at: s.now(), compactAt: 200_000 });
+  s.control.refresh();
+  assert.deepEqual(s.last().control, { busy: false, greenFrom: 120_000, compactAt: 200_000, redFrom: 180_000 });
+});
+
+test('a config without a version is read the way the advisor reads it: its old default minTokens counts as unset', () => {
+  const s = setup();
+  s.put(s.advisorConfigFile, { context: { minTokens: 150_000, redRemainingPct: 5 } });
+  s.put(s.file('alive'), { busy: false, at: s.now(), compactAt: 100_000 });
+  s.control.refresh();
+  assert.deepEqual(s.last().control, { busy: false, greenFrom: 150_000, compactAt: 100_000, redFrom: 95_000 });
+});
+
+test('advisor config values that are missing or invalid are left out', () => {
+  for (const config of [
+    { version: 2 },
+    { version: 2, context: { minTokens: -1, redRemainingPct: 150 } },
+    { version: 2, context: { minTokens: '100000', redRemainingPct: '5' } },
+    { context: { minTokens: 100_000 } },
+    'not json',
+  ]) {
+    const s = setup();
+    s.put(s.advisorConfigFile, config);
+    s.put(s.file('alive'), { busy: false, at: s.now(), compactAt: 100_000 });
+    s.control.refresh();
+    assert.deepEqual(s.last().control, { busy: false, compactAt: 100_000, redFrom: 80_000 }, JSON.stringify(config));
+  }
 });
 
 test('a stale or ended alive file means no control, and an ended one is removed', () => {

@@ -258,6 +258,7 @@ async function main() {
   const sessionControl = new SessionControl(hubClient, sessionId, {
     controlDir: CONTROL_DIR,
     adviceDir: path.join(claudeConfigDir(), 'claude-jev-advisor', 'advice'),
+    advisorConfigFile: path.join(claudeConfigDir(), 'claude-jev-advisor', 'config.json'),
     claudeSessionId: () => resolveClaudeSession()?.sessionId,
   });
   setInterval(() => sessionControl.refresh(), POLL_MS).unref();

@@ -66,7 +66,7 @@ Open `http://127.0.0.1:7900` in your browser.
   <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/dashboard-preview.png" alt="Dashboard" width="800">
 </p>
 
-Session cards show each Claude session's context size (for example `· 133k`; hover for the exact count). The channel server reads it from the session's transcript under `~/.claude/projects` every 30 seconds. Links in session messages open in a new tab and show their title, or the decoded address for a bare URL.
+Session cards show each Claude session's context size in a chip next to its status, with the change since the last update (for example `312k +4k`; hover for the exact count). The channel server reads it from the session's transcript under `~/.claude/projects` every 30 seconds. The chip's color follows [claude-jev-advisor](https://www.npmjs.com/package/@delt/claude-jev-advisor)'s levels: gray below its `minTokens` (250k by default), green from there, yellow with `/compact` or `/clear` when the advisor suggests one, and red with the share left once the context is within its `redRemainingPct` (20% by default) of auto-compact. Red needs the claude-alarm mod (`claude-alarm mod install`), which reports Claude Code's auto-compact threshold; sessions started before the mod was installed or updated show no red. Links in session messages open in a new tab and show their title, or the decoded address for a bare URL.
 
 ### Usage limits
 
