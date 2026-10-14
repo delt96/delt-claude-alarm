@@ -848,12 +848,23 @@ export class HubServer {
     if (ok) {
       this.questions.take(sessionId, requestId);
       this.announceQuestion(sessionId, requestId, 'answered', answers, source);
+      this.resumeAfterAnswers(sessionId);
       return;
     }
     open.sending = undefined;
     const why = reason || 'the session could not take the answer';
     this.broadcastToDashboards({ type: 'question_rejected', sessionId, requestId, reason: why });
     void this.telegramBot?.reopenQuestion(sessionId, requestId, why);
+  }
+
+  // ask sets waiting_input itself, but turning back depended on the model calling status, which it often skips.
+  // Codex reports its own thread status, so the hub leaves it alone.
+  private resumeAfterAnswers(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.status !== 'waiting_input' || session.agentKind === 'codex') return;
+    if (this.questions.forSession(sessionId).length > 0) return;
+    const updated = this.sessions.updateStatus(sessionId, 'working');
+    if (updated) this.broadcastToDashboards({ type: 'session_updated', session: updated });
   }
 
   // A plain message closes the questions it overtakes; one already being answered waits for its own outcome.

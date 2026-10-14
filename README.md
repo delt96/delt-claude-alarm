@@ -97,6 +97,7 @@ A question from `ask` (or from Codex, below) appears as a card in the session's 
 - On Telegram, tap an option, or reply to the question message to type your own answer.
 - Sending the session a plain message instead closes its open questions.
 - A question counts as answered once the session confirms it took the answer; if it could not, the card opens again with the reason.
+- `ask` sets the session to **waiting input**; once its last open question is answered, the hub sets it back to **working**.
 - After updating claude-alarm, restart the hub (`claude-alarm hub stop`, then `claude-alarm hub start`) so the sessions and the hub run the same version. An older hub cannot show questions; `ask` then tells Claude to ask with `reply` instead.
 
 ## Configuration

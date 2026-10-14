@@ -121,6 +121,55 @@ test('a session that cannot take the answer reopens the question for everyone', 
   for (const c of [other, dash, ch]) c.ws.close();
 });
 
+const statuses = (inbox: any[], id: string) => of(inbox, 'session_updated').filter((m) => m.session.id === id).map((m) => m.session.status);
+
+async function answerAndDeliver(dash: WebSocket, ch: WebSocket, sessionId: string, requestId: string) {
+  send(dash, { type: 'question_answer', sessionId, requestId, answers: { q1: 'Red', q2: 'A' } });
+  await settle();
+  send(ch, { type: 'question_delivery', sessionId, requestId, ok: true });
+  await settle();
+}
+
+test('a session waiting on questions turns working once the last open one is answered', async () => {
+  const ch = await channel('st1');
+  ask(ch.ws, 'st1', 'st1a');
+  ask(ch.ws, 'st1', 'st1b');
+  send(ch.ws, { type: 'status', sessionId: 'st1', status: 'waiting_input' });
+  await settle();
+  const dash = await open('/ws/dashboard');
+  await settle();
+  await answerAndDeliver(dash.ws, ch.ws, 'st1', 'st1a');
+  assert.deepEqual(statuses(dash.inbox, 'st1'), []);
+  send(dash.ws, { type: 'question_answer', sessionId: 'st1', requestId: 'st1b', answers: { q1: 'Red', q2: 'A' } });
+  await settle();
+  send(ch.ws, { type: 'question_delivery', sessionId: 'st1', requestId: 'st1b', ok: false, reason: 'busy' });
+  await settle();
+  assert.deepEqual(statuses(dash.inbox, 'st1'), []);
+  await answerAndDeliver(dash.ws, ch.ws, 'st1', 'st1b');
+  assert.deepEqual(statuses(dash.inbox, 'st1'), ['working']);
+  dash.ws.close();
+  ch.ws.close();
+});
+
+test('an answer leaves the status alone when the session already moved on, and for Codex sessions', async () => {
+  const ch = await channel('st2');
+  ask(ch.ws, 'st2', 'st2a');
+  send(ch.ws, { type: 'status', sessionId: 'st2', status: 'idle' });
+  const codex = await open('/ws/channel');
+  codex.ws.send(JSON.stringify({ type: 'register', session: { id: 'codex:st3', name: 'st3', status: 'waiting_input', connectedAt: 0, lastActivity: 0, cwd: '/w/st3', channelEnabled: true, agentKind: 'codex' } }));
+  await settle();
+  ask(codex.ws, 'codex:st3', 'st3a');
+  await settle();
+  const dash = await open('/ws/dashboard');
+  await settle();
+  await answerAndDeliver(dash.ws, ch.ws, 'st2', 'st2a');
+  await answerAndDeliver(dash.ws, codex.ws, 'codex:st3', 'st3a');
+  assert.deepEqual(of(dash.inbox, 'question_resolved').map((m) => m.requestId), ['st2a', 'st3a']);
+  assert.deepEqual(statuses(dash.inbox, 'st2'), []);
+  assert.deepEqual(statuses(dash.inbox, 'codex:st3'), []);
+  for (const c of [dash, codex, ch]) c.ws.close();
+});
+
 test('an incomplete or out-of-list answer is refused with the reason and nothing reaches the session', async () => {
   const ch = await channel('s4');
   const dash = await open('/ws/dashboard');

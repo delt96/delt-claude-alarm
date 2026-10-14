@@ -10,7 +10,7 @@ const TOKEN = 'own-test';
 let hub: HubServer;
 
 before(async () => {
-  hub = new HubServer({ hub: { host: '127.0.0.1', port: PORT, token: TOKEN } } as any);
+  hub = new HubServer({ hub: { host: '127.0.0.1', port: PORT, token: TOKEN }, notifications: { desktop: false, sound: false } } as any);
   await hub.start();
 });
 after(async () => { await hub.stop(); });
