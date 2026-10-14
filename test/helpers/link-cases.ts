@@ -16,4 +16,16 @@ export const LINK_CASES: Array<{ name: string; input: string; output: string }> 
   { name: 'scheme alone is not a link', input: 'https://.', output: 'https://.' },
   { name: 'quote ends a bare url', input: 'a "http://h/x" b', output: 'a "{http://h/x|http://h/x}" b' },
   { name: 'text without urls is unchanged', input: '그냥 [괄호](없음) 글', output: '그냥 [괄호](없음) 글' },
+  { name: 'bold markers around a bare url stay outside', input: '**http://h/x**', output: '**{http://h/x|http://h/x}**' },
+  { name: 'italic and strike markers around a bare url stay outside', input: '_http://h/x_ ~~http://h/y~~', output: '_{http://h/x|http://h/x}_ ~~{http://h/y|http://h/y}~~' },
+  { name: 'a dashboard placeholder ends a bare url', input: 'http://h/x\uE0000\uE001', output: '{http://h/x|http://h/x}\uE0000\uE001' },
+  { name: 'a telegram placeholder ends a bare url', input: 'http://h/x\u0000CODE0\u0000', output: '{http://h/x|http://h/x}\u0000CODE0\u0000' },
+  { name: 'a placeholder in a link title stays in the label', input: '[\uE0000\uE001](http://h/x)', output: '{http://h/x|\uE0000\uE001}' },
+];
+
+// Inputs that took seconds with the first linkify (quadratic scans); each must now finish quickly.
+export const SLOW_INPUTS: Array<{ name: string; input: string }> = [
+  { name: 'many closing parentheses after a url', input: `http://h/${')'.repeat(50000)}` },
+  { name: 'many closing brackets after a url', input: `http://h/${']'.repeat(50000)}` },
+  { name: 'many unmatched opening brackets', input: '['.repeat(128000) },
 ];

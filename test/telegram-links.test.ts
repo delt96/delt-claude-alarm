@@ -34,3 +34,19 @@ test('javascript links stay text', () => {
 test('formatting without links is unchanged', () => {
   assert.equal(md('# 제목\n**굵게** *기울임* `c`'), '<b>제목</b>\n<b>굵게</b> <i>기울임</i> <code>c</code>');
 });
+
+test('inline code in a link title shows as plain label text', () => {
+  assert.equal(md('[`#123`](https://g/p/123)'), '<a href="https://g/p/123">#123</a>');
+});
+
+test('code right after a bare url stays out of the href', () => {
+  assert.equal(md('http://h/x`code`'), '<a href="http://h/x">http://h/x</a><code>code</code>');
+});
+
+test('a bold bare url stays bold and links to the right address', () => {
+  assert.equal(md('**http://h/x**'), '<b><a href="http://h/x">http://h/x</a></b>');
+});
+
+test('placeholder-shaped text in the input is not replaced by kept parts', () => {
+  assert.equal(md('\u0000CODE0\u0000 `c`'), 'CODE0 <code>c</code>');
+});

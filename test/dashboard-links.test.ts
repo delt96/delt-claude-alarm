@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { LINK_CASES, LINK_CASE_KEEP } from './helpers/link-cases.js';
+import { LINK_CASES, LINK_CASE_KEEP, SLOW_INPUTS } from './helpers/link-cases.js';
 
 const html = fs.readFileSync(new URL('../src/dashboard/index.html', import.meta.url), 'utf8');
 
@@ -67,4 +67,28 @@ for (const [input, output] of REGRESSION) {
 
 test('links get a visible style in message bodies', () => {
   assert.match(html, /\.message-body a \{[^}]*color: var\(--blue\)/);
+});
+
+for (const s of SLOW_INPUTS) {
+  test(`dashboard linkify stays fast: ${s.name}`, () => {
+    const started = performance.now();
+    ctx.linkify(s.input, LINK_CASE_KEEP);
+    assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+  });
+}
+
+test('inline code in a link title renders inside the anchor', () => {
+  assert.equal(ctx.renderMarkdown('[`#123`](https://g/p/123)'), A('https://g/p/123', '<code>#123</code>'));
+});
+
+test('code right after a bare url stays out of the href', () => {
+  assert.equal(ctx.renderMarkdown('http://h/x`code`'), `${A('http://h/x', 'http://h/x')}<code>code</code>`);
+});
+
+test('a bold bare url stays bold and links to the right address', () => {
+  assert.equal(ctx.renderMarkdown('**http://h/x**'), `<strong>${A('http://h/x', 'http://h/x')}</strong>`);
+});
+
+test('placeholder-shaped text in the input is not replaced by kept parts', () => {
+  assert.equal(ctx.renderMarkdown('\uE0000\uE001 `c`'), '\uFFFD0\uFFFD <code>c</code>');
 });
