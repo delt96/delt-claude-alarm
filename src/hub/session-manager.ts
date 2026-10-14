@@ -1,4 +1,5 @@
-import type { SessionInfo, SessionStatus } from '../shared/types.js';
+import type { SessionControlState, SessionInfo, SessionStatus } from '../shared/types.js';
+import { isControlKind } from '../shared/control-protocol.js';
 import { isValidPeerName } from '../shared/peer-name.js';
 
 export class SessionManager {
@@ -61,6 +62,12 @@ export class SessionManager {
     return session;
   }
 
+  setControl(sessionId: string, control: unknown): SessionInfo | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session) session.control = readControl(control);
+    return session;
+  }
+
   updateActivity(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
@@ -83,4 +90,11 @@ export class SessionManager {
   private baseName(session: SessionInfo): string {
     return session.title || session.cwd?.replace(/^.*[/\\]/, '') || session.name;
   }
+}
+
+function readControl(raw: unknown): SessionControlState | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { busy, advice } = raw as { busy?: unknown; advice?: unknown };
+  if (typeof busy !== 'boolean') return undefined;
+  return isControlKind(advice) ? { busy, advice } : { busy };
 }
