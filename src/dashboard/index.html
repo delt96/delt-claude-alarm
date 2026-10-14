@@ -250,6 +250,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .session-tokens { color: var(--text); }
   .no-sessions {
     color: var(--text-dim);
     font-size: 13px;
@@ -611,6 +612,7 @@
     font-family: monospace;
   }
   .message-body pre code { background: none; padding: 0; }
+  .message-body a { color: var(--blue); text-decoration: underline; word-break: break-all; }
   .message-body table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
   .message-body th, .message-body td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
   .message-body th { background: var(--bg); font-weight: 600; }
@@ -1555,6 +1557,13 @@
   }
 
   // --- Render ---
+  function formatTokens(n) {
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '';
+    if (n < 1000) return String(Math.round(n));
+    if (n < 999_500) return `${Math.round(n / 1000)}k`;
+    return `${(n / 1_000_000).toFixed(1)}M`;
+  }
+
   function renderSessions() {
     const el = $('#sessionsList');
     const ids = getOrderedSessionIds();
@@ -1569,6 +1578,8 @@
       const unread = state.unread[id] || 0;
       const dispName = sessionDisplayName(s);
       const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const tokens = formatTokens(s.contextTokens);
+      const tokensPart = tokens ? ` &middot; <span class="session-tokens" title="Context: ${s.contextTokens.toLocaleString('en-US')} tokens">${tokens}</span>` : '';
       const armed = state.closeArmed && state.closeArmed.id === id && closeStep(state.closeArmed.at, Date.now()) !== 'arm';
       const closeBtn = s.closable
         ? `<button class="session-close${armed ? ' armed' : ''}" type="button" title="Close — stays in Codex history">${armed ? 'Close?' : '&times;'}</button>`
@@ -1577,7 +1588,7 @@
         <span class="drag-handle" title="Drag to reorder">&#10303;</span>
         <div class="session-body">
           <div class="session-name" title="Double-click to rename">${esc(dispName)}${s.agentKind === 'codex' ? '<span class="agent-badge">Codex</span>' : ''}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
-          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
+          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}${tokensPart}</div>` : `<div class="session-cwd">${connTime}${tokensPart}</div>`}
           <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
         </div>
         ${closeBtn}
@@ -2011,10 +2022,44 @@
       .trim();
   }
 
+  function readableUrl(url) {
+    try { return decodeURI(url); } catch { return url; }
+  }
+
+  function splitTrailing(url) {
+    const count = (s, ch) => s.split(ch).length - 1;
+    let opens = count(url, '('), closes = count(url, ')');
+    let openBrackets = count(url, '['), closeBrackets = count(url, ']');
+    let end = url.length;
+    while (end > 0) {
+      const c = url[end - 1];
+      if (`.,;:!?'"*_~`.includes(c)) end--;
+      else if (c === ')' && closes > opens) { closes--; end--; }
+      else if (c === ']' && closeBrackets > openBrackets) { closeBrackets--; end--; }
+      else break;
+    }
+    return [url.slice(0, end), url.slice(end)];
+  }
+
+  // Copy of src/shared/links.ts (used for Telegram); test/dashboard-links.test.ts runs both on one case list.
+  function linkify(text, keep) {
+    return text.replace(/\[([^\]\n]{1,300})\]\(([^\s()\u0000\uE000\uE001]*(?:\([^\s()\u0000\uE000\uE001]*\)[^\s()\u0000\uE000\uE001]*)*)\)|(https?:\/\/[^\s<>"'`\u0000\uE000\uE001]+)/gi, (match, title, href, bare) => {
+      if (bare === undefined) return /^https?:\/\//i.test(href) ? keep(href, title) : match;
+      const [url, tail] = splitTrailing(bare);
+      return /^https?:\/\/./i.test(url) ? keep(url, readableUrl(url)) + tail : match;
+    });
+  }
+
   function renderMarkdown(text) {
-    let html = esc(text);
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    const kept = [];
+    const keep = (part) => `\uE000${kept.push(part) - 1}\uE001`;
+    // Single restore pass on purpose: a recursive restore would expand code into href attributes.
+    const restore = (html) => html.replace(/\uE000(\d+)\uE001/g, (m, n) => kept[Number(n)] ?? m);
+    let src = String(text).replace(/[\uE000\uE001]/g, '\uFFFD');
+    src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, body) => keep(`<pre><code>${esc(body)}</code></pre>`));
+    src = src.replace(/`([^`]+)`/g, (_m, body) => keep(`<code>${esc(body)}</code>`));
+    src = linkify(src, (href, label) => keep(`<a href="${esc(href).replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer">${restore(esc(label))}</a>`));
+    let html = esc(src);
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
@@ -2030,6 +2075,8 @@
     });
     html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // Restore before the newline pass: the <br> cleanup below needs to see the <pre> tags.
+    html = restore(html);
     html = html.replace(/\n/g, '<br>');
     html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');

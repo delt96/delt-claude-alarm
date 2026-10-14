@@ -35,6 +35,7 @@ export interface SessionInfo {
   agentKind?: AgentKind;
   title?: string;
   closable?: boolean;
+  contextTokens?: number;
 }
 
 export interface QuestionOption {
@@ -68,6 +69,7 @@ export type ChannelMessage =
   | { type: 'hub_info'; features: string[] }
   | { type: 'status'; sessionId: string; status: SessionStatus }
   | { type: 'peer_name'; sessionId: string; peerName?: string }
+  | { type: 'context_tokens'; sessionId: string; tokens: number | null }
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel; to?: MessageSource }
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }

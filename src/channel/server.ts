@@ -12,6 +12,8 @@ import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION } from '../shared/constants
 import { loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
 import { readPeerName } from './peer-name.js';
+import { readContextTokens } from './context-tokens.js';
+import { ContextTokenReporter } from './context-reporter.js';
 import { ASK_DROPPED, ASK_TOOL, ASK_UNSUPPORTED, askRequest, askResultText } from './ask.js';
 import { answerText } from '../shared/questions.js';
 import type { SessionStatus, NotifyLevel } from '../shared/types.js';
@@ -244,11 +246,21 @@ async function main() {
     logger.info(`Peer name: ${next ?? '(none)'}`);
     hubClient.send({ type: 'peer_name', sessionId, peerName: next });
   };
-  setTimeout(refreshPeerName, 2_000).unref();
-  setInterval(refreshPeerName, 30_000).unref();
+  const contextTokens = new ContextTokenReporter(hubClient, sessionId, () => readContextTokens());
+  const refreshSessionFacts = () => {
+    refreshPeerName();
+    contextTokens.refresh();
+  };
+  setTimeout(refreshSessionFacts, 2_000).unref();
+  setInterval(refreshSessionFacts, 30_000).unref();
 
   // Listen for messages from hub and forward to Claude via channel notification
   hubClient.onMessage(async (msg) => {
+    if (msg.type === 'hub_info') {
+      contextTokens.reset();
+      contextTokens.refresh();
+      return;
+    }
     if (msg.type === 'message_to_session' && msg.sessionId === sessionId) {
       logger.info(`Message from dashboard: ${msg.content}`);
       await server.notification({

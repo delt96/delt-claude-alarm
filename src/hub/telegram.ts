@@ -7,6 +7,7 @@ import type { TelegramConfig, SessionInfo, PermissionChoice, MessageSource, Ques
 import { sessionLabel } from '../shared/session-label.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { readAnswers } from '../shared/questions.js';
+import { linkify } from '../shared/links.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_CHOICE_MESSAGES = 200;
@@ -848,7 +849,8 @@ export class TelegramBot {
   /** Convert markdown to Telegram HTML (escape first, then apply formatting) */
   private mdToHtml(s: string): string {
     // Handle tables before escaping (convert to clean text format)
-    let text = s.replace(
+    // NUL marks the placeholders below; one in the input would be swapped for a kept token.
+    let text = s.replace(/\u0000/g, '').replace(
       /^(\|.+\|)\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/gm,
       (_match, header: string, body: string) => {
         const headerCells = header.split('|').filter((c: string) => c.trim()).map((c: string) => c.trim());
@@ -862,14 +864,18 @@ export class TelegramBot {
     // Extract code spans/blocks BEFORE escaping/formatting so that bold/italic
     // regexes can't cross into them and produce overlapping tags (Telegram rejects).
     const tokens: string[] = [];
+    // Escaped text of each token without tags: code inside a link title goes in as plain label text.
+    const plain: string[] = [];
     const placeholder = (i: number) => `\u0000CODE${i}\u0000`;
-    text = text.replace(/```(?:\w*)\n?([\s\S]*?)```/g, (_m, body: string) => {
-      const i = tokens.push(`<pre>${this.escHtml(body)}</pre>`) - 1;
-      return placeholder(i);
-    });
-    text = text.replace(/`([^`\n]+)`/g, (_m, body: string) => {
-      const i = tokens.push(`<code>${this.escHtml(body)}</code>`) - 1;
-      return placeholder(i);
+    const park = (html: string, text: string) => {
+      plain.push(text);
+      return placeholder(tokens.push(html) - 1);
+    };
+    text = text.replace(/```(?:\w*)\n?([\s\S]*?)```/g, (_m, body: string) => park(`<pre>${this.escHtml(body)}</pre>`, this.escHtml(body)));
+    text = text.replace(/`([^`\n]+)`/g, (_m, body: string) => park(`<code>${this.escHtml(body)}</code>`, this.escHtml(body)));
+    text = linkify(text, (href, label) => {
+      const shown = this.escHtml(label).replace(/\u0000CODE(\d+)\u0000/g, (_m, n: string) => plain[Number(n)] ?? '');
+      return park(`<a href="${this.escHtml(href).replace(/"/g, '&quot;')}">${shown}</a>`, shown);
     });
 
     let html = this.escHtml(text);
@@ -880,7 +886,7 @@ export class TelegramBot {
     // Italic: *...* (single line only, to avoid swallowing across blocks)
     html = html.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
 
-    // Restore code tokens
+    // Restore code and link tokens
     html = html.replace(/\u0000CODE(\d+)\u0000/g, (_m, n: string) => tokens[Number(n)] ?? '');
     return html;
   }

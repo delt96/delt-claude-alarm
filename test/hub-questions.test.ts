@@ -348,12 +348,12 @@ test('malformed and repeated questions are ignored, even after the first one clo
 
 test('a registering channel is told the hub supports questions, on every register', async () => {
   const first = await channel('s15');
-  assert.deepEqual(of(first.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions'] }]);
+  assert.deepEqual(of(first.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions', 'context_tokens'] }]);
   register(first.ws, 's15');
   await settle();
   assert.equal(of(first.inbox, 'hub_info').length, 2);
   const second = await channel('s15');
-  assert.deepEqual(of(second.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions'] }]);
+  assert.deepEqual(of(second.inbox, 'hub_info'), [{ type: 'hub_info', features: ['questions', 'context_tokens'] }]);
   second.ws.close();
 });
 
