@@ -51,6 +51,20 @@
     justify-content: space-between;
   }
   header h1 { font-size: 18px; font-weight: 600; }
+  .usage-strip {
+    flex: 1;
+    min-width: 0;
+    margin: 0 16px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: right;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .usage-sep { margin: 0 8px; opacity: 0.5; }
+  .usage-window.usage-mid { color: var(--yellow); }
+  .usage-window.usage-high { color: var(--red); }
   .header-right {
     display: flex;
     align-items: center;
@@ -933,6 +947,7 @@
 <body>
 <header>
   <h1>Claude Alarm</h1>
+  <div class="usage-strip" id="usageStrip" hidden></div>
   <div class="header-right">
     <button class="theme-toggle" id="settingsToggle" title="Notification settings">&#9881;</button>
     <button class="theme-toggle" id="themeToggle" title="Toggle theme">&#9790;</button>
@@ -1120,6 +1135,7 @@
     closeArmed: null,
     questionDrafts: {},  // requestId -> { questionId: { choice, other } }
     composing: false,
+    usageLimits: null,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -1543,6 +1559,10 @@
         }
         break;
       }
+      case 'usage_limits':
+        state.usageLimits = msg.limits || null;
+        renderUsageLimits();
+        break;
       case 'permission_resolved': {
         const req = (state.permissionRequests[msg.sessionId] || []).find(r => r.requestId === msg.requestId);
         if (req && !req.resolved) {
@@ -1557,6 +1577,39 @@
   }
 
   // --- Render ---
+  function formatAge(ms) {
+    if (!(ms >= 60_000)) return 'just now';
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`;
+    return `${Math.floor(ms / 3_600_000)} h ago`;
+  }
+
+  function usageWindowHtml(label, w, now) {
+    if (!w || typeof w.usedPercent !== 'number') return '';
+    if (typeof w.resetsAt === 'number' && w.resetsAt <= now) return `<span class="usage-window">${label} reset</span>`;
+    const pct = Math.round(w.usedPercent);
+    const level = pct >= 90 ? ' usage-high' : pct >= 70 ? ' usage-mid' : '';
+    const title = typeof w.resetsAt === 'number' ? ` title="${esc(`Resets ${new Date(w.resetsAt).toLocaleString()}`)}"` : '';
+    return `<span class="usage-window${level}"${title}>${label} ${pct}%</span>`;
+  }
+
+  function usageAgentHtml(name, limits, now) {
+    if (!limits) return '';
+    const parts = [usageWindowHtml('5h', limits.fiveHour, now), usageWindowHtml('7d', limits.sevenDay, now)].filter(Boolean);
+    if (!parts.length) return '';
+    const age = typeof limits.updatedAt === 'number' ? formatAge(now - limits.updatedAt) : 'unknown';
+    return `<span class="usage-agent" title="${esc(`${name} usage as of ${age}`)}">${esc(name)} ${parts.join(' · ')}</span>`;
+  }
+
+  function renderUsageLimits(now = Date.now()) {
+    const el = $('#usageStrip');
+    const limits = state.usageLimits || {};
+    const html = [usageAgentHtml('Claude', limits.claude, now), usageAgentHtml('Codex', limits.codex, now)]
+      .filter(Boolean)
+      .join('<span class="usage-sep">│</span>');
+    el.innerHTML = html;
+    el.hidden = !html;
+  }
+
   function formatTokens(n) {
     if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '';
     if (n < 1000) return String(Math.round(n));
@@ -3007,6 +3060,7 @@
     document.querySelector('.sessions-panel').classList.add('mobile-active');
   }
 
+  setInterval(() => renderUsageLimits(), 60_000);
   checkAuth().then((ok) => (ok ? connect() : showTokenForm()));
 })();
 </script>
