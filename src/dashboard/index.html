@@ -611,6 +611,7 @@
     font-family: monospace;
   }
   .message-body pre code { background: none; padding: 0; }
+  .message-body a { color: var(--blue); text-decoration: underline; word-break: break-all; }
   .message-body table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
   .message-body th, .message-body td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
   .message-body th { background: var(--bg); font-weight: 600; }
@@ -2011,10 +2012,39 @@
       .trim();
   }
 
+  function readableUrl(url) {
+    try { return decodeURI(url); } catch { return url; }
+  }
+
+  function splitTrailing(url) {
+    const count = (s, ch) => s.split(ch).length - 1;
+    let end = url.length;
+    while (end > 0) {
+      const c = url[end - 1];
+      const body = url.slice(0, end);
+      if (`.,;:!?'"`.includes(c) || (c === ')' && count(body, ')') > count(body, '(')) || (c === ']' && count(body, ']') > count(body, '['))) { end--; continue; }
+      break;
+    }
+    return [url.slice(0, end), url.slice(end)];
+  }
+
+  // Copy of src/shared/links.ts (used for Telegram); test/dashboard-links.test.ts runs both on one case list.
+  function linkify(text, keep) {
+    return text.replace(/\[([^\]\n]+)\]\(([^\s()]*(?:\([^\s()]*\)[^\s()]*)*)\)|(https?:\/\/[^\s<>"'`]+)/gi, (match, title, href, bare) => {
+      if (bare === undefined) return /^https?:\/\//i.test(href) ? keep(href, title) : match;
+      const [url, tail] = splitTrailing(bare);
+      return /^https?:\/\/./i.test(url) ? keep(url, readableUrl(url)) + tail : match;
+    });
+  }
+
   function renderMarkdown(text) {
-    let html = esc(text);
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    const kept = [];
+    const keep = (part) => `${kept.push(part) - 1}`;
+    let src = String(text);
+    src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, body) => keep(`<pre><code>${esc(body)}</code></pre>`));
+    src = src.replace(/`([^`]+)`/g, (_m, body) => keep(`<code>${esc(body)}</code>`));
+    src = linkify(src, (href, label) => keep(`<a href="${esc(href).replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`));
+    let html = esc(src);
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
@@ -2030,6 +2060,8 @@
     });
     html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // Restore before the newline pass: the <br> cleanup below needs to see the <pre> tags.
+    html = html.replace(/(\d+)/g, (m, n) => kept[Number(n)] ?? m);
     html = html.replace(/\n/g, '<br>');
     html = html.replace(/<br>\s*(<\/?(?:pre|h[2-4]|ul|li|table|thead|tbody|tr))/g, '$1');
     html = html.replace(/(<\/(?:pre|h[2-4]|ul|table)>)\s*<br>/g, '$1');
