@@ -41,7 +41,19 @@ test('the strip shows both agents with rounded percentages', () => {
   const text = strip.innerHTML.replace(/<[^>]+>/g, '');
   assert.equal(text, 'Claude 5h 42% · 7d 18%│Codex 5h 99% · 7d 35%');
   assert.match(strip.innerHTML, /title="Claude usage as of 2 min ago"/);
-  assert.match(strip.innerHTML, /class="usage-window usage-high"[^>]*>5h 99%/);
+  assert.match(strip.innerHTML, /class="usage-window usage-high"[^>]*>5h <span class="usage-bar"[^]*?99%/);
+});
+
+test('each window shows a bar filled to its percentage next to the number', () => {
+  const { ctx, strip } = load({
+    claude: { fiveHour: { usedPercent: 42.4, resetsAt: null }, sevenDay: { usedPercent: 140, resetsAt: null }, updatedAt: NOW },
+    codex: { fiveHour: { usedPercent: 99, resetsAt: null }, updatedAt: NOW },
+  });
+  ctx.renderUsageLimits(NOW);
+  const bar = (pct: number) => `<span class="usage-bar" aria-hidden="true"><span class="usage-fill" style="width:${pct}%"></span></span>`;
+  assert.ok(strip.innerHTML.includes(`5h ${bar(42)}42%`), strip.innerHTML);
+  assert.ok(strip.innerHTML.includes(`7d ${bar(100)}100%`), strip.innerHTML);
+  assert.match(strip.innerHTML, /class="usage-window usage-high"[^>]*>5h <span class="usage-bar"[^]*?99%/);
 });
 
 test('a window past its reset time says reset', () => {
@@ -68,6 +80,7 @@ test('on phones the strip takes its own row and the panels shrink to fit', () =>
   assert.match(mobile, /header \{[^}]*flex-wrap: wrap;/);
   assert.match(mobile, /\.usage-strip \{[^}]*order: 3;[^}]*flex-basis: 100%;/);
   assert.match(mobile, /body:has\(#usageStrip:not\(\[hidden\]\)\) \.container \{[^}]*height: calc\(100vh - 119px\);/);
+  assert.match(mobile, /\.usage-bar \{ display: none; \}/);
 });
 
 test('the header keeps the strip on one line', () => {

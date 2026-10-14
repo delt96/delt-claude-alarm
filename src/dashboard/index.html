@@ -65,6 +65,19 @@
   .usage-sep { margin: 0 8px; opacity: 0.5; }
   .usage-window.usage-mid { color: var(--yellow); }
   .usage-window.usage-high { color: var(--red); }
+  .usage-bar {
+    display: inline-block;
+    width: 32px;
+    height: 4px;
+    margin: 0 4px 0 2px;
+    border-radius: 2px;
+    background: var(--border);
+    vertical-align: middle;
+    overflow: hidden;
+  }
+  .usage-fill { display: block; height: 100%; background: var(--text-dim); }
+  .usage-mid .usage-fill { background: var(--yellow); }
+  .usage-high .usage-fill { background: var(--red); }
   .header-right {
     display: flex;
     align-items: center;
@@ -930,6 +943,7 @@
     }
     /* 119px = 97px + the strip's row (16px line + 6px margin); keep in step with .usage-strip */
     body:has(#usageStrip:not([hidden])) .container { height: calc(100vh - 119px); }
+    .usage-bar { display: none; }
     .sessions-panel, .messages-panel, .notifications-panel {
       border: none;
       display: none;
@@ -1595,10 +1609,11 @@
   function usageWindowHtml(label, w, now) {
     if (!w || typeof w.usedPercent !== 'number') return '';
     if (typeof w.resetsAt === 'number' && w.resetsAt <= now) return `<span class="usage-window">${label} reset</span>`;
-    const pct = Math.round(w.usedPercent);
+    const pct = Math.min(Math.max(Math.round(w.usedPercent), 0), 100);
     const level = pct >= 90 ? ' usage-high' : pct >= 70 ? ' usage-mid' : '';
     const title = typeof w.resetsAt === 'number' ? ` title="${esc(`Resets ${new Date(w.resetsAt).toLocaleString()}`)}"` : '';
-    return `<span class="usage-window${level}"${title}>${label} ${pct}%</span>`;
+    const bar = `<span class="usage-bar" aria-hidden="true"><span class="usage-fill" style="width:${pct}%"></span></span>`;
+    return `<span class="usage-window${level}"${title}>${label} ${bar}${pct}%</span>`;
   }
 
   function usageAgentHtml(name, limits, now) {
