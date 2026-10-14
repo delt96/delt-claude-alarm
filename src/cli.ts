@@ -7,7 +7,7 @@ import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodex
 import { findCodex } from './codex/transport.js';
 import { runFromCli } from './codex/run.js';
 import { exitAfterFlush } from './codex/shutdown.js';
-import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE } from './shared/constants.js';
+import { PID_FILE, LOG_FILE, DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, CODEX_PID_FILE, CODEX_LOG_FILE, CONFIG_DIR, CONFIG_FILE, STATUSLINE_ORIGINAL_FILE } from './shared/constants.js';
 import { logger } from './shared/logger.js';
 import { installCrashGuard, logStartup } from './shared/crash-guard.js';
 import { waitForHub, HUB_START_TIMEOUT_MS } from './hub/readiness.js';
@@ -16,6 +16,8 @@ import { resolveAdapterHub } from './codex/hub-target.js';
 import { startAdapter } from './codex/start-check.js';
 import { controlEndpoint, queryOwner, requestStop } from './codex/instance-lock.js';
 import { adapterStatus, legacyNote, stopAdapter, type ControlDeps } from './codex/control-cli.js';
+import { installStatusLine, uninstallStatusLine } from './statusline/install.js';
+import { claudeConfigDir } from './channel/peer-name.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +53,11 @@ Usage:
                                  it carries over to later turns on the thread)
                                 (--yolo: no sandbox and no approvals, like codex --yolo)
                                 (claude-alarm codex run --help: every option, the result JSON and exit codes)
+  claude-alarm statusline install [--replace]
+                                Show Claude 5-hour and weekly usage in the dashboard through Claude Code's status line
+                                (--replace: replace an existing status line; uninstall puts it back)
+  claude-alarm statusline uninstall
+                                Remove the claude-alarm status line
   claude-alarm help             Show this help
 
 Quick start:
@@ -494,6 +501,41 @@ async function main() {
     }
     else {
       console.error(`Unknown codex command: ${sub}`);
+      printUsage();
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'statusline') {
+    const files = { settingsFile: path.join(claudeConfigDir(), 'settings.json'), originalFile: STATUSLINE_ORIGINAL_FILE, scriptPath: path.join(__dirname, 'statusline.js') };
+    if (sub === 'install') {
+      const result = installStatusLine({ ...files, replace: args.includes('--replace') });
+      if (result.ok) {
+        console.log(`✓ Status line ${result.action} in ${files.settingsFile}. New Claude Code sessions report their usage limits.`);
+      } else if (result.reason === 'npx') {
+        console.error('Install claude-alarm globally first (npm i -g @delt/claude-alarm); an npx copy can move.');
+        process.exitCode = 1;
+      } else if (result.reason === 'bad-settings') {
+        console.error(`${files.settingsFile} is not valid JSON; nothing was changed.`);
+        process.exitCode = 1;
+      } else {
+        console.error(`A status line is already set: ${result.detail}\nRun with --replace to replace it (uninstall puts it back).`);
+        process.exitCode = 1;
+      }
+    } else if (sub === 'uninstall') {
+      const result = uninstallStatusLine(files);
+      if (result.ok) {
+        console.log(result.action === 'absent' ? 'No status line is set.' : `✓ Status line ${result.action} in ${files.settingsFile}.`);
+      } else if (result.reason === 'bad-settings') {
+        console.error(`${files.settingsFile} is not valid JSON; nothing was changed.`);
+        process.exitCode = 1;
+      } else {
+        console.error(`The status line is not claude-alarm's; left as is: ${result.detail}`);
+        process.exitCode = 1;
+      }
+    } else {
+      console.error(`Unknown statusline command: ${sub}`);
       printUsage();
       process.exit(1);
     }
