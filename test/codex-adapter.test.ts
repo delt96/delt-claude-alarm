@@ -302,7 +302,7 @@ const NOT_FOUND_NOTICE = {
   level: 'warning',
 };
 
-function missingCodexAdapter(hub: { host: string; port: number; token?: string }, counter: { attempts: number }, noticeTimeoutMs?: number): CodexAdapter {
+function missingCodexAdapter(hub: { host: string; port: number; token?: string | (() => string | undefined) }, counter: { attempts: number }, noticeTimeoutMs?: number): CodexAdapter {
   return new CodexAdapter({
     command: MISSING,
     hub,
@@ -327,6 +327,20 @@ test('a missing Codex binary is reported to the hub once', async () => {
     await until(() => counter.attempts >= seen + 3);
     assert.equal(rec.requests.length, 1);
     assert.deepEqual(rec.requests[0], { method: 'POST', url: '/api/notify', auth: `Bearer ${TOKEN}`, body: NOT_FOUND_NOTICE });
+  } finally {
+    adapter?.stop();
+    await rec.close();
+  }
+});
+
+test('the not-found notice signs with the token the source gives now', async () => {
+  const rec = await recordingHub();
+  const counter = { attempts: 0 };
+  try {
+    adapter = missingCodexAdapter({ ...rec.hub, token: () => 'token-from-source' }, counter);
+    adapter.start();
+    await until(() => rec.requests.length >= 1);
+    assert.equal(rec.requests[0].auth, 'Bearer token-from-source');
   } finally {
     adapter?.stop();
     await rec.close();

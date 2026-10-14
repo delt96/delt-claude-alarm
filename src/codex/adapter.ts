@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
-import type { TokenSource } from '../shared/config.js';
+import { currentToken, type TokenSource } from '../shared/config.js';
 import type { ChannelMessage, CodexCall, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { imageInput, textInput, type UserInput } from './inputs.js';
@@ -199,7 +199,8 @@ export class CodexAdapter {
   private noticeNotFound(): void {
     if (this.notFoundNotice !== 'unsent') return;
     this.notFoundNotice = 'sending';
-    const { host, port, token } = this.opts.hub;
+    const { host, port } = this.opts.hub;
+    const token = currentToken(this.opts.hub.token);
     fetch(`http://${host}:${port}/api/notify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
