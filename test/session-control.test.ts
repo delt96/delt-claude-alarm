@@ -131,3 +131,56 @@ test('after /clear the result is still read from the old id', () => {
   s.control.refresh();
   assert.ok(s.sent.some((m) => m.requestId === 'r6' && m.ok === true));
 });
+
+test('a second command while one is pending is refused and leaves the command file alone', () => {
+  const s = setup();
+  s.put(s.file('alive'), { busy: false, at: s.now() });
+  s.control.command('r7', 'compact');
+  s.control.command('r8', 'clear');
+  assert.equal(s.last().requestId, 'r8');
+  assert.equal(s.last().reason, 'a command is already running in this session');
+  assert.equal(JSON.parse(fs.readFileSync(s.file('command'), 'utf8')).id, 'r7');
+});
+
+test('when the Claude session id changes, the old id\'s ended files are removed', () => {
+  const s = setup();
+  s.put(s.file('alive'), { busy: false, at: s.now() });
+  s.control.refresh();
+  s.put(s.file('alive'), { busy: false, at: s.now(), ended: true });
+  s.put(s.file('result'), { id: 'old', ok: true, at: s.now() });
+  s.setSid('s2');
+  s.put(s.file('alive', 's2'), { busy: false, at: s.now() });
+  s.control.refresh();
+  assert.equal(fs.existsSync(s.file('alive')), false);
+  assert.equal(fs.existsSync(s.file('result')), false);
+  assert.deepEqual(s.last().control, { busy: false });
+});
+
+test('the old id is kept while a command for it waits for its result', () => {
+  const s = setup();
+  s.put(s.file('alive'), { busy: false, at: s.now() });
+  s.control.command('r9', 'clear');
+  s.control.refresh();
+  s.put(s.file('alive'), { busy: false, at: s.now(), ended: true });
+  s.setSid('s2');
+  s.control.refresh();
+  assert.equal(fs.existsSync(s.file('command')), true);
+  s.put(s.file('result'), { id: 'r9', ok: true, at: s.now() });
+  s.control.refresh();
+  assert.ok(s.sent.some((m) => m.requestId === 'r9' && m.ok === true));
+});
+
+test('the first refresh sweeps control files older than a day', () => {
+  const s = setup();
+  const old = s.file('alive', 'gone');
+  s.put(old, { busy: false, at: 1, ended: true });
+  s.put(s.file('result', 'gone'), { id: 'x', ok: true, at: 1 });
+  const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  fs.utimesSync(old, dayAgo, dayAgo);
+  fs.utimesSync(s.file('result', 'gone'), dayAgo, dayAgo);
+  s.put(s.file('alive'), { busy: false, at: s.now() });
+  s.control.refresh();
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(s.file('result', 'gone')), false);
+  assert.equal(fs.existsSync(s.file('alive')), true);
+});

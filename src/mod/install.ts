@@ -35,8 +35,12 @@ function backup(opts: Files): void {
   }
 }
 
+export function isNpxPath(p: string): boolean {
+  return /[\\/]_npx[\\/]/.test(p);
+}
+
 export function installMod(opts: Files & { modDir: string; controlDir: string }): ModInstallResult {
-  if (/[\\/]_npx[\\/]/.test(opts.modDir)) return { ok: false, reason: 'npx' };
+  if (isNpxPath(opts.modDir)) return { ok: false, reason: 'npx' };
   const read = readJsonObject(opts.settingsFile);
   if (!read.ok) return { ok: false, reason: 'bad-settings' };
   const settings = read.value ?? {};

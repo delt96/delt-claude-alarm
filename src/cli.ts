@@ -17,7 +17,7 @@ import { startAdapter } from './codex/start-check.js';
 import { controlEndpoint, queryOwner, requestStop } from './codex/instance-lock.js';
 import { adapterStatus, legacyNote, stopAdapter, type ControlDeps } from './codex/control-cli.js';
 import { installStatusLine, uninstallStatusLine } from './statusline/install.js';
-import { installMod, uninstallMod } from './mod/install.js';
+import { installMod, isNpxPath, uninstallMod } from './mod/install.js';
 import { claudeConfigDir } from './channel/peer-name.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -369,8 +369,12 @@ async function init() {
     }
   }
 
-  const control = await ask('\nShow /compact and /clear buttons on the dashboard for Claude Code sessions on this PC? (Y/n): ');
-  if (control.toLowerCase() !== 'n') installModFromCli();
+  if (isNpxPath(__dirname)) {
+    console.log('\nFor /compact and /clear buttons on the dashboard, install globally (npm i -g @delt/claude-alarm) and run: claude-alarm mod install');
+  } else {
+    const control = await ask('\nShow /compact and /clear buttons on the dashboard for Claude Code sessions on this PC? (Y/n): ');
+    if (control.toLowerCase() !== 'n') installModFromCli();
+  }
 
   console.log(`\nNext step:`);
   console.log(`  claude --dangerously-load-development-channels server:claude-alarm`);

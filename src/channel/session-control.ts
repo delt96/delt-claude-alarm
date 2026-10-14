@@ -11,6 +11,7 @@ export const SESSION_CONTROL_FEATURE = 'session_control';
 
 // Two more mod polls past the command's lifetime, so an 'expired' answer still arrives before we give up.
 const ANSWER_WAIT_MS = COMMAND_TTL_MS + 2 * POLL_MS;
+const SWEEP_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface ControlHub {
   supports(feature: string): boolean;
@@ -40,6 +41,8 @@ function remove(file: string): void {
 
 export class SessionControl {
   private last: string | undefined;
+  private lastSid: string | undefined;
+  private swept = false;
   private lastAlive: { sid: string; alive: AliveRecord } | undefined;
   private readonly pending = new Map<string, { sid: string; at: number }>();
   private readonly now: () => number;
@@ -55,8 +58,14 @@ export class SessionControl {
   refresh(): void {
     if (!this.hub.supports(SESSION_CONTROL_FEATURE)) return;
     const now = this.now();
+    if (!this.swept) {
+      this.swept = true;
+      this.sweepOldFiles();
+    }
     this.collectResults(now);
     const sid = this.currentSession();
+    if (this.lastSid && this.lastSid !== sid) this.forget(this.lastSid, now);
+    this.lastSid = sid;
     const control = sid ? this.stateOf(sid, now) : null;
     const key = JSON.stringify(control);
     if (key === this.last) return;
@@ -74,6 +83,8 @@ export class SessionControl {
     const fail = (reason: string) => this.reply(requestId, false, reason);
     const sid = this.currentSession();
     if (!sid) return fail('the Claude Code session was not found');
+    // The hub's busy flag lags the mod by a poll, so a second tab could otherwise overwrite a command the mod is about to run.
+    if ([...this.pending.values()].some((p) => p.sid === sid)) return fail('a command is already running in this session');
     const now = this.now();
     const alive = this.aliveOf(sid, now);
     if (!alive) return fail('the claude-alarm mod is not running in this session');
@@ -142,6 +153,34 @@ export class SessionControl {
       } else if (now - p.at > ANSWER_WAIT_MS) {
         this.settle(requestId, p.sid);
         this.reply(requestId, false, 'no answer from the session');
+      }
+    }
+  }
+
+  // After /clear the old id is never read again; a command still waiting on it keeps its files until settle().
+  private forget(sid: string, now: number): void {
+    if ([...this.pending.values()].some((p) => p.sid === sid)) return;
+    const alive = parseAlive(readRecord(controlFile(this.opts.controlDir, 'alive', sid)));
+    if (alive && !alive.ended && now - alive.at <= ALIVE_STALE_MS) return;
+    for (const kind of ['command', 'result', 'alive'] as const) remove(controlFile(this.opts.controlDir, kind, sid));
+  }
+
+  // A session that exits takes its channel server with it, so nobody reads its ended record; sweep leftovers once per start.
+  private sweepOldFiles(): void {
+    const cutoff = Date.now() - SWEEP_AGE_MS;
+    for (const kind of ['alive', 'command', 'result']) {
+      const dir = path.join(this.opts.controlDir, kind);
+      let names: string[];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        const file = path.join(dir, name);
+        try {
+          if (fs.statSync(file).mtimeMs < cutoff) remove(file);
+        } catch {}
       }
     }
   }

@@ -77,3 +77,10 @@ test('a checkout under another folder name is still recognised as ours, by its m
   assert.deepEqual(uninstallMod(s), { ok: true, action: 'removed' });
   assert.equal(s.read().env.CLAUDE_CODE_PLUGIN_DIRS, ADVISOR);
 });
+
+test('isNpxPath tells an npx copy apart from a global install', async () => {
+  const { isNpxPath } = await import('../src/mod/install.js');
+  assert.equal(isNpxPath(['C:', 'Users', 'u', 'AppData', 'Local', 'npm-cache', '_npx', '1', 'node_modules', '@delt', 'claude-alarm', 'dist'].join('\\')), true);
+  assert.equal(isNpxPath('/home/u/.npm/_npx/1/node_modules/@delt/claude-alarm/dist'), true);
+  assert.equal(isNpxPath(MOD), false);
+});
