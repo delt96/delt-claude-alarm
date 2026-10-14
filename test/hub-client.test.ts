@@ -133,3 +133,28 @@ test('send reports whether a message went out, was queued, or was dropped becaus
   for (let i = 0; i < 100; i++) assert.equal(client.send(msg), 'queued');
   assert.equal(client.send(msg), 'dropped');
 });
+
+test('after the hub token changes, a client given a token source reconnects with the new token', async () => {
+  let token = TOKEN;
+  const client = new HubClient('x9', 'x9', '127.0.0.1', PORT, () => token);
+  client.connect();
+  const renamed = { ...config, hub: { ...config.hub, token: 'client-test-new' } };
+  try {
+    await until(async () => (await sessionsOrEmpty()).find((s) => s.id === 'x9'), 9000);
+    await hub.stop();
+    hub = new HubServer(renamed);
+    await hub.start();
+    token = 'client-test-new';
+    await until(async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { headers: { Authorization: 'Bearer client-test-new' } });
+        return ((await res.json()) as any).sessions.find((s: any) => s.id === 'x9');
+      } catch { return undefined; }
+    }, 9000);
+  } finally {
+    client.disconnect();
+    await hub.stop();
+    hub = new HubServer(config);
+    await hub.start();
+  }
+});

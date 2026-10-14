@@ -156,6 +156,31 @@ test('missing, non-string, wrong and different-length stop proofs are unauthoriz
   } finally { await release(a); }
 });
 
+test('a stop with the token now saved in the config is accepted too', async () => {
+  const endpoint = freshEndpoint();
+  let saved: string | undefined = 'secret';
+  const o = { ...owner(7, 'secret'), currentToken: () => saved };
+  o.onStop = () => { o.stops++; };
+  const a = await acquireLock(endpoint, o);
+  try {
+    saved = 'changed-later';
+    assert.deepEqual(await requestStop(endpoint, 'other'), { state: 'unauthorized' });
+    assert.deepEqual(await requestStop(endpoint, 'changed-later'), { state: 'stopping', pid: 7 });
+    await until(() => o.stops === 1);
+  } finally { await release(a); }
+});
+
+test('an empty saved token does not unlock the stop', async () => {
+  const endpoint = freshEndpoint();
+  const o = { ...owner(7, ''), currentToken: () => '' };
+  o.onStop = () => { o.stops++; };
+  const a = await acquireLock(endpoint, o);
+  try {
+    assert.deepEqual(await requestStop(endpoint, ''), { state: 'unauthorized' });
+    assert.equal(o.stops, 0);
+  } finally { await release(a); }
+});
+
 test('an owner without a token refuses every stop', async () => {
   const endpoint = freshEndpoint();
   const o = owner(7, '');

@@ -35,6 +35,7 @@ export type Attempt = Acquired | { kind: 'busy' };
 export interface LockOwner {
   pid: number;
   token: string;
+  currentToken?: () => string | undefined;
   onStop: () => void;
 }
 
@@ -119,8 +120,18 @@ export async function requestStop(endpoint: string, token: string, timeoutMs = 1
 
 const line = (message: object) => `${JSON.stringify(message)}\n`;
 
+// `claude-alarm token new` changes the saved token while the adapter runs; `codex stop` then signs with the new one.
+function acceptsProof(owner: LockOwner, proof: Buffer): boolean {
+  const tokens = new Set([owner.token, owner.currentToken?.() ?? '']);
+  tokens.delete('');
+  for (const token of tokens) {
+    const expected = Buffer.from(stopProof(token));
+    if (proof.length === expected.length && crypto.timingSafeEqual(proof, expected)) return true;
+  }
+  return false;
+}
+
 function controlServer(owner: LockOwner): net.Server {
-  const expectedProof = Buffer.from(stopProof(owner.token));
   return net.createServer((socket) => {
     let buffer = '';
     socket.setEncoding('utf8');
@@ -144,7 +155,7 @@ function controlServer(owner: LockOwner): net.Server {
         socket.end(line({ type: 'status', protocol: CONTROL_PROTOCOL, pid: owner.pid }));
       } else if (request?.type === 'stop') {
         const proof = typeof request.proof === 'string' ? Buffer.from(request.proof) : undefined;
-        if (owner.token !== '' && proof && proof.length === expectedProof.length && crypto.timingSafeEqual(proof, expectedProof)) {
+        if (proof && acceptsProof(owner, proof)) {
           socket.end(line({ type: 'stopping', pid: owner.pid }), () => owner.onStop());
         } else {
           socket.end(line({ type: 'error', error: 'unauthorized' }));

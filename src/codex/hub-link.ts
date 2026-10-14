@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { WS_PATH_CODEX } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
+import { currentToken, type TokenSource } from '../shared/config.js';
 import type { CodexCall, CodexLinkMessage } from '../shared/types.js';
 
 export class CodexHubLink {
@@ -11,7 +12,7 @@ export class CodexHubLink {
   private ready = false;
 
   constructor(
-    private hub: { host: string; port: number; token?: string },
+    private hub: { host: string; port: number; token?: TokenSource },
     private identity: { id: string; host: string },
     private onCall: (call: CodexCall) => Promise<unknown>,
     private reconnectMs = 5000,
@@ -20,7 +21,8 @@ export class CodexHubLink {
 
   connect(): void {
     this.closed = false;
-    const query = this.hub.token ? `?token=${encodeURIComponent(this.hub.token)}` : '';
+    const token = currentToken(this.hub.token);
+    const query = token ? `?token=${encodeURIComponent(token)}` : '';
     let ws: WebSocket;
     try {
       ws = new WebSocket(`ws://${this.hub.host}:${this.hub.port}${WS_PATH_CODEX}${query}`);

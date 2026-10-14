@@ -52,6 +52,38 @@ export function getOrCreateToken(): string {
   return config.hub.token!;
 }
 
+const MIN_TOKEN_LENGTH = 16;
+
+export function setHubToken(token: string = randomUUID()): string {
+  if (token.length < MIN_TOKEN_LENGTH) throw new Error(`The token must be at least ${MIN_TOKEN_LENGTH} characters long.`);
+  if (/\s/.test(token)) throw new Error('The token must not contain spaces.');
+  const config = loadConfig();
+  config.hub.token = token;
+  saveConfig(config);
+  return token;
+}
+
+// Unlike loadConfig this never writes: a config caught mid-write would otherwise be replaced by defaults and a new token.
+export function readSavedToken(): string | undefined {
+  try {
+    const token = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'))?.hub?.token;
+    return typeof token === 'string' && token !== '' ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export type TokenSource = string | (() => string | undefined);
+
+export function hubTokenSource(envToken: string | undefined, startToken: string | undefined): TokenSource | undefined {
+  if (envToken !== undefined) return envToken;
+  return () => readSavedToken() ?? startToken;
+}
+
+export function currentToken(source: TokenSource | undefined): string | undefined {
+  return typeof source === 'function' ? source() : source;
+}
+
 export function saveConfig(config: AppConfig): void {
   ensureConfigDir();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });

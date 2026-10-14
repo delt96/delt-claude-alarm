@@ -94,6 +94,8 @@ The conversation header shows **/compact** and **/clear** buttons for a Claude C
 | `claude-alarm hub stop` | Stop hub daemon |
 | `claude-alarm hub status` | Show hub status |
 | `claude-alarm token` | Show auth token |
+| `claude-alarm token new` | Replace the auth token with a new random one |
+| `claude-alarm token set <token>` | Use your own token (16+ characters, no spaces) |
 | `claude-alarm test` | Send test notification |
 | `claude-alarm codex enable` / `disable` | Start (or stop starting) the Codex adapter with the hub |
 | `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC. `start` tells you whether the adapter reached Codex and whether the hub answers at the configured address; `stop` and `status` ask the running adapter itself |
@@ -252,6 +254,14 @@ Every connection to the hub needs the hub token — including ones from the same
 - **Channel servers** read it from `~/.claude-alarm/config.json` automatically (or `CLAUDE_ALARM_HUB_TOKEN`).
 - **Dashboard**: open the login link printed by `claude-alarm hub start` (`http://127.0.0.1:7900/?token=…`), or paste the token from `claude-alarm token` into the login form. The browser keeps an HttpOnly cookie for 30 days, and the token is removed from the URL.
 - **CLI / scripts**: send `Authorization: Bearer <token>`.
+
+### Changing the token
+
+1. On the hub machine run `claude-alarm token new` (or `claude-alarm token set <token>`), then restart the hub: `claude-alarm hub stop`, `claude-alarm hub start -d`.
+2. On every other machine that connects to this hub run `claude-alarm token set <the new token>`.
+3. Open the dashboard with the new login link; the old cookie no longer works.
+
+Running Claude sessions and Codex adapters that read the token from `config.json` pick up the new one when they reconnect, so they do not need a restart. Ones started with `CLAUDE_ALARM_HUB_TOKEN` (for example from a `.mcp.json` written by `claude-alarm init`) keep that value: update or remove it there and restart the session.
 
 > Upgrading from 0.9.x: a local session that sets `CLAUDE_ALARM_HUB_TOKEN` to a different value than the hub's token no longer connects. Scripts that called the local API without a token now get `401`.
 

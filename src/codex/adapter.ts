@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { HubClient } from '../channel/hub-client.js';
 import { CHANNEL_SERVER_VERSION } from '../shared/constants.js';
 import { logger } from '../shared/logger.js';
+import type { TokenSource } from '../shared/config.js';
 import type { ChannelMessage, CodexCall, MessageSource, NotifyLevel, SessionInfo } from '../shared/types.js';
 import { connectProxy, type ProxyConnection, type SpawnFn } from './transport.js';
 import { imageInput, textInput, type UserInput } from './inputs.js';
@@ -32,7 +33,7 @@ export type FirstConnect =
 
 export interface CodexAdapterOptions {
   command: string;
-  hub: { host: string; port: number; token?: string };
+  hub: { host: string; port: number; token?: TokenSource };
   spawnFn?: SpawnFn;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
