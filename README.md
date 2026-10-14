@@ -66,6 +66,8 @@ Open `http://127.0.0.1:7900` in your browser.
   <img src="https://raw.githubusercontent.com/delt96/delt-claude-alarm/main/docs/dashboard-preview.png" alt="Dashboard" width="800">
 </p>
 
+Session cards show each Claude session's context size (for example `· 133k`; hover for the exact count). The channel server reads it from the session's transcript under `~/.claude/projects` every 30 seconds. Links in session messages open in a new tab and show their title, or the decoded address for a bare URL.
+
 ## CLI Commands
 
 | Command | Description |
@@ -172,6 +174,7 @@ Two-way messaging with Claude sessions via Telegram — text and images.
 - Send a new message → auto-delivered if 1 session, or pick from a list
 - Send photos from Telegram → downloaded and forwarded to Claude
 - Photo captions included as text alongside the image
+- Markdown links in session messages arrive as tappable links that show their title
 
 ```json
 {

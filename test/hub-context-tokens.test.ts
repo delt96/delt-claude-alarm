@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 import { HubServer } from '../src/hub/server.js';
 
-const PORT = 7997;
+const PORT = 7984;
 const settle = () => new Promise((r) => setTimeout(r, 150));
 
 function connect(path: string, inbox: any[]): Promise<WebSocket> {
