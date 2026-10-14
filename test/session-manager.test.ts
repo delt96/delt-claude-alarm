@@ -64,3 +64,15 @@ test('re-registering with a new title renames the session', () => {
   sm.register({ ...makeSession('c1'), title: 'New' });
   assert.equal(sm.get('c1')?.displayName, 'New');
 });
+
+test('setContextTokens keeps non-negative integers and clears anything else', () => {
+  const sm = new SessionManager();
+  sm.register(makeSession('a'));
+  assert.equal(sm.setContextTokens('a', 132854)?.contextTokens, 132854);
+  assert.equal(sm.setContextTokens('a', 0)?.contextTokens, 0);
+  for (const bad of [null, -1, 1.5, '12', Number.NaN, Number.POSITIVE_INFINITY]) {
+    sm.setContextTokens('a', 5);
+    assert.equal(sm.setContextTokens('a', bad)?.contextTokens, undefined, String(bad));
+  }
+  assert.equal(sm.setContextTokens('ghost', 1), undefined);
+});

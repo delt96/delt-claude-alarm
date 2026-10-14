@@ -497,6 +497,12 @@ export class HubServer {
         break;
       }
 
+      case 'context_tokens': {
+        const updated = this.sessions.setContextTokens(msg.sessionId, msg.tokens);
+        if (updated) this.broadcastToDashboards({ type: 'session_updated', session: updated });
+        break;
+      }
+
       case 'notify': {
         this.sessions.updateActivity(msg.sessionId);
         const notifySession = this.sessions.get(msg.sessionId);

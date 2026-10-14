@@ -53,6 +53,14 @@ export class SessionManager {
     return session;
   }
 
+  setContextTokens(sessionId: string, tokens: unknown): SessionInfo | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.contextTokens = Number.isSafeInteger(tokens) && (tokens as number) >= 0 ? (tokens as number) : undefined;
+    }
+    return session;
+  }
+
   updateActivity(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
