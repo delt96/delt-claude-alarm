@@ -325,7 +325,61 @@ export interface RunIo {
   spawnFn?: SpawnFn;
 }
 
+export const RUN_HELP = `Usage: claude-alarm codex run --brief <file|-> [options]
+
+Hands one task to Codex through the shared daemon, waits for the turn to end and
+prints the result as JSON on stdout. Progress lines go to stderr. The conversation
+shows on the claude-alarm dashboard while it runs.
+
+Options:
+  --brief <file|->          The task text, from a file or stdin (-). Required.
+  --cwd <dir>               Working directory for Codex (default: the current one).
+  --thread <id>             Continue an earlier conversation (a threadId from a
+                            previous result), e.g. for a re-review.
+  --name <title>            Title of a new conversation.
+  --output-schema <file>    JSON Schema for the final answer; the parsed answer is
+                            then in "result".
+  --effort <level>          Reasoning effort for this turn, one the model offers
+                            (e.g. low, medium, high, xhigh). It carries over to
+                            later turns on the thread.
+  --timeout <min>           Interrupt the turn after this many minutes (default 60).
+  --approval-timeout <min>  Without --yolo, how long an approval request waits for
+                            an answer (on the dashboard, when the Codex adapter
+                            runs) before it is declined (default 10).
+  --yolo                    No sandbox and no approvals, like codex --yolo.
+                            Needed on Windows for anything that starts processes
+                            (git, tests, builds): Codex's sandbox fails them with
+                            EPERM. For a review, say in the brief not to change
+                            files.
+  -h, --help                Show this help.
+
+Result (stdout):
+  {
+    "threadId":   conversation id, for --thread
+    "turnId":     this turn's id
+    "status":     "completed" | "failed" | "interrupted" | "timedOut"
+    "error":      why it failed, or null
+    "finalText":  Codex's final answer as text (a review's body is here)
+    "result":     finalText parsed as JSON with --output-schema, otherwise null
+    "approvals":  approval requests during the turn and what happened to each
+    "durationMs": run time
+    "codex":      { "userAgent": the Codex build }
+  }
+
+Exit codes:
+  0  status is "completed"
+  1  status is "failed", "interrupted" or "timedOut" (the JSON is still printed)
+  2  bad arguments, unreadable brief or schema, or Codex could not be started
+
+A long task (e.g. an xhigh review) can take more than 10 minutes; run it in the
+background rather than under a short command timeout.
+`;
+
 export async function runFromCli(argv: string[], io: RunIo): Promise<number> {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    io.out(RUN_HELP);
+    return 0;
+  }
   let task: CodexRunOptions;
   try {
     const args = parseRunArgs(argv);

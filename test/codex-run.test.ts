@@ -346,6 +346,19 @@ test('the CLI exits 2 without contacting Codex when the input is unusable', asyn
   }
 });
 
+test('--help prints the usage, the result fields and exit codes to stdout and exits 0 without contacting Codex', async () => {
+  for (const argv of [['--help'], ['-h'], ['--brief', 'missing.md', '--help'], ['--timeout', 'x', '-h']]) {
+    const c = cliIo(undefined, {});
+    assert.equal(await runFromCli(argv, c.io), 0, argv.join(' '));
+    assert.equal(c.err.length, 0);
+    const text = c.out.join('');
+    for (const word of ['--brief', '--cwd', '--thread', '--name', '--output-schema', '--effort', '--approval-timeout', '--timeout', '--yolo',
+      'threadId', 'status', 'finalText', 'result', 'approvals', 'completed', 'timedOut', 'EPERM']) {
+      assert.ok(text.includes(word), `${argv.join(' ')}: missing ${word}`);
+    }
+  }
+});
+
 test('run arguments without a brief, with unknown flags or bad numbers are rejected', () => {
   assert.throws(() => parseRunArgs([]), /--brief/);
   assert.throws(() => parseRunArgs(['--brief', 'b', '--model', 'x']), /--model/);
