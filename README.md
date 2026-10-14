@@ -68,6 +68,14 @@ Open `http://127.0.0.1:7900` in your browser.
 
 Session cards show each Claude session's context size (for example `· 133k`; hover for the exact count). The channel server reads it from the session's transcript under `~/.claude/projects` every 30 seconds. Links in session messages open in a new tab and show their title, or the decoded address for a bare URL.
 
+### Usage limits
+
+The header shows how much of the 5-hour and weekly limits Claude and Codex have used.
+
+- **Claude**: run `claude-alarm statusline install` once (needs a global install). Claude Code passes its limits to the status line, which saves them for the hub; the status line itself shows `5h 42% · 7d 18%`. Values refresh when a session on this PC gets a response, and appear only for subscription accounts. An existing status line is left alone unless you pass `--replace`.
+- **Codex**: read from the newest session files in `~/.codex/sessions` (or `CODEX_HOME`); nothing to install.
+- Values come from files on the PC running the hub. Hover a value for its reset time and how old it is.
+
 ## CLI Commands
 
 | Command | Description |
@@ -81,6 +89,8 @@ Session cards show each Claude session's context size (for example `· 133k`; ho
 | `claude-alarm codex enable` / `disable` | Start (or stop starting) the Codex adapter with the hub |
 | `claude-alarm codex start` / `stop` / `status` | Run the Codex adapter on its own, e.g. when Codex runs on another PC. `start` tells you whether the adapter reached Codex and whether the hub answers at the configured address; `stop` and `status` ask the running adapter itself |
 | `claude-alarm codex run --brief <file\|->` | Hand a task to Codex through the shared daemon and print the result as JSON (`--cwd`, `--thread`, `--name`, `--output-schema`, `--effort`, `--approval-timeout`, `--timeout`, `--yolo`; `claude-alarm codex run --help` explains each option, the result JSON and the exit codes) |
+| `claude-alarm statusline install [--replace]` | Report Claude's 5-hour and weekly usage to the dashboard through Claude Code's status line (`--replace` replaces an existing status line) |
+| `claude-alarm statusline uninstall` | Remove it, putting back a status line it replaced |
 
 ## Tools Available to Claude
 

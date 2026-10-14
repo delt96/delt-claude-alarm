@@ -89,6 +89,7 @@ export type ChannelMessage =
   | { type: 'permission_pending'; requests: PendingChoiceRequest[] }
   | { type: 'codex_adapters'; adapters: CodexAdapterInfo[] }
   | { type: 'codex_close'; sessionId: string }
+  | { type: 'usage_limits'; limits: UsageLimits }
   | ({ type: 'question' } & QuestionRequest)
   | { type: 'questions_pending'; requests: Array<QuestionRequest & { sending: boolean; answers?: QuestionAnswers; source?: MessageSource }> }
   | { type: 'question_answer'; sessionId: string; requestId: string; answers: QuestionAnswers; questions?: Question[]; source?: MessageSource }
@@ -134,6 +135,24 @@ export interface TelegramConfig {
 export interface CodexConfig {
   enabled: boolean;
   command?: string;
+}
+
+export interface LimitWindow {
+  usedPercent: number;
+  resetsAt: number | null;
+}
+
+export interface AgentLimits {
+  fiveHour?: LimitWindow;
+  sevenDay?: LimitWindow;
+  updatedAt: number;
+}
+
+export type LimitWindows = Omit<AgentLimits, 'updatedAt'>;
+
+export interface UsageLimits {
+  claude: AgentLimits | null;
+  codex: AgentLimits | null;
 }
 
 /** App configuration stored in ~/.claude-alarm/config.json */

@@ -19,6 +19,7 @@ export default defineConfig([
     entry: {
       'cli': 'src/cli.ts',
       'channel/server': 'src/channel/server.ts',
+      'statusline': 'src/statusline/main.ts',
     },
     format: ['esm'],
     target: 'node18',

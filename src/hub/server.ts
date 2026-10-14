@@ -22,7 +22,8 @@ import { CodexSupervisor, adapterEnv, resolveAdapterScript } from './codex-super
 import { loadConfig, saveConfig } from '../shared/config.js';
 import { sessionLabel } from '../shared/session-label.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
-import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexCall, CodexLinkMessage, MessageSource, QuestionAnswers, QuestionState } from '../shared/types.js';
+import type { ChannelMessage, AppConfig, SessionInfo, WebhookConfig, TelegramConfig, PermissionChoice, PendingChoiceRequest, CodexAdapterInfo, CodexCall, CodexLinkMessage, MessageSource, QuestionAnswers, QuestionState, UsageLimits } from '../shared/types.js';
+import { readUsageLimits } from './usage-limits.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { normalizeQuestionRequest, questionSummary, readAnswers } from '../shared/questions.js';
 import { QuestionBook } from './questions.js';
@@ -86,9 +87,19 @@ export class HubServer {
   private codexAlive = new WeakMap<WebSocket, boolean>();
   private codexCallTimeoutMs: number;
   private codexCalls = new Map<string, { adapterId: string; settle: (outcome: CodexCallOutcome) => void }>();
+  private readUsageLimits: () => UsageLimits;
+  private usageLimitsIntervalMs: number;
+  private usageLimitsTimer?: ReturnType<typeof setInterval>;
+  private usageLimits: UsageLimits = { claude: null, codex: null };
+  private usageLimitsKey = JSON.stringify(this.usageLimits);
 
-  constructor(config?: Partial<AppConfig>, options: { codexCallTimeoutMs?: number } = {}) {
+  constructor(
+    config?: Partial<AppConfig>,
+    options: { codexCallTimeoutMs?: number; readUsageLimits?: () => UsageLimits; usageLimitsIntervalMs?: number } = {},
+  ) {
     this.codexCallTimeoutMs = options.codexCallTimeoutMs ?? 60_000;
+    this.readUsageLimits = options.readUsageLimits ?? readUsageLimits;
+    this.usageLimitsIntervalMs = options.usageLimitsIntervalMs ?? 30_000;
     this.host = config?.hub?.host ?? DEFAULT_HUB_HOST;
     this.port = config?.hub?.port ?? DEFAULT_HUB_PORT;
     this.token = config?.hub?.token;
@@ -167,6 +178,7 @@ export class HubServer {
   async start(): Promise<void> {
     this.cleanupUploads();
     this.startHeartbeat();
+    this.startUsageLimits();
     return new Promise((resolve, reject) => {
       const onStartupError = (err: Error) => reject(err);
       this.httpServer.once('error', onStartupError);
@@ -190,6 +202,7 @@ export class HubServer {
     const serverStopped = new Promise<void>((resolve) => {
       // Stop heartbeat
       if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+      if (this.usageLimitsTimer) clearInterval(this.usageLimitsTimer);
 
       // Stop telegram bot
       if (this.telegramBot) this.telegramBot.stopPolling();
@@ -761,6 +774,8 @@ export class HubServer {
       requests: this.questions.all().map((q) => ({ ...q.request, sending: q.sending !== undefined, ...q.sending })),
     };
     ws.send(JSON.stringify(questionsMsg));
+    if (this.refreshUsageLimits()) this.broadcastToDashboards({ type: 'usage_limits', limits: this.usageLimits });
+    else ws.send(JSON.stringify({ type: 'usage_limits', limits: this.usageLimits } satisfies ChannelMessage));
 
     ws.on('message', (data) => {
       try {
@@ -1132,6 +1147,28 @@ export class HubServer {
     this.codexSupervisor = new CodexSupervisor(script, { env: adapterEnv(process.env, { host: this.host, port: this.port }) });
     this.codexSupervisor.start();
     logger.info('Codex adapter started');
+  }
+
+  private refreshUsageLimits(): boolean {
+    let next: UsageLimits;
+    try {
+      next = this.readUsageLimits();
+    } catch (err) {
+      logger.debug(`Usage limits read failed: ${(err as Error).message}`);
+      return false;
+    }
+    const key = JSON.stringify(next);
+    if (key === this.usageLimitsKey) return false;
+    this.usageLimits = next;
+    this.usageLimitsKey = key;
+    return true;
+  }
+
+  private startUsageLimits(): void {
+    this.refreshUsageLimits();
+    this.usageLimitsTimer = setInterval(() => {
+      if (this.refreshUsageLimits()) this.broadcastToDashboards({ type: 'usage_limits', limits: this.usageLimits });
+    }, this.usageLimitsIntervalMs);
   }
 
   private startHeartbeat(): void {
