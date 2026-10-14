@@ -1,3 +1,5 @@
+import type { ControlKind } from './control-protocol.js';
+
 /** Session status */
 export type SessionStatus = 'idle' | 'working' | 'waiting_input';
 
@@ -20,6 +22,11 @@ export interface PendingChoiceRequest {
   choices: PermissionChoice[];
 }
 
+export interface SessionControlState {
+  busy: boolean;
+  advice?: ControlKind;
+}
+
 /** Session info tracked by the hub */
 export interface SessionInfo {
   id: string;
@@ -36,6 +43,7 @@ export interface SessionInfo {
   title?: string;
   closable?: boolean;
   contextTokens?: number;
+  control?: SessionControlState;
 }
 
 export interface QuestionOption {
@@ -70,6 +78,9 @@ export type ChannelMessage =
   | { type: 'status'; sessionId: string; status: SessionStatus }
   | { type: 'peer_name'; sessionId: string; peerName?: string }
   | { type: 'context_tokens'; sessionId: string; tokens: number | null }
+  | { type: 'session_control'; sessionId: string; control: SessionControlState | null }
+  | { type: 'session_command'; sessionId: string; requestId: string; kind: ControlKind }
+  | { type: 'session_command_result'; sessionId: string; requestId: string; ok: boolean; reason?: string }
   | { type: 'notify'; sessionId: string; title: string; message: string; level?: NotifyLevel; to?: MessageSource }
   | { type: 'reply'; sessionId: string; content: string }
   | { type: 'message_to_session'; sessionId: string; content: string; source?: MessageSource }
