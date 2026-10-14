@@ -63,6 +63,13 @@ test('the strip hides an agent without data, and itself when both are empty', ()
   }
 });
 
+test('on phones the strip takes its own row and the panels shrink to fit', () => {
+  const mobile = html.slice(html.indexOf('@media (max-width: 768px)'));
+  assert.match(mobile, /header \{[^}]*flex-wrap: wrap;/);
+  assert.match(mobile, /\.usage-strip \{[^}]*order: 3;[^}]*flex-basis: 100%;/);
+  assert.match(mobile, /body:has\(#usageStrip:not\(\[hidden\]\)\) \.container \{[^}]*height: calc\(100vh - 119px\);/);
+});
+
 test('the header keeps the strip on one line', () => {
   assert.match(html, /\.usage-strip \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/);
   assert.match(html, /<h1>Claude Alarm<\/h1>\s*<div class="usage-strip" id="usageStrip" hidden><\/div>/);

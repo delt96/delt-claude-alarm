@@ -921,6 +921,15 @@
       grid-template-columns: 1fr;
       height: calc(100vh - 97px);
     }
+    header { flex-wrap: wrap; }
+    .usage-strip {
+      order: 3;
+      flex-basis: 100%;
+      margin: 6px 0 0;
+      text-align: left;
+    }
+    /* 119px = 97px + the strip's row (16px line + 6px margin); keep in step with .usage-strip */
+    body:has(#usageStrip:not([hidden])) .container { height: calc(100vh - 119px); }
     .sessions-panel, .messages-panel, .notifications-panel {
       border: none;
       display: none;
