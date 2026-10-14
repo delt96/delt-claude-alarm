@@ -250,6 +250,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .session-tokens { color: var(--text); }
   .no-sessions {
     color: var(--text-dim);
     font-size: 13px;
@@ -1556,6 +1557,13 @@
   }
 
   // --- Render ---
+  function formatTokens(n) {
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '';
+    if (n < 1000) return String(Math.round(n));
+    if (n < 999_500) return `${Math.round(n / 1000)}k`;
+    return `${(n / 1_000_000).toFixed(1)}M`;
+  }
+
   function renderSessions() {
     const el = $('#sessionsList');
     const ids = getOrderedSessionIds();
@@ -1570,6 +1578,8 @@
       const unread = state.unread[id] || 0;
       const dispName = sessionDisplayName(s);
       const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const tokens = formatTokens(s.contextTokens);
+      const tokensPart = tokens ? ` &middot; <span class="session-tokens" title="Context: ${s.contextTokens.toLocaleString('en-US')} tokens">${tokens}</span>` : '';
       const armed = state.closeArmed && state.closeArmed.id === id && closeStep(state.closeArmed.at, Date.now()) !== 'arm';
       const closeBtn = s.closable
         ? `<button class="session-close${armed ? ' armed' : ''}" type="button" title="Close — stays in Codex history">${armed ? 'Close?' : '&times;'}</button>`
@@ -1578,7 +1588,7 @@
         <span class="drag-handle" title="Drag to reorder">&#10303;</span>
         <div class="session-body">
           <div class="session-name" title="Double-click to rename">${esc(dispName)}${s.agentKind === 'codex' ? '<span class="agent-badge">Codex</span>' : ''}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
-          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
+          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}${tokensPart}</div>` : `<div class="session-cwd">${connTime}${tokensPart}</div>`}
           <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
         </div>
         ${closeBtn}
