@@ -57,7 +57,12 @@ export class SessionManager {
   setContextTokens(sessionId: string, tokens: unknown): SessionInfo | undefined {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.contextTokens = Number.isSafeInteger(tokens) && (tokens as number) >= 0 ? (tokens as number) : undefined;
+      const previous = session.contextTokens;
+      const next = Number.isSafeInteger(tokens) && (tokens as number) >= 0 ? (tokens as number) : undefined;
+      session.contextTokens = next;
+      // The channel server resends an unchanged count after a reconnect, which must not wipe the last change.
+      if (next !== previous) session.contextTokensDelta = previous && next ? next - previous : undefined;
+      else if (!next) session.contextTokensDelta = undefined;
     }
     return session;
   }
@@ -92,9 +97,15 @@ export class SessionManager {
   }
 }
 
+const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
 function readControl(raw: unknown): SessionControlState | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
-  const { busy, advice } = raw as { busy?: unknown; advice?: unknown };
+  const { busy, advice, greenFrom, compactAt, redFrom } = raw as Record<string, unknown>;
   if (typeof busy !== 'boolean') return undefined;
-  return isControlKind(advice) ? { busy, advice } : { busy };
+  const control: SessionControlState = isControlKind(advice) ? { busy, advice } : { busy };
+  if (isCount(greenFrom)) control.greenFrom = greenFrom;
+  if (isCount(compactAt) && compactAt > 0) control.compactAt = compactAt;
+  if (isCount(redFrom)) control.redFrom = redFrom;
+  return control;
 }

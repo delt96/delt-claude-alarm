@@ -25,6 +25,9 @@ export interface PendingChoiceRequest {
 export interface SessionControlState {
   busy: boolean;
   advice?: ControlKind;
+  greenFrom?: number;
+  compactAt?: number;
+  redFrom?: number;
 }
 
 /** Session info tracked by the hub */
@@ -43,6 +46,7 @@ export interface SessionInfo {
   title?: string;
   closable?: boolean;
   contextTokens?: number;
+  contextTokensDelta?: number;
   control?: SessionControlState;
 }
 

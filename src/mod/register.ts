@@ -41,11 +41,21 @@ async function execute($: Engine, kind: ControlKind): Promise<string | undefined
   }
 }
 
+async function compactThreshold($: Engine): Promise<number | undefined> {
+  try {
+    const value = (await $.session.usage({ breakdown: 'summary' }))?.context?.breakdown?.autoCompactThreshold;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function beat($: Engine, s: ModState): Promise<void> {
   const sid = s.sessionId;
   if (!sid) return;
+  const compactAt = await compactThreshold($);
   s.beatAt = await $.clock.now();
-  await writeRecord($, controlFile(s.dir, 'alive', sid), { busy: s.busy || s.running, at: s.beatAt });
+  await writeRecord($, controlFile(s.dir, 'alive', sid), { busy: s.busy || s.running, at: s.beatAt, ...(compactAt === undefined ? {} : { compactAt }) });
 }
 
 async function answer($: Engine, s: ModState, sid: string, id: string, reason: string | undefined): Promise<void> {

@@ -17,6 +17,9 @@
     --yellow: #f59e0b;
     --red: #ef4444;
     --blue: #60a5fa;
+    --green-text: #3dd68c;
+    --yellow-text: #f5b942;
+    --red-text: #f87171;
   }
   [data-theme="light"] {
     --bg: #f5f5f7;
@@ -30,6 +33,9 @@
     --yellow: #d97706;
     --red: #ef4444;
     --blue: #3b82f6;
+    --green-text: #15803d;
+    --yellow-text: #b45309;
+    --red-text: #b91c1c;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -266,12 +272,18 @@
     border: 1px solid var(--green);
     color: var(--green);
   }
+  .session-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
   .session-status {
     display: inline-block;
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 10px;
-    margin-top: 6px;
     font-weight: 500;
   }
   .session-status.idle { background: rgba(139,143,163,0.15); color: var(--text-dim); }
@@ -286,7 +298,23 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .session-tokens { color: var(--text); }
+  .token-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 11px;
+    font-family: monospace;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .token-chip.level-plain { background: rgba(139,143,163,0.12); border-color: rgba(139,143,163,0.25); color: var(--text); }
+  .token-chip.level-green { background: rgba(61,214,140,0.12); border-color: rgba(61,214,140,0.35); color: var(--green-text); }
+  .token-chip.level-yellow { background: rgba(245,158,11,0.14); border-color: rgba(245,158,11,0.4); color: var(--yellow-text); }
+  .token-chip.level-red { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: var(--red-text); }
+  .token-delta, .token-note { font-weight: 500; opacity: 0.8; }
   .no-sessions {
     color: var(--text-dim);
     font-size: 13px;
@@ -337,7 +365,6 @@
   .control-btn.advised { border-color: var(--accent); color: var(--accent); }
   .control-btn.armed { border-color: var(--red); color: var(--red); font-weight: 600; }
   .control-btn:disabled { opacity: 0.5; cursor: default; }
-  .advice-dot { color: var(--accent); }
   .messages-list {
     flex: 1;
     overflow-y: auto;
@@ -1721,6 +1748,39 @@
     return `${(n / 1_000_000).toFixed(1)}M`;
   }
 
+  // claude-jev-advisor's default minTokens, for sessions whose channel server sends no advisor levels.
+  const ADVISOR_MIN_TOKENS = 250_000;
+
+  function tokenLevel(n, c) {
+    if (typeof c.redFrom === 'number' && n >= c.redFrom) return 'red';
+    if (c.advice) return 'yellow';
+    return n >= (typeof c.greenFrom === 'number' ? c.greenFrom : ADVISOR_MIN_TOKENS) ? 'green' : 'plain';
+  }
+
+  function tokenChipHtml(s) {
+    const n = s.contextTokens;
+    const tokens = formatTokens(n);
+    if (!tokens) return '';
+    const c = s.control || {};
+    const level = tokenLevel(n, c);
+    const d = s.contextTokensDelta;
+    const hasDelta = typeof d === 'number' && Number.isFinite(d) && d !== 0;
+    const sign = hasDelta && d < 0 ? '&minus;' : '+';
+    const tip = [`Context: ${n.toLocaleString('en-US')} tokens`];
+    if (hasDelta) tip.push(`${d < 0 ? '-' : '+'}${Math.abs(d).toLocaleString('en-US')} since the last update`);
+    if (level === 'red' && typeof c.compactAt === 'number') tip.push(`auto-compact at ${c.compactAt.toLocaleString('en-US')}`);
+    if (c.advice) tip.push(`Advisor suggests /${c.advice}`);
+    let note = '';
+    if (level === 'red' && typeof c.compactAt === 'number' && c.compactAt > 0) {
+      note = `${Math.max(0, Math.round(((c.compactAt - n) / c.compactAt) * 100))}% left`;
+    } else if (level === 'yellow') {
+      note = `/${c.advice}`;
+    }
+    const delta = hasDelta ? ` <span class="token-delta">${sign}${formatTokens(Math.abs(d))}</span>` : '';
+    const noteHtml = note ? ` <span class="token-note">${esc(note)}</span>` : '';
+    return `<span class="token-chip level-${level}" title="${esc(tip.join(', '))}">${tokens}${delta}${noteHtml}</span>`;
+  }
+
   function renderSessions() {
     const el = $('#sessionsList');
     const ids = getOrderedSessionIds();
@@ -1735,9 +1795,6 @@
       const unread = state.unread[id] || 0;
       const dispName = sessionDisplayName(s);
       const connTime = new Date(s.connectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const tokens = formatTokens(s.contextTokens);
-      const advicePart = s.control && s.control.advice ? ` <span class="advice-dot" title="Advisor suggests /${s.control.advice}">&#9679;</span>` : '';
-      const tokensPart = tokens ? ` &middot; <span class="session-tokens" title="Context: ${s.contextTokens.toLocaleString('en-US')} tokens">${tokens}</span>` : '';
       const armed = state.closeArmed && state.closeArmed.id === id && closeStep(state.closeArmed.at, Date.now()) !== 'arm';
       const closeBtn = s.closable
         ? `<button class="session-close${armed ? ' armed' : ''}" type="button" title="Close — stays in Codex history">${armed ? 'Close?' : '&times;'}</button>`
@@ -1746,8 +1803,8 @@
         <span class="drag-handle" title="Drag to reorder">&#10303;</span>
         <div class="session-body">
           <div class="session-name" title="Double-click to rename">${esc(dispName)}${s.agentKind === 'codex' ? '<span class="agent-badge">Codex</span>' : ''}${unread ? `<span class="unread-badge">${unread}</span>` : ''}</div>
-          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}${tokensPart}${advicePart}</div>` : `<div class="session-cwd">${connTime}${tokensPart}${advicePart}</div>`}
-          <span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>
+          ${cwdDisplay ? `<div class="session-cwd" title="${esc(s.cwd)}">${esc(cwdDisplay)} &middot; ${connTime}</div>` : `<div class="session-cwd">${connTime}</div>`}
+          <div class="session-chips"><span class="session-status ${s.status}">${s.status.replace('_', ' ')}</span>${tokenChipHtml(s)}</div>
         </div>
         ${closeBtn}
       </div>`;
