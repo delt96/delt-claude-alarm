@@ -76,6 +76,15 @@ A Usage card above the notifications shows how much of the 5-hour and weekly lim
 - **Codex**: read from the newest session files in `~/.codex/sessions` (or `CODEX_HOME`); nothing to install.
 - Values come from files on the PC running the hub. The card's last line says how old each reading is; hover a reset time for the full date.
 
+### /compact and /clear
+
+The conversation header shows **/compact** and **/clear** buttons for a Claude Code session that runs the `alarm-control` mod. A channel message cannot run slash commands, so a small Claude Code mod that claude-alarm ships runs them inside the session.
+
+- Run `claude-alarm mod install` once (needs a global install; `claude-alarm init` offers it). It adds the mod to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` next to any other entries, and only sessions started afterwards load it.
+- The buttons are greyed out while the session is answering; **/clear** asks for a second press. The result appears in the notifications.
+- With [claude-jev-advisor](https://www.npmjs.com/package/@delt/claude-jev-advisor) writing its advice, the suggested button is outlined and the session card shows a dot.
+- `claude-alarm mod uninstall` takes it out again; open sessions keep it until they restart.
+
 ## CLI Commands
 
 | Command | Description |
@@ -91,6 +100,7 @@ A Usage card above the notifications shows how much of the 5-hour and weekly lim
 | `claude-alarm codex run --brief <file\|->` | Hand a task to Codex through the shared daemon and print the result as JSON (`--cwd`, `--thread`, `--name`, `--output-schema`, `--effort`, `--approval-timeout`, `--timeout`, `--yolo`; `claude-alarm codex run --help` explains each option, the result JSON and the exit codes) |
 | `claude-alarm statusline install [--replace]` | Report Claude's 5-hour and weekly usage to the dashboard through Claude Code's status line (`--replace` replaces an existing status line) |
 | `claude-alarm statusline uninstall` | Remove it, putting back a status line it replaced |
+| `claude-alarm mod install` / `uninstall` | Add (or remove) the Claude Code mod that lets the dashboard run /compact and /clear |
 
 ## Tools Available to Claude
 
