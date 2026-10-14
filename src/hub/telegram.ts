@@ -7,6 +7,7 @@ import type { TelegramConfig, SessionInfo, PermissionChoice, MessageSource, Ques
 import { sessionLabel } from '../shared/session-label.js';
 import { permissionKey } from '../shared/permission-key.js';
 import { readAnswers } from '../shared/questions.js';
+import { linkify } from '../shared/links.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_CHOICE_MESSAGES = 200;
@@ -871,6 +872,10 @@ export class TelegramBot {
       const i = tokens.push(`<code>${this.escHtml(body)}</code>`) - 1;
       return placeholder(i);
     });
+    text = linkify(text, (href, label) => {
+      const i = tokens.push(`<a href="${this.escHtml(href).replace(/"/g, '&quot;')}">${this.escHtml(label)}</a>`) - 1;
+      return placeholder(i);
+    });
 
     let html = this.escHtml(text);
     // Headings: # / ## / ### → bold (Telegram has no heading tags)
@@ -880,7 +885,7 @@ export class TelegramBot {
     // Italic: *...* (single line only, to avoid swallowing across blocks)
     html = html.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
 
-    // Restore code tokens
+    // Restore code and link tokens
     html = html.replace(/\u0000CODE(\d+)\u0000/g, (_m, n: string) => tokens[Number(n)] ?? '');
     return html;
   }
