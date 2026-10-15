@@ -1,4 +1,4 @@
-import { loadConfig } from '../shared/config.js';
+import { hubTokenSource, loadConfig, readSavedToken } from '../shared/config.js';
 import { CONFIG_DIR } from '../shared/constants.js';
 import { installCrashGuard, logStartup } from '../shared/crash-guard.js';
 import { logger } from '../shared/logger.js';
@@ -52,6 +52,7 @@ async function takeLock(): Promise<boolean> {
     const lock = await acquireLock(endpoint, {
       pid: process.pid,
       token: config.hub.token ?? '',
+      currentToken: readSavedToken,
       onStop: () => {
         if (supervised) logger.warn('Stopped by claude-alarm codex stop; the hub will not start the Codex adapter again until the hub restarts');
         shutdown();
@@ -86,10 +87,10 @@ async function takeLock(): Promise<boolean> {
 void takeLock().then((owned) => {
   if (!owned) return;
   logStartup('Codex adapter');
-  const { host, port, token } = resolveAdapterHub(config);
+  const { host, port } = resolveAdapterHub(config);
   adapter = new CodexAdapter({
     command: config.codex?.command ?? 'codex',
-    hub: { host, port, token },
+    hub: { host, port, token: hubTokenSource(process.env.CLAUDE_ALARM_HUB_TOKEN, config.hub.token) },
     onFirstConnect: (outcome) => send({ type: 'codex-first-connect', ...outcome }),
   });
   adapter.start();

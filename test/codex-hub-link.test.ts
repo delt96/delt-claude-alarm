@@ -153,3 +153,37 @@ test('non-object frames do not prevent the next adapter call', async () => {
     assert.deepEqual(result, { type: 'adapter_result', requestId: 'r1', ok: true, data: { folders: ['C:\\p'] } });
   } finally { await setup.close(); }
 });
+
+test('after the hub token changes, a link given a token source reconnects with the new token', async () => {
+  let token = TOKEN;
+  const link = new CodexHubLink({ host: HUB.host, port: HUB.port, token: () => token }, { id: 'L9', host: 'pc-t' }, async () => ({}), 50);
+  link.connect();
+  const renamed = () => new HubServer({ hub: { ...HUB, token: 'codex-link-new' }, notifications: { desktop: false, sound: false } } as any);
+  try {
+    await listed((a) => a.id === 'L9');
+    await hub.stop();
+    hub = renamed();
+    await hub.start();
+    token = 'codex-link-new';
+    await until(async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/dashboard?token=codex-link-new`);
+      try {
+        const list: any[] = await new Promise((resolve, reject) => {
+          ws.on('message', (d) => {
+            const m = JSON.parse(d.toString());
+            if (m.type === 'codex_adapters') resolve(m.adapters);
+          });
+          ws.on('error', reject);
+        });
+        return list.some((a) => a.id === 'L9');
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    link.disconnect();
+    await hub.stop();
+    hub = newHub();
+    await hub.start();
+  }
+});

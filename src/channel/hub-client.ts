@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { logger } from '../shared/logger.js';
+import { currentToken, type TokenSource } from '../shared/config.js';
 import { DEFAULT_HUB_HOST, DEFAULT_HUB_PORT, WS_PATH_CHANNEL } from '../shared/constants.js';
 import type { ChannelMessage, SessionInfo } from '../shared/types.js';
 
@@ -18,14 +19,15 @@ export class HubClient {
     private sessionName: string,
     private hubHost = DEFAULT_HUB_HOST,
     private hubPort = DEFAULT_HUB_PORT,
-    private token?: string,
+    private token?: TokenSource,
     private getPeerName: () => string | undefined = () => undefined,
     private getRegistration: () => Partial<SessionInfo> = () => ({}),
   ) {}
 
   connect(): void {
     this.closed = false;
-    const tokenQuery = this.token ? `?token=${encodeURIComponent(this.token)}` : '';
+    const token = currentToken(this.token);
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
     const url = `ws://${this.hubHost}:${this.hubPort}${WS_PATH_CHANNEL}${tokenQuery}`;
     logger.debug(`Connecting to hub at ${url}`);
 

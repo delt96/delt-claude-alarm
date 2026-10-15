@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../shared/logger.js';
 import { CHANNEL_SERVER_NAME, CHANNEL_SERVER_VERSION, CONTROL_DIR } from '../shared/constants.js';
-import { loadConfig } from '../shared/config.js';
+import { hubTokenSource, loadConfig } from '../shared/config.js';
 import { HubClient } from './hub-client.js';
 import { claudeConfigDir, readPeerName } from './peer-name.js';
 import { readContextTokens, resolveClaudeSession } from './context-tokens.js';
@@ -62,7 +62,7 @@ NOTIFICATIONS:
 const config = loadConfig();
 const hubHost = process.env.CLAUDE_ALARM_HUB_HOST ?? config.hub.host;
 const hubPort = process.env.CLAUDE_ALARM_HUB_PORT ? parseInt(process.env.CLAUDE_ALARM_HUB_PORT, 10) : config.hub.port;
-const hubToken = process.env.CLAUDE_ALARM_HUB_TOKEN ?? config.hub.token;
+const hubToken = hubTokenSource(process.env.CLAUDE_ALARM_HUB_TOKEN, config.hub.token);
 
 // Hub client for forwarding to central hub
 const hubClient = new HubClient(

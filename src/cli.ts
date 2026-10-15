@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex } from './shared/config.js';
+import { loadConfig, ensureConfigDir, setupMcpConfig, getOrCreateToken, setCodexEnabled, shouldOfferCodex, setHubToken } from './shared/config.js';
 import { findCodex } from './codex/transport.js';
 import { runFromCli } from './codex/run.js';
 import { exitAfterFlush } from './codex/shutdown.js';
@@ -42,6 +42,9 @@ Usage:
   claude-alarm setup [dir]      Add claude-alarm to .mcp.json
   claude-alarm test             Send a test notification
   claude-alarm token            Show current auth token
+  claude-alarm token new        Replace the auth token with a new random one
+  claude-alarm token set <token>
+                                Use your own token (16+ characters), e.g. the hub's token on another PC
   claude-alarm codex enable     Start the Codex adapter together with the hub
   claude-alarm codex disable    Stop starting the Codex adapter with the hub
   claude-alarm codex start      Run the Codex adapter on its own (e.g. Codex on another PC)
@@ -389,6 +392,30 @@ function showToken() {
   console.log(`Token: ${token}`);
 }
 
+function changeToken(value?: string) {
+  let token: string;
+  try {
+    token = setHubToken(value);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+  const config = loadConfig();
+  const displayHost = hubUrlHost(config.hub.host ?? DEFAULT_HUB_HOST);
+  console.log(`Token changed in ${CONFIG_FILE}`);
+  console.log(`Token: ${token}`);
+  console.log(`Dashboard: ${loginLink(displayHost, config.hub.port ?? DEFAULT_HUB_PORT, token)}`);
+  const pid = fs.existsSync(PID_FILE) ? parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10) : NaN;
+  if (!Number.isNaN(pid) && isProcessRunning(pid)) {
+    console.log(`\nThe hub (PID: ${pid}) still uses the old token. Restart it to apply:`);
+    console.log('  claude-alarm hub stop');
+    console.log('  claude-alarm hub start -d');
+  }
+  console.log('\nSessions on this PC reconnect with the new token by themselves. Open the dashboard with the new link.');
+  console.log(`On other PCs that connect to this hub, run: claude-alarm token set ${token}`);
+  console.log('Projects whose .mcp.json sets CLAUDE_ALARM_HUB_TOKEN keep their own token; update or remove it there.');
+}
+
 function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -601,7 +628,13 @@ async function main() {
   }
 
   if (cmd === 'token') {
-    showToken();
+    if (args[1] === 'new') changeToken();
+    else if (args[1] === 'set' && args[2]) changeToken(args[2]);
+    else if (args[1] === undefined) showToken();
+    else {
+      console.error('Usage: claude-alarm token [new | set <token>]');
+      process.exit(1);
+    }
     return;
   }
 
