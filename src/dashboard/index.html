@@ -1204,6 +1204,8 @@
     sessionMeta: { names: {}, order: [] },  // custom names + order, keyed by volatile sessionId
     codexAdapters: [],
     pendingSelect: null,
+    scrollToEnd: false,
+    scrollPinned: true,
     closeArmed: null,
     controlPending: {},
     clearArmed: null,
@@ -1935,6 +1937,7 @@
   function selectSession(id) {
     state.pendingSelect = null;
     state.selectedSession = id;
+    state.scrollToEnd = true;
     state.unread[id] = 0;
     if (!state.messages[id]) state.messages[id] = [];
     $('#msgInput').disabled = false;
@@ -2011,11 +2014,21 @@
     bindQuestionCards(el);
     restoreQuestionFocus(focus);
     renderPermissionBar();
-    // Only auto-scroll if user is near the bottom (within 150px)
-    setTimeout(() => {
-      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (gap < 150) el.scrollTop = el.scrollHeight;
-    }, 0);
+    setTimeout(() => settleMessagesScroll(el), 0);
+  }
+
+  // scrollTop is shared by every session's conversation, so after a switch the old
+  // position is meaningless; scrollToEnd forces the bottom instead of the 150px check.
+  // It stays set while the list is hidden (mobile tab), where scrollTop does nothing.
+  function settleMessagesScroll(el) {
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (!state.scrollToEnd && gap >= 150) return;
+    el.scrollTop = el.scrollHeight;
+    state.scrollPinned = true;
+    if (el.clientHeight > 0) state.scrollToEnd = false;
+    el.querySelectorAll('img').forEach(img => {
+      if (!img.complete) img.addEventListener('load', () => { if (state.scrollPinned) el.scrollTop = el.scrollHeight; });
+    });
   }
 
   function renderNotifications() {
@@ -2854,6 +2867,7 @@
   msgList.addEventListener('scroll', () => {
     const gap = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight;
     scrollBtn.classList.toggle('visible', gap > 100);
+    state.scrollPinned = gap < 150;
   });
   scrollBtn.addEventListener('click', () => {
     msgList.scrollTo({ top: msgList.scrollHeight, behavior: 'smooth' });
@@ -3298,6 +3312,7 @@
       const tab = btn.dataset.tab;
       document.querySelectorAll('.sessions-panel, .messages-panel, .notifications-panel').forEach(p => p.classList.remove('mobile-active'));
       document.querySelector(`.${tab === 'sessions' ? 'sessions' : tab === 'messages' ? 'messages' : 'notifications'}-panel`).classList.add('mobile-active');
+      if (tab === 'messages') settleMessagesScroll(msgList);
     });
   });
   // Default mobile tab
