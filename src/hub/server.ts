@@ -1068,8 +1068,12 @@ export class HubServer {
     if (!telegram) { this.jsonResponse(res, 400, { error: 'telegram config required' }); return; }
 
     const config = loadConfig();
-    // If botToken is masked (contains '...'), keep the existing token
-    if (telegram.botToken.includes('...') && config.telegram?.botToken) {
+    // GET /api/telegram returns a masked token ("12345678..."), and the dashboard sends it back unchanged.
+    if (telegram.botToken.includes('...')) {
+      if (!config.telegram?.botToken) {
+        this.jsonResponse(res, 400, { error: 'Bot Token is masked. Please enter the full token.' });
+        return;
+      }
       telegram.botToken = config.telegram.botToken;
     }
     config.telegram = telegram;
@@ -1079,7 +1083,7 @@ export class HubServer {
     if (this.telegramBot) {
       this.telegramBot.stopPolling();
       this.telegramBot = undefined;
-      this.notifier.configure({ telegramBot: undefined as any });
+      this.notifier.configure({ telegramBot: undefined });
     }
 
     // Start new bot if enabled

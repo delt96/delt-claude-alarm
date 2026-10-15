@@ -15,7 +15,7 @@ export class Notifier {
     if (options.dashboardUrl) this.dashboardUrl = options.dashboardUrl;
     if (options.desktop !== undefined) this.desktopEnabled = options.desktop;
     if (options.webhooks) this.webhooks = options.webhooks;
-    if (options.telegramBot) this.telegramBot = options.telegramBot;
+    if ('telegramBot' in options) this.telegramBot = options.telegramBot;
   }
 
   async notify(title: string, message: string, level: NotifyLevel = 'info'): Promise<void> {
